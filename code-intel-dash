@@ -1,0 +1,1352 @@
+#!/usr/bin/env python3
+"""
+code-intel-dash — local health dashboard for the code-intelligence stack.
+
+    code-intel-dash                 serve on http://127.0.0.1:7717
+    code-intel-dash --port 8080     somewhere else
+    code-intel-dash --once          print one JSON report and exit
+    code-intel-dash --open          serve and open a browser
+
+WHY THIS DOES NOT PROBE ANYTHING ITSELF
+    Every question about workspaces, mappings, watchers and config is answered
+    by `code-intel-init --status --all --json`, never re-implemented here. A
+    second implementation of "is the watcher running" drifts from the first one
+    silently, and then BOTH keep printing green. code-intel-init's own header
+    makes the same point about its internal probes; this is that rule crossing
+    a process boundary.
+
+    What this file adds is the part code-intel-init deliberately has no opinion
+    about: live functional checks (can ollama actually embed? does a search
+    actually return rows?), stored statistics (qdrant point counts, GitNexus
+    graph size), and watcher logs. Those are monitoring concerns, not
+    reconciler concerns.
+
+LIVENESS IS NOT CORRECTNESS
+    "The process is up" is the weak claim. Each component therefore gets a
+    functional check that exercises the thing it is actually for:
+
+        ollama      embed a string, count the dimensions, time it
+        qdrant      read collection stats; a green collection with zero
+                    points is a broken index, not a healthy one
+        GrepAI      run a real query against a real workspace
+        GitNexus    read .gitnexus/meta.json: node/edge counts, indexed
+                    commit vs HEAD, and the Node version the index was
+                    BUILT with — an index built under a Node without
+                    module.registerHooks is the trap that costs an afternoon
+        watcher     tail its log; a running watcher with no log activity
+                    since a code change is the silent-staleness failure
+
+BINDS TO LOOPBACK ONLY
+    The report names filesystem paths, container state and project layout.
+    127.0.0.1, no auth, not meant to leave the machine.
+
+No third-party dependencies: standard library only, same as the rest of the
+stack assumes.
+"""
+
+import argparse
+import http.server
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import webbrowser
+
+VERSION = "1.0.0"
+DEFAULT_PORT = 7717
+
+# How stale a reading may be before the page stops claiming to know anything.
+# A dashboard that keeps showing the last green frame after it stopped
+# refreshing is the exact failure it exists to catch.
+STALE_AFTER_S = 25
+
+
+# --------------------------------------------------------------- helpers ---
+
+def run(cmd, timeout=25):
+    """Run a command; return (rc, stdout, stderr). Never raises."""
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, p.stdout, p.stderr
+    except FileNotFoundError:
+        return 127, "", "not found: %s" % cmd[0]
+    except subprocess.TimeoutExpired:
+        return 124, "", "timed out after %ss" % timeout
+    except Exception as e:                                   # noqa: BLE001
+        return 1, "", str(e)
+
+
+def http_json(url, payload=None, timeout=20):
+    """GET or POST JSON. Returns (ok, parsed_or_error, elapsed_ms)."""
+    t0 = time.monotonic()
+    try:
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = urllib.request.Request(
+            url, data=data,
+            headers={"Content-Type": "application/json"} if data else {},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = json.loads(r.read().decode())
+        return True, body, int((time.monotonic() - t0) * 1000)
+    except urllib.error.HTTPError as e:
+        return False, "HTTP %s" % e.code, int((time.monotonic() - t0) * 1000)
+    except Exception as e:                                   # noqa: BLE001
+        return False, str(e), int((time.monotonic() - t0) * 1000)
+
+
+def http_ok(url, timeout=10):
+    """Is this endpoint answering 200? For endpoints that are NOT JSON —
+    qdrant's /healthz replies with the plain text 'healthz check passed', so
+    parsing it as JSON reports a healthy server as unreachable."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return r.status == 200
+    except Exception:                                        # noqa: BLE001
+        return False
+
+
+def find_script():
+    """code-intel-init, preferring one sitting next to this file."""
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "code-intel-init")
+    if os.path.isfile(here) and os.access(here, os.X_OK):
+        return here
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        c = os.path.join(d, "code-intel-init")
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return None
+
+
+def human_age(iso):
+    """'2026-09-07T17:28:48.669Z' -> '12 min'. Empty string when unparseable."""
+    if not iso:
+        return ""
+    import calendar
+    try:
+        # These stamps are UTC ("...Z"); parse the second-resolution prefix and
+        # read it as UTC, so the age is not off by the local offset.
+        t = calendar.timegm(time.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S"))
+    except Exception:                                        # noqa: BLE001
+        return ""
+    d = max(0, time.time() - t)
+    if d < 90:
+        return "%d s" % d
+    if d < 5400:
+        return "%d min" % (d / 60)
+    if d < 172800:
+        return "%d h" % (d / 3600)
+    return "%d d" % (d / 86400)
+
+
+def proc_age_seconds(etime):
+    """`ps -o etime` gives [[dd-]hh:]mm:ss and is locale-independent, unlike
+    lstart — which prints Czech day names here and defeats strptime."""
+    try:
+        days = 0
+        if "-" in etime:
+            d, etime = etime.split("-", 1)
+            days = int(d)
+        parts = [int(x) for x in etime.strip().split(":")]
+        while len(parts) < 3:
+            parts.insert(0, 0)
+        h, m, sec = parts[-3:]
+        return days * 86400 + h * 3600 + m * 60 + sec
+    except Exception:                                        # noqa: BLE001
+        return None
+
+
+def check_mcp_servers():
+    """Find running `gitnexus mcp` servers and flag any that started BEFORE the
+    installed package was last written.
+
+    Node reads a package into memory when the process starts, so upgrading
+    gitnexus on disk leaves every already-running MCP server on the OLD code.
+    The next `analyze` writes an index the new CLI understands and the stale
+    server does not, and the agent gets "DB version mismatch, v43 index vs v42
+    MCP server" in the middle of a task. Nothing on disk is broken — the reader
+    is simply older than the file. Only restarting the client fixes it, so the
+    useful thing a dashboard can do is say so before you hit it.
+    """
+    r = {"ok": True, "servers": [], "stale": 0}
+    pkg = os.path.expanduser("~/.npm-global/lib/node_modules/gitnexus")
+    if not os.path.isdir(pkg):
+        rc, out, _ = run(["npm", "root", "-g"], timeout=15)
+        if rc == 0:
+            pkg = os.path.join(out.strip(), "gitnexus")
+    if not os.path.isdir(pkg):
+        r["note"] = "installed gitnexus package not located"
+        return r
+    r["package_mtime"] = os.path.getmtime(pkg)
+
+    rc, out, _ = run(["ps", "-eo", "pid,etime,command"], timeout=15)
+    if rc != 0:
+        return r
+    now = time.time()
+    for line in out.splitlines():
+        if "gitnexus" not in line or " mcp" not in line or "grep" in line:
+            continue
+        cols = line.split(None, 2)
+        if len(cols) < 3:
+            continue
+        pid, etime, cmd = cols[0], cols[1], cols[2]
+        age = proc_age_seconds(etime)
+        if age is None:
+            continue
+        started = now - age
+        # Who owns it? The parent tells you which client to restart.
+        _, ppid_out, _ = run(["ps", "-o", "ppid=", "-p", pid], timeout=10)
+        owner = ""
+        ppid = ppid_out.strip()
+        if ppid:
+            _, pcmd, _ = run(["ps", "-o", "command=", "-p", ppid], timeout=10)
+            pl = pcmd.lower()
+            # Short labels: the card lays these out on one line, and a long
+            # one pushes the uptime onto a second row.
+            if "vscode" in pl or "visual studio code" in pl:
+                owner = "VS Code"
+            elif "claude" in pl:
+                owner = "terminal"
+            elif pcmd.strip():
+                owner = os.path.basename(pcmd.strip().split()[0])[:22]
+        stale = started < r["package_mtime"]
+        if stale:
+            r["stale"] += 1
+            r["ok"] = False
+        r["servers"].append({
+            "pid": pid, "etime": etime.strip(), "age_s": age,
+            "owner": owner or "?", "stale": stale,
+        })
+    return r
+
+
+# ------------------------------------------------------ component checks ---
+
+def check_status(script):
+    """Project + service truth, straight from code-intel-init. No parsing of
+    human output: that is exactly what --json exists to avoid."""
+    if not script:
+        return None, "code-intel-init not found on PATH or beside this script"
+    rc, out, err = run([script, "--status", "--all", "--json"], timeout=90)
+    if rc != 0 and not out.strip().startswith("{"):
+        return None, (err or out or "exit %s" % rc).strip()[:400]
+    try:
+        return json.loads(out), None
+    except Exception as e:                                   # noqa: BLE001
+        return None, "unparseable JSON from code-intel-init: %s" % e
+
+
+def check_ollama(endpoint, model):
+    """Liveness AND correctness: really embed something and count dimensions.
+    A server that answers /api/tags but cannot embed still fails every index."""
+    r = {"probe": "embed", "ok": False}
+    ok, tags, ms = http_json(endpoint.rstrip("/") + "/api/tags")
+    r["reachable"] = ok
+    r["tags_ms"] = ms
+    if not ok:
+        r["error"] = tags
+        return r
+    names = [m.get("name", "") for m in (tags.get("models") or [])]
+    r["models"] = names
+    r["model_present"] = any(n == model or n.startswith(model + ":") for n in names)
+
+    # Which models are resident right now, and their real context window —
+    # that number is why chunking is 256 and not GrepAI's default 512.
+    ok_ps, ps, _ = http_json(endpoint.rstrip("/") + "/api/ps")
+    if ok_ps:
+        for m in (ps.get("models") or []):
+            if m.get("name", "").startswith(model):
+                r["loaded"] = True
+                r["context_length"] = m.get("context_length")
+                r["size_vram"] = m.get("size_vram")
+    r.setdefault("loaded", False)
+
+    if not r["model_present"]:
+        r["error"] = "model %s is not pulled" % model
+        return r
+
+    ok_e, body, ms = http_json(
+        endpoint.rstrip("/") + "/api/embed",
+        {"model": model, "input": "code intelligence health probe"},
+        timeout=60,
+    )
+    r["embed_ms"] = ms
+    if not ok_e:
+        r["error"] = "embed call failed: %s" % body
+        return r
+    vecs = body.get("embeddings") or []
+    r["dimensions"] = len(vecs[0]) if vecs else 0
+    r["ok"] = r["dimensions"] > 0
+    if not r["ok"]:
+        r["error"] = "embed returned no vector"
+    return r
+
+
+def check_qdrant(http_url, grpc_port, host, collections_wanted):
+    """Stats per collection. points_count == 0 is a broken index wearing a
+    green badge, so it is called out rather than shown as healthy."""
+    r = {"ok": False, "collections": []}
+    ok, root, ms = http_json(http_url.rstrip("/") + "/")
+    r["reachable"] = ok
+    r["ms"] = ms
+    if ok and isinstance(root, dict):
+        r["version"] = root.get("version")
+    r["healthz"] = http_ok(http_url.rstrip("/") + "/healthz")
+
+    # gRPC is where grepai reads and writes vectors; HTTP health says nothing
+    # about it, and a container published with only 6333 fails every index.
+    s = socket.socket()
+    s.settimeout(2)
+    try:
+        s.connect((host, int(grpc_port)))
+        r["grpc"] = True
+    except Exception:                                        # noqa: BLE001
+        r["grpc"] = False
+    finally:
+        s.close()
+
+    if not ok:
+        r["error"] = root
+        return r
+
+    ok_l, lst, _ = http_json(http_url.rstrip("/") + "/collections")
+    names = [c["name"] for c in ((lst.get("result") or {}).get("collections") or [])] if ok_l else []
+    for name in sorted(set(names) | set(collections_wanted)):
+        c = {"name": name, "exists": name in names}
+        if c["exists"]:
+            ok_c, info, _ = http_json(http_url.rstrip("/") + "/collections/" + name)
+            res = (info.get("result") or {}) if ok_c else {}
+            c["status"] = res.get("status")
+            c["points"] = res.get("points_count", 0)
+            c["segments"] = res.get("segments_count")
+            params = ((res.get("config") or {}).get("params") or {}).get("vectors") or {}
+            c["dimensions"] = params.get("size")
+            c["distance"] = params.get("distance")
+            # An empty collection is the interesting failure: search "works"
+            # and returns nothing, which reads like a bad query, not a
+            # broken index.
+            c["empty"] = (c.get("points") or 0) == 0
+        r["collections"].append(c)
+    r["ok"] = ok and r["grpc"]
+    return r
+
+
+def grepai_query(workspace, query, limit=10):
+    """Structured search results. Uses `grepai search --json` rather than
+    scraping the pretty output — same reason code-intel-init grew --json."""
+    t0 = time.monotonic()
+    rc, out, err = run(
+        ["grepai", "search", query, "--workspace", workspace,
+         "--json", "-n", str(limit)],
+        timeout=90,
+    )
+    ms = int((time.monotonic() - t0) * 1000)
+    if rc != 0:
+        return {"ok": False, "ms": ms, "query": query,
+                "error": (err or out).strip()[:300], "hits": []}
+    try:
+        raw = json.loads(out) or []
+    except Exception as e:                                   # noqa: BLE001
+        return {"ok": False, "ms": ms, "query": query,
+                "error": "unparseable JSON from grepai: %s" % e, "hits": []}
+
+    hits = []
+    for i, h in enumerate(raw):
+        body = h.get("content") or ""
+        # grepai repeats "File: <name>" as the first line of every snippet;
+        # the path is already its own field, so drop the duplicate.
+        body = re.sub(r"^File: .*?\n\n", "", body, count=1)
+        path = h.get("file_path") or ""
+        # It also prefixes "<workspace>/<project>/" onto the path; strip that
+        # so what is shown is the path inside the repository.
+        short = re.sub(r"^%s/[^/]+/" % re.escape(workspace), "", path)
+        hits.append({
+            "rank": i + 1,
+            "score": round(float(h.get("score") or 0), 4),
+            "path": short,
+            "full_path": path,
+            "start_line": h.get("start_line"),
+            "end_line": h.get("end_line"),
+            "content": body,
+        })
+    return {"ok": bool(hits), "ms": ms, "query": query, "hits": hits,
+            "error": None if hits else "query returned no rows"}
+
+
+def collection_files(http_url, collection, limit=2000):
+    """Which files actually reached the index, and how many chunks each got.
+    This is the only view that shows a file silently missing — the failure the
+    512-token chunk size produces — and how much of the index is scaffolding."""
+    r = {"ok": False, "files": [], "total": 0}
+    body = {"limit": limit, "with_payload": True, "with_vector": False}
+    ok, res, _ = http_json(
+        http_url.rstrip("/") + "/collections/%s/points/scroll" % collection,
+        body, timeout=45)
+    if not ok:
+        r["error"] = str(res)[:200]
+        return r
+    counts = {}
+    for pt in ((res.get("result") or {}).get("points") or []):
+        pl = pt.get("payload") or {}
+        f = pl.get("file_path") or pl.get("path") or pl.get("file") or "?"
+        counts[f] = counts.get(f, 0) + 1
+    total = sum(counts.values())
+    scaffold = (".claude/", "refresh-intel.sh", ".mcp.json",
+                "AGENTS.md", "CLAUDE.md", ".gitnexus/")
+    for f, c in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        short = re.sub(r"^[^/]+/[^/]+/", "", f)
+        r["files"].append({
+            "path": short, "chunks": c,
+            "share": round(100.0 * c / total, 1) if total else 0,
+            "scaffold": any(x in short for x in scaffold),
+        })
+    r["total"] = total
+    r["scaffold_chunks"] = sum(f["chunks"] for f in r["files"] if f["scaffold"])
+    r["ok"] = total > 0
+    if not r["ok"]:
+        r["error"] = "collection is empty"
+    return r
+
+
+def read_log(workspace, lines=250):
+    """Watcher log, enough of it to see what it has been doing."""
+    p = os.path.expanduser(
+        "~/Library/Logs/grepai/grepai-workspace-%s.log" % workspace)
+    if not os.path.isfile(p):
+        return {"ok": False, "error": "no log at %s" % p, "lines": []}
+    try:
+        with open(p, errors="replace") as f:
+            tail = f.readlines()[-lines:]
+        st = os.stat(p)
+        return {"ok": True, "path": p, "size": st.st_size,
+                "modified_age_s": int(time.time() - st.st_mtime),
+                "lines": [ln.rstrip("\n") for ln in tail]}
+    except Exception as e:                                   # noqa: BLE001
+        return {"ok": False, "error": str(e), "lines": []}
+
+
+def check_grepai_search(workspace):
+    """Does retrieval actually return rows? The whole stack exists for this
+    one question, and nothing else on the page answers it."""
+    r = {"workspace": workspace, "ok": False}
+    t0 = time.monotonic()
+    rc, out, err = run(
+        ["grepai", "search", "health probe function definition",
+         "--workspace", workspace],
+        timeout=60,
+    )
+    r["ms"] = int((time.monotonic() - t0) * 1000)
+    if rc != 0:
+        r["error"] = (err or out).strip()[:200]
+        return r
+    m = re.search(r"Found (\d+) results", out)
+    r["results"] = int(m.group(1)) if m else 0
+    r["ok"] = r["results"] > 0
+    if not r["ok"]:
+        r["error"] = "query returned no rows — index is empty or the workspace is wrong"
+    return r
+
+
+def check_gitnexus(path):
+    """Read the graph's own metadata instead of shelling out: it carries the
+    node/edge counts, the indexed commit, and — the useful part — the Node
+    runtime the index was BUILT with."""
+    r = {"ok": False, "present": False}
+    meta_p = os.path.join(path, ".gitnexus", "meta.json")
+    if not os.path.isfile(meta_p):
+        r["error"] = "no .gitnexus/meta.json — repository not indexed"
+        return r
+    try:
+        with open(meta_p) as f:
+            meta = json.load(f)
+    except Exception as e:                                   # noqa: BLE001
+        r["error"] = "unreadable meta.json: %s" % e
+        return r
+
+    r["present"] = True
+    stats = meta.get("stats") or {}
+    r["files"] = stats.get("files")
+    r["nodes"] = stats.get("nodes")
+    r["edges"] = stats.get("edges")
+    r["embeddings"] = stats.get("embeddings")
+    r["indexed_at"] = meta.get("indexedAt")
+    r["age"] = human_age(meta.get("indexedAt"))
+    r["branch"] = meta.get("branch")
+    r["indexed_commit"] = (meta.get("lastCommit") or "")[:7]
+
+    runtime = ((meta.get("runnerIdentity") or {}).get("runtime") or {})
+    r["built_with_node"] = runtime.get("version")
+    r["cli_version"] = ((meta.get("runnerIdentity") or {}).get("cliVersion"))
+
+    rc, head, _ = run(["git", "-C", path, "rev-parse", "HEAD"], timeout=10)
+    r["head_commit"] = head.strip()[:7] if rc == 0 else ""
+    r["fresh"] = bool(r["head_commit"]) and r["head_commit"] == r["indexed_commit"]
+    if not r["head_commit"]:
+        r["fresh"] = None                                    # repo has no commits
+    r["ok"] = (r.get("nodes") or 0) > 0 and r["fresh"] is not False
+    if (r.get("nodes") or 0) == 0:
+        r["error"] = "graph has no nodes — analyze produced nothing"
+    elif r["fresh"] is False:
+        r["error"] = "index is at %s, HEAD is %s — run ./refresh-intel.sh" % (
+            r["indexed_commit"], r["head_commit"])
+    return r
+
+
+def check_watcher_log(workspace):
+    """A watcher can be 'running' and doing nothing. Its log says which."""
+    r = {"ok": False}
+    p = os.path.expanduser(
+        "~/Library/Logs/grepai/grepai-workspace-%s.log" % workspace)
+    if not os.path.isfile(p):
+        r["error"] = "no log at %s" % p
+        return r
+    r["path"] = p
+    try:
+        st = os.stat(p)
+        r["size"] = st.st_size
+        r["modified_age_s"] = int(time.time() - st.st_mtime)
+        with open(p, errors="replace") as f:
+            lines = f.readlines()[-6:]
+        r["tail"] = [ln.rstrip("\n")[:220] for ln in lines]
+        indexed = [ln for ln in lines if "Indexed" in ln]
+        r["last_indexed"] = indexed[-1].rstrip("\n")[:220] if indexed else ""
+        r["ok"] = True
+    except Exception as e:                                   # noqa: BLE001
+        r["error"] = str(e)
+    return r
+
+
+# -------------------------------------------------------------- assemble ---
+
+def build_report():
+    t0 = time.monotonic()
+    script = find_script()
+    status, status_err = check_status(script)
+
+    rep = {
+        "generated_at": time.time(),
+        "dash_version": VERSION,
+        "script_path": script,
+        "status_error": status_err,
+        "status": status,
+        "components": {},
+        "projects": [],
+    }
+    if not status:
+        rep["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
+        return rep
+
+    meta = status.get("meta", {})
+    svc = status.get("svc", {})
+    qd = svc.get("qdrant", {})
+    ol = svc.get("ollama", {})
+    model = meta.get("embed_model", "")
+    projects = status.get("projects", [])
+
+    host = re.sub(r"^https?://", "", qd.get("http_url", "http://127.0.0.1:6333")).split(":")[0]
+    wanted = [p.get("collection") for p in projects if p.get("collection")]
+
+    rep["components"]["qdrant"] = check_qdrant(
+        qd.get("http_url", ""), qd.get("grpc_port", 6334), host, wanted)
+    rep["components"]["mcp"] = check_mcp_servers()
+    rep["components"]["ollama"] = (
+        check_ollama(ol.get("endpoint", ""), model)
+        if ol.get("present") and ol.get("up")
+        else {"ok": False, "reachable": False,
+              "error": "ollama is not running" if ol.get("present")
+                       else "ollama is not installed"}
+    )
+
+    for p in projects:
+        entry = dict(p)
+        path = p.get("path", "")
+        ws = p.get("workspace", "")
+        entry["gitnexus"] = check_gitnexus(path) if p.get("exists") else {
+            "ok": False, "error": "project directory is gone"}
+        entry["watcher_log"] = check_watcher_log(ws) if p.get("watcher") else {
+            "ok": False, "error": "watcher is not running"}
+        entry["search"] = (
+            check_grepai_search(ws)
+            if p.get("watcher") and rep["components"]["qdrant"].get("ok")
+            else {"ok": False, "skipped": True,
+                  "error": "skipped: watcher down or qdrant unreachable"}
+        )
+        col = next((c for c in rep["components"]["qdrant"].get("collections", [])
+                    if c["name"] == p.get("collection")), None)
+        entry["collection_stats"] = col or {"exists": False}
+        rep["projects"].append(entry)
+
+    rep["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
+    return rep
+
+
+# ------------------------------------------------------------------ page ---
+
+PAGE = r"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>code-intel</title>
+<style>
+:root{
+  --ground:#FBFCFD; --panel:#fff; --sunk:#F2F5F7; --ink:#10161B; --muted:#5A6873;
+  --faint:#8593A0; --rule:#DCE3E8; --rule-soft:#E9EEF1; --accent:#0E6F73;
+  --ok:#1F7A4D; --ok-bg:#E3F1E9; --bad:#B3261E; --bad-bg:#FAE7E5;
+  --warn:#8A5A00; --warn-bg:#F7EEDC; --idle:#5A6873; --idle-bg:#EDF1F3;
+  --code:#F5F8F9;
+}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){
+  --ground:#0C1114; --panel:#131A1F; --sunk:#171F25; --ink:#E5EBEF; --muted:#93A2AD;
+  --faint:#6E7E8A; --rule:#243038; --rule-soft:#1C252B; --accent:#57BEC0;
+  --ok:#5FC38B; --ok-bg:#132A1E; --bad:#F08A81; --bad-bg:#2E1715;
+  --warn:#D9A441; --warn-bg:#2A2113; --idle:#93A2AD; --idle-bg:#1C252B;
+  --code:#0F161A;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);
+ font:14px/1.55 "IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif}
+.mono,code{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+.wrap{max-width:1140px;margin:0 auto;padding:24px 20px 80px}
+
+header.top{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;
+ padding-bottom:14px;border-bottom:1px solid var(--rule);margin-bottom:8px}
+h1{font-size:17px;font-weight:600;margin:0;letter-spacing:-.01em}
+h1 span{color:var(--faint);font-weight:400}
+.age{margin-left:auto;font-size:12px;color:var(--faint);display:flex;
+ align-items:center;gap:10px}
+.age b{color:var(--muted);font-weight:500}
+button{font:inherit;font-size:12px;padding:5px 11px;border:1px solid var(--rule);
+ background:var(--panel);color:var(--ink);border-radius:3px;cursor:pointer}
+button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+button:disabled{opacity:.5;cursor:default}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);
+ outline-offset:2px}
+
+#app.stale{opacity:.42;filter:grayscale(.85)}
+#staleWarn{display:none;margin:12px 0 0;padding:9px 13px;border-radius:3px;
+ background:var(--warn-bg);color:var(--warn);font-size:13px;
+ border:1px solid var(--warn)}
+#staleWarn.on{display:block}
+
+h2{font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;
+ color:var(--accent);margin:30px 0 10px}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(224px,1fr));gap:10px}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:3px;
+ padding:13px 15px}
+.card.bad{border-left:3px solid var(--bad)}
+.card.ok{border-left:3px solid var(--ok)}
+.card.warn{border-left:3px solid var(--warn)}
+.card.idle{border-left:3px solid var(--idle)}
+.card h3{margin:0 0 3px;font-size:14px;font-weight:600;display:flex;gap:8px;
+ align-items:center}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+.dot.ok{background:var(--ok)} .dot.bad{background:var(--bad)}
+.dot.warn{background:var(--warn)} .dot.idle{background:var(--idle)}
+.card .sub{font-size:12px;color:var(--faint);margin-bottom:9px;
+ overflow-wrap:anywhere}
+dl.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:0;
+ font-size:12.5px}
+dl.kv dt{color:var(--faint)}
+dl.kv dd{margin:0;text-align:right;font-family:"IBM Plex Mono",monospace;
+ font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+dd.bad{color:var(--bad)} dd.ok{color:var(--ok)} dd.warn{color:var(--warn)}
+.srv{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12.5px;
+ border-bottom:1px solid var(--rule-soft);flex-wrap:wrap}
+.srv:last-of-type{border-bottom:0}
+.srv .who{font-weight:500;overflow-wrap:anywhere}
+.srv .pid,.srv .up{font-family:"IBM Plex Mono",monospace;font-size:11.5px;
+ color:var(--faint);white-space:nowrap}
+.srv .up{margin-left:auto}
+.err{margin-top:9px;padding:7px 9px;background:var(--bad-bg);color:var(--bad);
+ border-radius:2px;font-size:12px;overflow-wrap:anywhere}
+.note{margin-top:9px;padding:7px 9px;background:var(--warn-bg);color:var(--warn);
+ border-radius:2px;font-size:12px;overflow-wrap:anywhere}
+.fix{margin-top:8px;font-size:12px;color:var(--muted)}
+.fix code{background:var(--sunk);padding:1px 5px;border-radius:2px;font-size:11.5px;
+ overflow-wrap:anywhere}
+
+/* ---------- project ---------- */
+.proj{background:var(--panel);border:1px solid var(--rule);border-radius:3px;
+ margin-bottom:14px;overflow:hidden}
+.proj>.head{display:flex;align-items:center;gap:10px;padding:11px 15px;
+ flex-wrap:wrap}
+.proj>.head .p{font-size:12px;color:var(--faint);margin-left:auto;
+ font-family:"IBM Plex Mono",monospace;overflow-wrap:anywhere}
+.chip{font-size:11px;padding:2px 7px;border-radius:2px;
+ font-family:"IBM Plex Mono",monospace;white-space:nowrap}
+.chip.ok{background:var(--ok-bg);color:var(--ok)}
+.chip.bad{background:var(--bad-bg);color:var(--bad)}
+.chip.warn{background:var(--warn-bg);color:var(--warn)}
+.chip.idle{background:var(--idle-bg);color:var(--idle)}
+
+.tabs{display:flex;gap:0;border-top:1px solid var(--rule-soft);
+ border-bottom:1px solid var(--rule);background:var(--sunk);overflow-x:auto}
+.tabs button{border:0;border-radius:0;background:transparent;padding:9px 15px;
+ font-size:12.5px;color:var(--muted);border-bottom:2px solid transparent;
+ white-space:nowrap}
+.tabs button:hover:not(:disabled){color:var(--accent);border-color:var(--rule)}
+.tabs button[aria-selected=true]{color:var(--accent);font-weight:600;
+ border-bottom-color:var(--accent);background:var(--panel)}
+.tabs .count{font-family:"IBM Plex Mono",monospace;font-size:11px;
+ color:var(--faint);margin-left:5px}
+.panel-body{padding:0}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(216px,1fr));
+ gap:1px;background:var(--rule-soft)}
+.cell{background:var(--panel);padding:13px 15px}
+.cell h4{margin:0 0 8px;font-size:11px;letter-spacing:.09em;
+ text-transform:uppercase;color:var(--faint);font-weight:600}
+.pad{padding:14px 15px}
+
+/* ---------- search ---------- */
+.searchbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;
+ margin-bottom:4px}
+.searchbar input[type=text]{flex:1;min-width:220px;font:inherit;font-size:13px;
+ padding:7px 11px;border:1px solid var(--rule);border-radius:3px;
+ background:var(--panel);color:var(--ink)}
+.searchbar select{font:inherit;font-size:12px;padding:6px 8px;
+ border:1px solid var(--rule);border-radius:3px;background:var(--panel);
+ color:var(--ink)}
+.smeta{font-size:12px;color:var(--faint);margin:10px 0 12px;
+ font-family:"IBM Plex Mono",monospace}
+.hint{font-size:12px;color:var(--faint);margin:4px 0 0}
+
+.hit{border:1px solid var(--rule);border-radius:3px;margin-bottom:9px;
+ overflow:hidden;background:var(--panel)}
+.hit>.h{display:flex;align-items:center;gap:10px;padding:8px 12px;
+ background:var(--sunk);cursor:pointer;flex-wrap:wrap;
+ border-bottom:1px solid var(--rule-soft)}
+.hit>.h:hover{color:var(--accent)}
+.rank{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--faint);
+ flex:none;width:20px}
+.fname{font-weight:600;font-size:13px;overflow-wrap:anywhere}
+.fdir{color:var(--faint);font-weight:400}
+.lines{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--faint);
+ white-space:nowrap}
+.score{margin-left:auto;display:flex;align-items:center;gap:7px;flex:none}
+.bar{width:56px;height:5px;background:var(--rule);border-radius:3px;
+ overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent)}
+.snum{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--muted);
+ font-variant-numeric:tabular-nums;width:46px;text-align:right}
+.caret{color:var(--faint);font-size:11px;width:12px}
+.hit>.b{display:none}
+.hit.open>.b{display:block}
+.hit.open .caret{transform:rotate(90deg)}
+.caret{display:inline-block;transition:transform .12s}
+@media(prefers-reduced-motion:reduce){.caret{transition:none}}
+
+/* code with line numbers, scrollable in its own box */
+.code{margin:0;max-height:340px;overflow:auto;background:var(--code);
+ font-family:"IBM Plex Mono",monospace;font-size:11.5px;line-height:1.65}
+.code table{border-collapse:collapse;width:100%}
+.code td{padding:0 10px;vertical-align:top;white-space:pre}
+.code td.ln{width:1%;text-align:right;color:var(--faint);user-select:none;
+ background:var(--sunk);position:sticky;left:0;
+ border-right:1px solid var(--rule-soft)}
+.code td.src{overflow-wrap:normal}
+
+/* ---------- index table ---------- */
+.tw{overflow-x:auto}
+table.idx{border-collapse:collapse;width:100%;font-size:12.5px}
+table.idx th{text-align:left;font-family:"IBM Plex Mono",monospace;font-size:10.5px;
+ letter-spacing:.09em;text-transform:uppercase;color:var(--faint);font-weight:600;
+ padding:7px 12px;border-bottom:1px solid var(--rule);white-space:nowrap}
+table.idx td{padding:6px 12px;border-bottom:1px solid var(--rule-soft);
+ vertical-align:middle}
+table.idx tr:last-child td{border-bottom:0}
+table.idx td.n{text-align:right;font-family:"IBM Plex Mono",monospace;
+ font-variant-numeric:tabular-nums;white-space:nowrap}
+table.idx td.f{font-family:"IBM Plex Mono",monospace;overflow-wrap:anywhere}
+table.idx tr.scaffold td.f{color:var(--faint)}
+.sharebar{width:110px;height:5px;background:var(--rule);border-radius:3px;
+ overflow:hidden;display:inline-block;vertical-align:middle}
+.sharebar i{display:block;height:100%;background:var(--accent)}
+.sharebar.dim i{background:var(--faint)}
+
+/* ---------- log ---------- */
+.logbox{max-height:400px;overflow:auto;background:var(--code);border-radius:3px;
+ font-family:"IBM Plex Mono",monospace;font-size:11.5px;line-height:1.65;
+ padding:10px 12px}
+.logline{display:flex;gap:10px;white-space:pre-wrap;overflow-wrap:anywhere}
+.logline .t{color:var(--faint);flex:none}
+.logline.idx{color:var(--ok)}
+.logline.warnl{color:var(--warn)}
+.logline.errl{color:var(--bad)}
+
+footer{margin-top:34px;padding-top:14px;border-top:1px solid var(--rule);
+ font-size:11.5px;color:var(--faint);font-family:"IBM Plex Mono",monospace}
+</style></head><body>
+<div class="wrap">
+  <header class="top">
+    <h1>code-intel <span id="hostv"></span></h1>
+    <div class="age">read <b id="age">—</b> · <span id="took"></span>
+      <button id="refresh">Refresh</button></div>
+  </header>
+  <div id="staleWarn"></div>
+  <div id="app"><p style="color:var(--faint);padding:30px 0">Loading…</p></div>
+  <footer id="foot"></footer>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const STALE_AFTER = __STALE__;
+let last = 0, data = null;
+
+/* Per-workspace UI state, kept OUTSIDE the render so the 15s poll cannot throw
+   away a search you are reading. Everything the tabs show is cached here and
+   restored on every re-render. */
+const ui = {};
+const st = ws => (ui[ws] = ui[ws] || {tab:"overview", search:null, files:null,
+                                      log:null, q:"", n:10, busy:false});
+
+/* Deep link: #<workspace>/<tab>[/<query>]. The address bar then names what you
+   are looking at, so a tab can be bookmarked and reopened where you left it —
+   and reloading does not dump you back on the overview. */
+const TABS = ["overview","search","index","log"];
+function readHash(){
+  const raw = decodeURIComponent(location.hash.replace(/^#/,""));
+  if(!raw) return null;
+  const [ws, tab, ...rest] = raw.split("/");
+  if(!ws || !TABS.includes(tab)) return null;
+  const s = st(ws);
+  s.tab = tab;
+  if(rest.length) s.q = rest.join("/");
+  return {ws, tab, q: rest.join("/")};
+}
+function writeHash(ws){
+  const s = st(ws);
+  const q = (s.tab === "search" && s.q) ? "/" + encodeURIComponent(s.q) : "";
+  const next = "#" + encodeURIComponent(ws) + "/" + s.tab + q;
+  if(location.hash !== next) history.replaceState(null, "", next);
+}
+
+const esc = s => String(s==null?"":s).replace(/[&<>"]/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const cls = v => v === true ? "ok" : v === false ? "bad" : "idle";
+const row = (k,v,state) => `<dt>${esc(k)}</dt><dd class="${state||""}">${esc(v)}</dd>`;
+
+function card(title, state, sub, rows, err, note, fix){
+  return `<div class="card ${state}">
+    <h3><span class="dot ${state}"></span>${esc(title)}</h3>
+    ${sub?`<div class="sub">${esc(sub)}</div>`:""}
+    <dl class="kv">${rows.join("")}</dl>
+    ${err?`<div class="err">${esc(err)}</div>`:""}
+    ${note?`<div class="note">${esc(note)}</div>`:""}
+    ${fix?`<div class="fix">${fix}</div>`:""}
+  </div>`;
+}
+
+/* split "a/b/c.js" into dim directory + bold basename */
+function splitPath(p){
+  const i = String(p).lastIndexOf("/");
+  return i < 0 ? ["", p] : [p.slice(0, i+1), p.slice(i+1)];
+}
+
+function codeTable(content, startLine){
+  const lines = String(content).replace(/\n$/,"").split("\n");
+  let n = Number(startLine)||1, out = "";
+  for(const ln of lines){
+    out += `<tr><td class="ln">${n++}</td><td class="src">${esc(ln)}</td></tr>`;
+  }
+  return `<div class="code"><table>${out}</table></div>`;
+}
+
+/* ------------------------------------------------------------- stack ---- */
+function renderStack(d){
+  const s=d.status, tool=s.tool||{}, svc=s.svc||{}, meta=s.meta||{};
+  const q=d.components.qdrant||{}, o=d.components.ollama||{}, mcp=d.components.mcp||{};
+  const nd=tool.node||{};
+  let h = `<h2>Stack</h2><div class="grid">`;
+
+  const cont=svc.container||{}, ports=cont.qdrant_ports||"";
+  const bothPorts = ports.includes("6333") && ports.includes("6334");
+  h += card(cont.cli||"kontejnery",
+    cont.daemon ? ((cont.qdrant_state==="running" && bothPorts)?"ok":"warn") : "bad",
+    cont.name||"", [
+      row("daemon", cont.daemon?"running":"stopped", cls(!!cont.daemon)),
+      row("container", cont.qdrant_state||"absent", cont.qdrant_state==="running"?"ok":"bad"),
+      row("both ports", bothPorts?"6333 + 6334":"NO", bothPorts?"ok":"bad"),
+    ],
+    cont.daemon?null:"Start OrbStack or Docker Desktop.",
+    (cont.daemon && !bothPorts)
+      ? "The container does not publish 6334. GrepAI reads and writes vectors there, so every index will fail." : null);
+
+  h += card("qdrant", q.ok?"ok":"bad", q.version?("v"+q.version):"", [
+      row("HTTP 6333", q.healthz?"200 ok":"no answer", cls(!!q.healthz)),
+      row("gRPC "+((svc.qdrant||{}).grpc_port||"6334"), q.grpc?"open":"closed", cls(!!q.grpc)),
+      row("latency", (q.ms||0)+" ms"),
+      row("collections", (q.collections||[]).length),
+    ], q.error,
+    (q.healthz && !q.grpc)
+      ? "HTTP answers but gRPC does not. Search will look alive while storing and finding nothing." : null);
+
+  const overflow = o.context_length && meta.chunk_size &&
+                   Number(meta.chunk_size) > Number(o.context_length);
+  h += card("ollama", o.ok?"ok":(o.reachable?"warn":"bad"), meta.embed_model||"", [
+      row("server", o.reachable?"answering":"no answer", cls(!!o.reachable)),
+      row("model pulled", o.model_present?"yes":"no", cls(!!o.model_present)),
+      row("loaded", o.loaded?"yes":"no", o.loaded?"ok":""),
+      row("context window", o.context_length?(o.context_length+" tokens"):"—", overflow?"bad":""),
+      row("embed probe", o.ok?(o.dimensions+" dim / "+o.embed_ms+" ms"):"failed", cls(!!o.ok)),
+    ], o.error,
+    overflow ? `chunk ${meta.chunk_size} overflows the ${o.context_length}-token window — files will drop out of the index silently` : null);
+
+  h += card("Node.js", nd.present?(nd.register_hooks?"ok":"bad"):"bad", nd.path||"", [
+      row("version", nd.version||"—"),
+      row("registerHooks", nd.register_hooks?"function":"MISSING", cls(!!nd.register_hooks)),
+      row("gitnexus", (tool.gitnexus||{}).runs?((tool.gitnexus||{}).version||"ok"):"will not run",
+          cls(!!(tool.gitnexus||{}).runs)),
+      row("grepai", ((tool.grepai||{}).version||"—").replace("grepai version ",""),
+          cls(!!(tool.grepai||{}).present)),
+    ],
+    (nd.present && !nd.register_hooks) ? "gitnexus --version passes, but analyze dies on registerHooks." : null,
+    (nd.present && !nd.register_hooks) ? "Needs Node 22.15+ / 23.5+. See chapter 7 of the manual." : null);
+
+  /* MCP servers: a server started before the package was upgraded is still
+     running the old code and will reject the newer index. */
+  const srv = mcp.servers||[];
+  const state = srv.length ? (mcp.stale?"bad":"ok") : "idle";
+  let body = srv.length
+    ? srv.map(x => `<div class="srv">
+        <span class="dot ${x.stale?"bad":"ok"}"></span>
+        <span class="who">${esc(x.owner)}</span>
+        <span class="pid">${esc(x.pid)}</span>
+        <span class="up">${esc(x.etime)}</span>
+        <span class="chip ${x.stale?"bad":"ok"}">${x.stale?"stale":"ok"}</span>
+      </div>`).join("")
+    : `<p class="hint">No server running. One starts when you open an agent in a project.</p>`;
+  h += `<div class="card ${state}">
+      <h3><span class="dot ${state}"></span>MCP servers</h3>
+      <div class="sub">gitnexus mcp · running since the client started</div>
+      ${body}
+      ${mcp.stale ? `<div class="err">${mcp.stale} server(s) running an older version
+        than the index — queries will fail with &ldquo;DB version mismatch&rdquo;.</div>
+        <div class="fix">Restart the client, or
+        <code>kill ${esc(srv.filter(x=>x.stale).map(x=>x.pid).join(" "))}</code></div>` : ""}
+    </div>`;
+
+  return h + `</div>`;
+}
+
+/* ---------------------------------------------------------- projects ---- */
+function tabBtn(ws, id, label, count){
+  const a = st(ws).tab === id;
+  return `<button role="tab" aria-selected="${a}" data-ws="${esc(ws)}" data-tab="${id}">
+    ${esc(label)}${count!=null?`<span class="count">${esc(count)}</span>`:""}</button>`;
+}
+
+function paneOverview(p, meta){
+  const gn=p.gitnexus||{}, col=p.collection_stats||{}, se=p.search||{},
+        nd=(data.status.tool||{}).node||{};
+  let h = `<div class="cols">`;
+  h += `<div class="cell"><h4>GrepAI</h4><dl class="kv">
+    ${row("watcher", p.watcher?"running":"STOPPED", cls(!!p.watcher))}
+    ${row("vectors", col.exists?(col.points??0):"no collection", (col.exists&&!col.empty)?"ok":"bad")}
+    ${row("collection", col.status||"—", col.status==="green"?"ok":"")}
+    ${row("dimensions", col.dimensions||"—")}
+    ${row("probe query", se.ok?(se.results+" hits / "+se.ms+" ms"):"—", cls(se.ok))}
+  </dl>`;
+  if(col.exists && col.empty)
+    h += `<div class="err">The collection is empty — search returns nothing and it looks like a bad query.</div>`;
+  if(!p.watcher)
+    h += `<div class="err">The watcher is not running. Search keeps &ldquo;working&rdquo; while answering from stale data.</div>
+          <div class="fix">Fix: <code>cd ${esc(p.path)} && ./refresh-intel.sh</code></div>`;
+  h += `</div>`;
+
+  h += `<div class="cell"><h4>GitNexus</h4><dl class="kv">
+    ${row("graph", gn.present?(gn.nodes+" nodes / "+gn.edges+" edges"):"not indexed", cls(gn.present&&gn.nodes>0))}
+    ${row("files", gn.files??"—")}
+    ${row("indexed", gn.age?(gn.age+" ago"):"—")}
+    ${row("commit", gn.indexed_commit?(gn.indexed_commit+((gn.head_commit&&gn.head_commit!==gn.indexed_commit)?(" ≠ "+gn.head_commit):"")):"—",
+           gn.fresh===false?"bad":(gn.fresh?"ok":""))}
+    ${row("built with Node", gn.built_with_node||"—",
+           (gn.built_with_node&&nd.version&&gn.built_with_node!==nd.version)?"warn":"")}
+  </dl>`;
+  if(gn.error) h += `<div class="err">${esc(gn.error)}</div>`;
+  if(gn.built_with_node && nd.version && gn.built_with_node!==nd.version)
+    h += `<div class="note">The index was built under Node ${esc(gn.built_with_node)}; ${esc(nd.version)} is running now.</div>`;
+  if(gn.fresh===false)
+    h += `<div class="fix">Fix: <code>cd ${esc(p.path)} && ./refresh-intel.sh</code></div>`;
+  h += `</div>`;
+
+  h += `<div class="cell"><h4>Konfigurace</h4><dl class="kv">
+    ${row("workspace", p.workspace_exists?"exists":"missing", cls(!!p.workspace_exists))}
+    ${row("mapping", p.mapped?"matches":"WRONG PATH", cls(!!p.mapped))}
+    ${row("embedder", p.embedder||"—", p.embedder==="match"?"ok":(p.embedder==="mismatch"?"bad":""))}
+    ${row("chunking "+meta.chunk_size+"/"+meta.chunk_overlap, p.chunking_ok?"ok":"differs", cls(!!p.chunking_ok))}
+    ${row("ignore list", p.ignores_ok?"ok":"incomplete", cls(!!p.ignores_ok))}
+    ${row("refresh-intel.sh", p.script_state||"—",
+           p.script_state==="current"?"ok":(p.script_state==="modified"?"warn":"bad"))}
+  </dl>`;
+  if(p.gob_leftover) h += `<div class="note">Leftover .grepai/index.gob — safe to delete.</div>`;
+  if(!p.ok) h += `<div class="fix">Fix: <code>code-intel-init --path ${esc(p.path)} --agent claude --apply</code></div>`;
+  h += `</div></div>`;
+  return h;
+}
+
+function paneSearch(p){
+  const s = st(p.workspace), r = s.search;
+  let h = `<div class="pad">
+    <div class="searchbar">
+      <input type="text" id="q-${esc(p.workspace)}" placeholder="Describe what you are looking for — e.g. &ldquo;where passwords are verified&rdquo;"
+             value="${esc(s.q)}" data-ws="${esc(p.workspace)}">
+      <select data-nsel="${esc(p.workspace)}">
+        ${[5,10,20,30].map(n=>`<option value="${n}"${n===s.n?" selected":""}>${n} hits</option>`).join("")}
+      </select>
+      <button data-go="${esc(p.workspace)}"${s.busy?" disabled":""}>${s.busy?"Searching…":"Search"}</button>
+    </div>
+    <p class="hint">Matches on meaning, not on words — a plain sentence works.</p>`;
+
+  if(r){
+    h += `<div class="smeta">&ldquo;${esc(r.query)}&rdquo; · ${r.hits.length} hits · ${r.ms} ms</div>`;
+    if(r.error && !r.hits.length) h += `<div class="err">${esc(r.error)}</div>`;
+    const top = r.hits.length ? Math.max(...r.hits.map(x=>x.score)) : 1;
+    for(const x of r.hits){
+      const [dir,base] = splitPath(x.path);
+      const open = s.open && s.open[x.rank];
+      h += `<div class="hit${open?" open":""}" data-hit="${esc(p.workspace)}|${x.rank}">
+        <div class="h">
+          <span class="caret">▶</span>
+          <span class="rank">${x.rank}</span>
+          <span class="fname"><span class="fdir">${esc(dir)}</span>${esc(base)}</span>
+          <span class="lines">${x.start_line}–${x.end_line}</span>
+          <span class="score">
+            <span class="bar"><i style="width:${Math.round(100*x.score/(top||1))}%"></i></span>
+            <span class="snum">${x.score.toFixed(3)}</span>
+          </span>
+        </div>
+        <div class="b">${codeTable(x.content, x.start_line)}</div>
+      </div>`;
+    }
+  } else {
+    h += `<p class="hint" style="margin-top:14px">Nothing searched yet. Type a query above.</p>`;
+  }
+  return h + `</div>`;
+}
+
+function paneFiles(p){
+  const s = st(p.workspace), f = s.files;
+  if(!f) return `<div class="pad"><p class="hint">Reading the index…</p></div>`;
+  if(!f.ok) return `<div class="pad"><div class="err">${esc(f.error||"could not read the index")}</div></div>`;
+  const top = Math.max(...f.files.map(x=>x.chunks), 1);
+  let h = `<div class="pad">
+    <div class="smeta">${f.total} vectors across ${f.files.length} files · ${f.scaffold_chunks} of them stack scaffolding</div>
+    <div class="tw"><table class="idx">
+      <thead><tr><th>file</th><th class="n">chunks</th><th class="n">share</th><th></th></tr></thead><tbody>`;
+  for(const x of f.files){
+    const [dir,base] = splitPath(x.path);
+    h += `<tr class="${x.scaffold?"scaffold":""}">
+      <td class="f"><span class="fdir">${esc(dir)}</span>${esc(base)}
+        ${x.scaffold?' <span class="chip idle">scaffolding</span>':""}</td>
+      <td class="n">${x.chunks}</td>
+      <td class="n">${x.share} %</td>
+      <td><span class="sharebar${x.scaffold?" dim":""}"><i style="width:${Math.round(100*x.chunks/top)}%"></i></span></td>
+    </tr>`;
+  }
+  h += `</tbody></table></div>
+    <p class="hint" style="margin-top:10px">A file missing from this list is not in the index, and search will never find it.</p></div>`;
+  return h;
+}
+
+function paneLog(p){
+  const s = st(p.workspace), l = s.log;
+  if(!l) return `<div class="pad"><p class="hint">Reading the log…</p></div>`;
+  if(!l.ok) return `<div class="pad"><div class="err">${esc(l.error||"could not read the log")}</div></div>`;
+  let body = "";
+  for(const ln of l.lines){
+    const m = ln.match(/^\[[^\]]+\]\s+(\S+\s+\S+)\s+(.*)$/);
+    const t = m ? m[1] : "", msg = m ? m[2] : ln;
+    let k = "";
+    if(/Indexed/.test(msg)) k = "idx";
+    else if(/error|failed|Error/.test(msg)) k = "errl";
+    else if(/warn|Warn/.test(msg)) k = "warnl";
+    body += `<div class="logline ${k}"><span class="t">${esc(t)}</span><span>${esc(msg)}</span></div>`;
+  }
+  return `<div class="pad">
+    <div class="smeta">${l.lines.length} lines · written ${l.modified_age_s} s ago · ${Math.round(l.size/1024)} kB</div>
+    <div class="logbox" id="log-${esc(p.workspace)}">${body}</div>
+    <p class="hint" style="margin-top:10px">${esc(l.path)}</p></div>`;
+}
+
+function renderProjects(d){
+  const meta = d.status.meta||{};
+  let h = `<h2>Projects (${d.projects.length})</h2>`;
+  if(!d.projects.length){
+    return h + `<div class="card idle"><h3><span class="dot idle"></span>The registry is empty</h3>
+      <div class="sub">No project is wired up yet.</div>
+      <div class="fix"><code>cd project && code-intel-init --agent claude --apply</code></div></div>`;
+  }
+  for(const p of d.projects){
+    const ws = p.workspace, s = st(ws);
+    const gn=p.gitnexus||{}, se=p.search||{}, col=p.collection_stats||{};
+    const allOk = p.ok && gn.ok && se.ok && !col.empty;
+    h += `<div class="proj">
+      <div class="head">
+        <span class="dot ${allOk?"ok":"bad"}"></span>
+        <strong>${esc(ws)}</strong>
+        <span class="chip ${p.ok?"ok":"bad"}">config ${p.ok?"ok":"drift"}</span>
+        <span class="chip ${p.watcher?"ok":"bad"}">watcher ${p.watcher?"running":"stopped"}</span>
+        <span class="p">${esc(p.path)}</span>
+      </div>
+      <div class="tabs" role="tablist">
+        ${tabBtn(ws,"overview","Overview")}
+        ${tabBtn(ws,"search","Search")}
+        ${tabBtn(ws,"index","Index contents", col.exists?(col.points??0):null)}
+        ${tabBtn(ws,"log","Watcher log")}
+      </div>
+      <div class="panel-body">`;
+    h += s.tab==="overview" ? paneOverview(p, meta)
+       : s.tab==="search"   ? paneSearch(p)
+       : s.tab==="index"    ? paneFiles(p)
+       :                      paneLog(p);
+    h += `</div></div>`;
+  }
+  return h;
+}
+
+function render(d){
+  data = d;
+  if(d.status_error){
+    $("#app").innerHTML = `<div class="card bad"><h3><span class="dot bad"></span>
+      code-intel-init unavailable</h3><div class="err">${esc(d.status_error)}</div>
+      <div class="fix">This dashboard has no probes of its own — without that command it knows nothing.
+      Try <code>code-intel-init --status --all --json</code>.</div></div>`;
+    return;
+  }
+  $("#app").innerHTML = renderStack(d) + renderProjects(d);
+  const meta = d.status.meta||{};
+  $("#hostv").textContent = "· script v"+(meta.script_version||"?")+" · dash v"+d.dash_version;
+  $("#took").textContent = "collected in "+d.elapsed_ms+" ms";
+  $("#foot").textContent = "code-intel-init "+(d.script_path||"")+
+    "  ·  data from `code-intel-init --status --all --json`; this dashboard has no probes of its own";
+  wire();
+}
+
+/* --------------------------------------------------------------- wire --- */
+function wire(){
+  document.querySelectorAll(".tabs button[data-tab]").forEach(b => {
+    b.onclick = () => { const ws=b.dataset.ws; st(ws).tab=b.dataset.tab;
+      writeHash(ws); render(data); ensureTabData(ws); };
+  });
+  document.querySelectorAll("[data-hit]").forEach(el => {
+    el.querySelector(".h").onclick = () => {
+      const [ws, rank] = el.dataset.hit.split("|");
+      const s = st(ws); s.open = s.open || {};
+      s.open[rank] = !s.open[rank];
+      el.classList.toggle("open");
+    };
+  });
+  document.querySelectorAll("[data-go]").forEach(b => {
+    b.onclick = () => doSearch(b.dataset.go);
+  });
+  document.querySelectorAll("input[data-ws]").forEach(i => {
+    i.oninput = () => { st(i.dataset.ws).q = i.value; };
+    i.onkeydown = e => { if(e.key === "Enter") doSearch(i.dataset.ws); };
+  });
+  document.querySelectorAll("select[data-nsel]").forEach(sel => {
+    sel.onchange = () => { st(sel.dataset.nsel).n = Number(sel.value); };
+  });
+  const lb = document.querySelector(".logbox");
+  if(lb) lb.scrollTop = lb.scrollHeight;
+}
+
+async function doSearch(ws){
+  const s = st(ws);
+  if(!s.q.trim() || s.busy) return;
+  s.busy = true; render(data);
+  try{
+    const u = `/api/search?ws=${encodeURIComponent(ws)}&q=${encodeURIComponent(s.q)}&n=${s.n}`;
+    s.search = await (await fetch(u)).json();
+    s.open = {1:true};                       /* top hit open by default */
+    writeHash(ws);
+  }catch(e){
+    s.search = {ok:false, query:s.q, ms:0, hits:[], error:String(e)};
+  }finally{
+    s.busy = false; render(data);
+  }
+}
+
+async function ensureTabData(ws){
+  const s = st(ws);
+  const p = (data.projects||[]).find(x => x.workspace === ws) || {};
+  if(s.tab === "index" && !s.files){
+    const url = ((data.status.svc||{}).qdrant||{}).http_url || "";
+    try{ s.files = await (await fetch(
+      `/api/files?ws=${encodeURIComponent(ws)}&url=${encodeURIComponent(url)}`)).json(); }
+    catch(e){ s.files = {ok:false, error:String(e)}; }
+    render(data);
+  }
+  if(s.tab === "log" && !s.log){
+    try{ s.log = await (await fetch(`/api/log?ws=${encodeURIComponent(ws)}&n=250`)).json(); }
+    catch(e){ s.log = {ok:false, error:String(e), lines:[]}; }
+    render(data);
+  }
+}
+
+function tick(){
+  if(!last) return;
+  const age = (Date.now()-last)/1000;
+  $("#age").textContent = age<60 ? Math.round(age)+" s ago" : Math.round(age/60)+" min ago";
+  const stale = age > STALE_AFTER;
+  $("#app").classList.toggle("stale", stale);
+  $("#staleWarn").classList.toggle("on", stale);
+  if(stale) $("#staleWarn").textContent =
+    "The last reading is older than "+STALE_AFTER+" s. What is shown may no longer hold — until the page refreshes it says nothing about the current state.";
+}
+
+async function load(){
+  $("#refresh").disabled = true;
+  try{
+    const r = await fetch("/api/status", {cache:"no-store"});
+    const doc = await r.json();
+    let deep = null;
+    if(!last) deep = readHash();             /* only on the first load */
+    render(doc);
+    last = Date.now();
+    if(deep){
+      ensureTabData(deep.ws);
+      if(deep.tab === "search" && deep.q) doSearch(deep.ws);
+    }
+    /* the log keeps growing; drop the cache so a reopen shows fresh lines */
+    for(const ws in ui) ui[ws].log = null;
+  }catch(e){
+    $("#staleWarn").classList.add("on");
+    $("#staleWarn").textContent = "The dashboard server is not responding: "+e;
+  }finally{
+    $("#refresh").disabled = false;
+    tick();
+  }
+}
+$("#refresh").onclick = load;
+load();
+setInterval(load, 15000);
+setInterval(tick, 1000);
+</script></body></html>
+"""
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def _send(self, code, body, ctype):
+        raw = body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _json(self, obj):
+        self._send(200, json.dumps(obj, ensure_ascii=False, default=str),
+                   "application/json; charset=utf-8")
+
+    def do_GET(self):                                        # noqa: N802
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        q = urllib.parse.parse_qs(parsed.query)
+
+        def arg(name, default=""):
+            return (q.get(name) or [default])[0]
+
+        if path == "/":
+            self._send(200, PAGE.replace("__STALE__", str(STALE_AFTER_S)),
+                       "text/html; charset=utf-8")
+
+        elif path == "/api/status":
+            try:
+                self._json(build_report())
+            except Exception as e:                           # noqa: BLE001
+                self._json({"status_error": "dashboard failed: %s" % e})
+
+        elif path == "/api/search":
+            ws, query = arg("ws"), arg("q")
+            if not ws or not query.strip():
+                self._json({"ok": False, "error": "workspace or query missing",
+                            "hits": []})
+                return
+            try:
+                limit = max(1, min(50, int(arg("n", "10"))))
+            except ValueError:
+                limit = 10
+            self._json(grepai_query(ws, query, limit))
+
+        elif path == "/api/files":
+            ws, url = arg("ws"), arg("url")
+            if not ws or not url:
+                self._json({"ok": False, "error": "workspace missing"})
+                return
+            self._json(collection_files(url, "workspace_" + ws))
+
+        elif path == "/api/log":
+            ws = arg("ws")
+            if not ws:
+                self._json({"ok": False, "error": "workspace missing", "lines": []})
+                return
+            try:
+                nlines = max(20, min(2000, int(arg("n", "250"))))
+            except ValueError:
+                nlines = 250
+            self._json(read_log(ws, nlines))
+
+        else:
+            self._send(404, "not found", "text/plain; charset=utf-8")
+
+    def log_message(self, *a):
+        pass                                                 # keep the terminal usable
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        prog="code-intel-dash",
+        description="Local health dashboard for the code-intelligence stack.")
+    ap.add_argument("--port", type=int, default=DEFAULT_PORT)
+    ap.add_argument("--once", action="store_true",
+                    help="print one JSON report and exit")
+    ap.add_argument("--open", action="store_true",
+                    help="open a browser once the server is up")
+    ap.add_argument("--version", action="version", version="code-intel-dash " + VERSION)
+    args = ap.parse_args()
+
+    if args.once:
+        rep = build_report()
+        json.dump(rep, sys.stdout, indent=2, ensure_ascii=False, default=str)
+        sys.stdout.write("\n")
+        # Exit non-zero when something is actually wrong, so this is usable
+        # from cron or a shell prompt without parsing the document.
+        bad = bool(rep.get("status_error"))
+        for c in rep.get("components", {}).values():
+            bad = bad or not c.get("ok")
+        for p in rep.get("projects", []):
+            bad = bad or not p.get("ok") or not (p.get("gitnexus") or {}).get("ok")
+        return 2 if bad else 0
+
+    if not find_script():
+        print("code-intel-init not found on PATH or beside this script.",
+              file=sys.stderr)
+        print("The dashboard has no probes of its own and cannot report "
+              "anything without it.", file=sys.stderr)
+        return 1
+
+    url = "http://127.0.0.1:%d" % args.port
+    try:
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    except OSError as e:
+        print("cannot bind %s: %s" % (url, e), file=sys.stderr)
+        return 1
+    print("code-intel-dash %s  ->  %s" % (VERSION, url))
+    print("loopback only, no auth. Ctrl+C to stop.")
+    if args.open:
+        webbrowser.open(url)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,875 @@
+# Code intelligence pro AI agenty — návod od nuly
+
+Tenhle návod tě provede instalací celého stacku na Macu. Předpokládá jen jedno:
+že umíš otevřít aplikaci. Všechno ostatní je vysvětlené.
+
+Až budeš hotový, budeš zakládat nové projekty takhle:
+
+```
+mkdir ~/projects/muj-projekt
+cd ~/projects/muj-projekt
+code-intel-init --agent claude --apply
+```
+
+A tvůj AI kódovací agent bude umět hledat v kódu podle významu, ne podle
+klíčových slov, a bude vědět, co se rozbije, když něco změníš.
+
+> `--agent claude` tam nechybí náhodou. Bez něj skript vyžaduje i Codex a
+> odmítne se spustit, když ho nemáš. Kdo používá obojí, přepínač vynechá.
+
+---
+
+## Obsah
+
+1. [Co to vlastně dělá](#1-co-to-vlastně-dělá)
+2. [Co budeš potřebovat](#2-co-budeš-potřebovat)
+3. [Terminál — základ](#3-terminál--základ)
+4. [Homebrew](#4-homebrew)
+5. [OrbStack — kontejnery](#5-orbstack--kontejnery)
+6. [Ollama — embedding model](#6-ollama--embedding-model)
+7. [Node.js](#7-nodejs)
+8. [GrepAI](#8-grepai)
+9. [GitNexus](#9-gitnexus)
+10. [code-intel-init](#10-code-intel-init)
+11. [První projekt](#11-první-projekt)
+12. [Ověření, že to funguje](#12-ověření-že-to-funguje)
+13. [Každodenní používání](#13-každodenní-používání)
+14. [Dashboard — přehled o všem najednou](#14-dashboard--přehled-o-všem-najednou)
+15. [Když se něco pokazí](#15-když-se-něco-pokazí)
+16. [Odinstalace](#16-odinstalace)
+17. [Slovníček](#17-slovníček)
+
+---
+
+## 1. Co to vlastně dělá
+
+Když AI agent pracuje s tvým kódem, musí se v něm nejdřív zorientovat. Bez
+pomoci to dělá tak, že hledá textové řetězce — jako když v editoru zmáčkneš
+Cmd+F. To funguje, dokud víš, co přesně hledat. Jakmile chceš „najdi místo, kde
+se ověřuje heslo", a ta funkce se jmenuje `validateCreds`, textové hledání
+selže.
+
+Tenhle stack přidává dvě věci, které to řeší jinak.
+
+**GrepAI** čte tvůj kód a každý jeho kousek převede na sadu čísel, která
+zachycuje význam — takzvaný vektor. Když se pak zeptáš větou, převede se stejným
+způsobem i tvoje otázka a najdou se kousky kódu, jejichž čísla jsou nejblíž.
+Proto najde `validateCreds`, i když jsi slovo „validate" nenapsal. Tomuhle se
+říká sémantické vyhledávání.
+
+**GitNexus** staví mapu vztahů: co odkud volá, co na čem závisí. Odpovídá na
+otázky typu „když změním tuhle funkci, co všechno se může rozbít". To je něco,
+co ze samotného textu nevyčteš.
+
+Obojí běží **výhradně u tebe na počítači**. Žádný kód nikam neodchází.
+
+Jeden příkaz, `code-intel-init`, tohle všechno pro nový projekt nastaví najednou
+a zároveň napíše tvému AI agentovi instrukce, kdy má co použít.
+
+### Z čeho se to skládá
+
+| Součást | Co dělá | Proč je potřeba |
+|---|---|---|
+| **Ollama** | Převádí text na vektory | Bez ní není z čeho hledat |
+| **qdrant** | Databáze vektorů, běží v kontejneru | Ukládá a prohledává, co ollama vyrobila |
+| **OrbStack** | Spouští kontejnery | Hostitel pro qdrant |
+| **GrepAI** | Sémantické vyhledávání | Řídí indexování a hledání |
+| **GitNexus** | Mapa vztahů v kódu | Odpovídá na „co se rozbije" |
+| **Node.js** | Běhové prostředí | GitNexus je v něm napsaný |
+| **Homebrew** | Správce balíčků | Instaluje většinu z výše uvedeného |
+| **code-intel-init** | Propojí to všechno | Aby to byl jeden příkaz, ne patnáct |
+
+Připrav si zhruba **20 minut** a **5 GB místa na disku**. Většina času je čekání
+na stahování.
+
+---
+
+## 2. Co budeš potřebovat
+
+- Mac s macOS — návod je psaný pro Apple Silicon i Intel
+- Připojení k internetu
+- Heslo ke svému účtu na Macu, jednou při instalaci Homebrew
+- Claude Code, VS Code nebo jiný agent, který umí MCP
+
+Nemusíš umět programovat. Nemusíš rozumět tomu, co jednotlivé příkazy dělají —
+u každého je napsané, co se stane a jak poznáš, že to vyšlo.
+
+---
+
+## 3. Terminál — základ
+
+Terminál je aplikace, kde se počítači píšou příkazy místo klikání. Otevřeš ho
+takto: zmáčkni **Cmd + mezerník**, napiš `Terminál` a dej Enter.
+
+Objeví se okno s řádkem, který končí znakem `%`. Za něj se píše.
+
+Tři věci, které ti ušetří trápení:
+
+**Příkazy kopíruj po jednom.** Zkopíruj řádek, vlož do terminálu, dej Enter,
+počkej, až se objeví nový řádek s `%`. Teprve pak další. Když vložíš víc řádků
+najednou a jeden z nich je rozdělený, terminál zahlásí chybu.
+
+**Když se nic neděje, čeká se.** Stahování a instalace trvají. Dokud se
+neobjeví nový řádek s `%`, příkaz běží. Nepřerušuj ho.
+
+**Terminál nezavírej** dokud nebudeš hotový, ať se ti neztratí kontext.
+
+Vyzkoušej si to. Napiš:
+
+```
+echo ahoj
+```
+
+Musí to vypsat `ahoj`. Když ano, umíš vše potřebné.
+
+---
+
+## 4. Homebrew
+
+Homebrew je správce balíčků — jednou příkazem nainstaluje program, který bys
+jinak musel hledat a stahovat ručně. Většina dalších kroků ho používá.
+
+Nejdřív zjisti, jestli ho už nemáš:
+
+```
+brew --version
+```
+
+Když to vypíše číslo verze, přeskoč na krok 5. Když to řekne `command not
+found`, nainstaluj ho:
+
+```
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+Instalátor se zeptá na heslo k tvému účtu. Při psaní hesla se **nic
+nezobrazuje** — ani hvězdičky. To je normální, piš a dej Enter.
+
+Na konci může Homebrew napsat něco jako „Run these commands in your terminal to
+add Homebrew to your PATH" a pod tím dva až tři příkazy. **Ty příkazy spusť** —
+jinak `brew` nebude fungovat. Zkopíruj je přesně tak, jak je vypsal.
+
+Kontrola:
+
+```
+brew --version
+```
+
+Musí vypsat verzi. Pokud pořád `command not found`, zavři terminál, otevři nový
+a zkus znovu.
+
+---
+
+## 5. OrbStack — kontejnery
+
+Kontejner je izolované prostředí, ve kterém běží jeden program. Databáze
+qdrant, kterou stack potřebuje, běží právě takhle — nemusíš ji instalovat do
+systému, jen ji spustíš jako kontejner.
+
+OrbStack je aplikace, která kontejnery na Macu spouští. Je rychlejší a šetrnější
+k baterii než Docker Desktop, ale pokud už Docker Desktop máš, tenhle krok
+přeskoč.
+
+```
+brew install --cask orbstack
+```
+
+Stahuje se zhruba 100 MB. Po instalaci OrbStack **spusť** — Cmd + mezerník,
+napiš `OrbStack`, Enter. Při prvním spuštění se tě zeptá na pár věcí, výchozí
+volby stačí.
+
+V nastavení OrbStacku si zapni spouštění po přihlášení. Ušetří ti to
+každodenní „proč to nefunguje" — bez běžícího OrbStacku totiž nemá qdrant kde
+běžet.
+
+Kontrola:
+
+```
+docker info > /dev/null 2>&1 && echo "funguje" || echo "OrbStack nebezi"
+```
+
+Musí to říct `funguje`. Když ne, počkej pár vteřin, až se OrbStack rozběhne, a
+zkus znovu.
+
+---
+
+## 6. Ollama — embedding model
+
+Ollama je program, který na tvém počítači spouští jazykové modely. Tady ji
+potřebujeme jen k jedné věci: převádět kousky kódu na vektory.
+
+```
+brew install ollama
+```
+
+Aby se spouštěla automaticky po přihlášení:
+
+```
+brew services start ollama
+```
+
+Kontrola:
+
+```
+ollama list
+```
+
+Vypíše tabulku, nejspíš prázdnou. Prázdná je v pořádku — hlavní je, že to
+nezahlásilo chybu. Model se stáhne až za chvíli, `code-intel-init` si ho
+dotáhne sám.
+
+---
+
+## 7. Node.js
+
+Node.js je běhové prostředí pro JavaScript. GitNexus je v něm napsaný, takže bez
+něj nepůjde nainstalovat. Zkontroluj, jestli ho už nemáš:
+
+```
+node --version
+```
+
+Když to vypíše číslo, jdi dál. Když ne:
+
+```
+brew install node
+```
+
+Kontrola:
+
+```
+node --version
+npm --version
+```
+
+Obojí musí vypsat verzi.
+
+### Verze Node.js musí být dost nová
+
+Tohle je zrádné, protože stará verze se neprojeví hned. GitNexus se
+nainstaluje, `gitnexus --version` bez potíží vypíše číslo, a teprve při
+skutečném indexování to spadne na hlášce o `registerHooks`. Ověř si to rovnou:
+
+```
+node -e 'console.log(typeof require("node:module").registerHooks)'
+```
+
+Musí to vypsat `function`. Když vypíše `undefined`, je tvůj Node starý —
+potřebná funkce přibyla v Node 22.15 a 23.5. Zjisti, odkud se ti Node bere:
+
+```
+which node
+brew list --versions node
+```
+
+Podle výsledku jsi v jedné ze tří situací:
+
+**Node je z Homebrew** — `brew list --versions node` vypsalo číslo:
+
+```
+brew upgrade node
+```
+
+**Node je z instalátoru z nodejs.org** — `which node` ukazuje do
+`/usr/local/bin`, ale `brew list --versions node` nevypsalo nic. Tohle je
+nejčastější případ a `brew upgrade node` v něm **selže** s hláškou
+`Error: node not installed`, protože Homebrew ten Node nespravuje. Doinstaluj
+si Homebrew verzi vedle:
+
+```
+brew install node
+```
+
+Na Apple Siliconu je `/opt/homebrew/bin` v PATH před `/usr/local/bin`, takže
+nová verze tu starou rovnou zastíní; původní instalace zůstane nedotčená.
+Ověř si to — `which node` už musí ukazovat do `/opt/homebrew`.
+
+**Node je z nvm** — `which node` ukazuje někam do `.nvm`:
+
+```
+nvm install --lts
+nvm use --lts
+```
+
+Po jakékoli změně verze Node.js **musíš GitNexus přeinstalovat**, protože je
+navázaný na tu verzi, pod kterou se instaloval:
+
+```
+npm i -g gitnexus
+```
+
+---
+
+## 8. GrepAI
+
+GrepAI je ten nástroj, který dělá sémantické vyhledávání. Instaluje se z
+vlastního repozitáře autora:
+
+```
+brew install yoanbernabeu/tap/grepai
+```
+
+Homebrew se během instalace může zeptat, jestli tomu repozitáři důvěřuješ.
+Potvrď.
+
+Kontrola:
+
+```
+grepai version
+```
+
+Musí vypsat číslo verze, například `grepai version 0.36.1`. Pozor, je to
+`grepai version`, ne `grepai --version` — ten druhý tvar neexistuje a zahlásí
+chybu.
+
+---
+
+## 9. GitNexus
+
+GitNexus staví tu mapu vztahů v kódu.
+
+```
+npm i -g gitnexus
+```
+
+Vypíše pár varování o zastaralých balíčcích. To je v pořádku, jsou to varování,
+ne chyby.
+
+Kontrola:
+
+```
+gitnexus --version
+```
+
+Musí vypsat verzi.
+
+> **Poznámka na později.** Pokud někdy budeš přepínat verze Node.js přes nvm,
+> GitNexus po přepnutí přestane fungovat, i když ho `which gitnexus` pořád
+> najde. Oprava je jednoduchá — `npm i -g gitnexus` pod novou verzí. Skript na
+> to sám upozorní, protože GitNexus nekontroluje jen tím, že existuje, ale tím,
+> že se opravdu spustí.
+
+---
+
+## 10. code-intel-init
+
+Tohle je ten skript, který všechno výše uvedené propojí do jednoho příkazu.
+
+Ulož si soubor `code-intel-init` někam, kde ho najdeš — třeba do složky
+Stažené. Pak v terminálu přejdi do té složky a nainstaluj:
+
+```
+cd ~/Downloads
+bash ./code-intel-init --install
+```
+
+Pokud jsi ho uložil do podsložky, uprav cestu — například
+`cd ~/Downloads/inteltest`.
+
+Instalace udělá tři věci. Zkopíruje skript do `~/.local/bin/`, což je místo,
+odkud se dá spouštět odkudkoli. Vytvoří konfiguraci v
+`~/.config/code-intel/defaults.env`, kterou ti budoucí aktualizace nepřepíšou.
+A přidá do nastavení Claude Code pravidlo, díky kterému nebude Claude při každém
+spuštění udržovacího skriptu žádat o povolení.
+
+Jestli ti vypíše varování, že `~/.local/bin` není na PATH, spusť tohle:
+
+```
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+Kontrola:
+
+```
+code-intel-init --version
+```
+
+Musí vypsat číslo verze.
+
+---
+
+## 11. První projekt
+
+Teď to celé vyzkoušíme na testovacím projektu.
+
+```
+mkdir -p ~/projects/test-intel
+cd ~/projects/test-intel
+```
+
+> **Pozor na velká písmena.** macOS nerozlišuje velikost písmen ve složkách, ale
+> pamatuje si, jak jsi ji napsal. Když jednou napíšeš `~/Projects` a podruhé
+> `~/projects`, dostaneš se do téže složky, ale ve Finderu pak hledáš něco, co
+> se jmenuje jinak. Drž se jednoho tvaru, ideálně malých písmen.
+
+Nejdřív si nech ukázat, co se stane, bez toho, aby se cokoli změnilo:
+
+```
+code-intel-init
+```
+
+Skript nejdřív zkontroluje, jestli je všechno na svém místě, a přitom sám
+nastartuje qdrant a ollamu, pokud neběží. Poprvé přitom stáhne image qdrantu a
+embedding model, což je asi gigabajt — na chvíli se to zdánlivě zastaví, to je
+v pořádku.
+
+Pak vypíše seznam toho, co by udělal. Všechny řádky preflightu by měly být `ok`.
+
+Když je vše zelené, spusť to naostro:
+
+```
+code-intel-init --apply
+```
+
+Projde devíti kroky a na konci vypíše shrnutí. Ve složce ti přibudou tyhle
+soubory:
+
+| Soubor | K čemu je | Kdo ho vytvoří |
+|---|---|---|
+| `.git/` | Verzovací systém, založí se automaticky | code-intel-init |
+| `.gitignore` | Aby se indexy nedostaly do gitu | code-intel-init |
+| `.grepai/` | Nastavení indexování pro tenhle projekt | code-intel-init |
+| `.mcp.json` | Napojení vyhledávání na tvého AI agenta | code-intel-init |
+| `CLAUDE.md` | Instrukce pro agenta, kdy co použít | oba, každý svůj blok |
+| `refresh-intel.sh` | Údržbový skript, viz kapitola 13 | code-intel-init |
+| `.gitnexus/` | Grafový index a jeho databáze | gitnexus |
+| `AGENTS.md` | Instrukce pro agenta ve formátu, který čte Codex | gitnexus |
+| `.claude/skills/` | Šest dovedností pro Claude Code k práci s grafem | gitnexus |
+
+Poslední tři řádky nedělá `code-intel-init`, ale `gitnexus analyze`, který se
+uvnitř spouští. Proto ti `AGENTS.md` přibude, i když Codex vůbec nepoužíváš —
+`code-intel-init` do něj v tom případě jen nepíše vlastní instrukce.
+
+`.gitignore` pokrývá `.grepai/` a `.gitnexus/`, ale **ne `.claude/`**. Těch šest
+souborů se ti tedy dostane do commitu. Ve víc lidech to bývá to, co chceš —
+tým pak má stejné dovednosti. Pokud ne, přidej si `.claude/` do `.gitignore`
+sám.
+
+---
+
+## 12. Ověření, že to funguje
+
+Vytvoř si testovací soubor. Otevři složku ve svém editoru — máš-li VS Code
+s nainstalovaným příkazem `code`, stačí:
+
+```
+code .
+```
+
+Když `code` hlásí `command not found`, otevři složku ve VS Code přes
+`File → Open Folder`, použij jiný editor, nebo si soubor vyrob rovnou
+z terminálu:
+
+```
+cat > app.js <<'EOF'
+function checkCredentials(user, pass) {
+  const hash = hashPassword(pass);
+  return db.users.findOne({ name: user, hash });
+}
+EOF
+```
+
+Do souboru `app.js` patří tohle:
+
+```javascript
+function checkCredentials(user, pass) {
+  const hash = hashPassword(pass);
+  return db.users.findOne({ name: user, hash });
+}
+```
+
+Ulož ho. Pak zpátky v terminálu:
+
+```
+git add -A
+git commit -m "prvni verze"
+./refresh-intel.sh
+```
+
+Commit dělej — je to dobrý zvyk a starší GitNexus ho pro vyhodnocení
+aktuálnosti potřeboval. Od verze 1.6 už podmínka není: `gitnexus status` hlásí
+`up-to-date` i v repozitáři bez jediného commitu. Takže když na něj zapomeneš,
+nic se nerozbije.
+
+Skript musí skončit hláškou `Code intelligence is fresh.`
+
+### Tři kontroly
+
+**Dostaly se vektory do databáze?**
+
+```
+curl -s http://127.0.0.1:6333/collections/workspace_test-intel | python3 -m json.tool | grep -iE "points|status"
+```
+
+Musíš vidět `"status": "green"` a `points_count` větší než nula.
+
+**Funguje sémantické hledání?**
+
+```
+grepai search "overeni hesla uzivatele" --workspace test-intel
+```
+
+Musí najít `app.js`. Všimni si, že v tom souboru není ani slovo „ověření", ani
+„heslo" — proto je tohle ten hlavní test. Obyčejný grep by nenašel nic.
+
+Přepínač `--workspace` je povinný. Bez něj sáhne GrepAI po jiném, prázdném
+indexu a vrátí nesmysly.
+
+**Vidí to tvůj AI agent?**
+
+Otevři složku v editoru a spusť v ní Claude Code. Napiš `/mcp` — musíš vidět
+`grepai` i `gitnexus` jako připojené.
+
+Když tam nejsou, nepotvrdil jsi při startu dialog, který se ptá, jestli
+projektovým MCP serverům důvěřuješ. Zavři Claude Code, otevři znovu a potvrď.
+
+Poslední test: zadej agentovi úkol, ve kterém nezmíníš název souboru ani funkce
+— třeba „najdi, kde se v tomhle projektu ověřují přihlašovací údaje". Když
+sáhne po nástroji `grepai_search`, je propojení kompletní.
+
+---
+
+## 13. Každodenní používání
+
+### Nový projekt
+
+```
+mkdir ~/projects/muj-projekt
+cd ~/projects/muj-projekt
+code-intel-init --agent claude --apply
+```
+
+To je celé. Nastavení, které jsi udělal jednou, platí pro všechny další
+projekty.
+
+### Po každé změně kódu
+
+```
+./refresh-intel.sh
+```
+
+Tenhle skript by měl spouštět tvůj AI agent sám — instrukci k tomu má v
+`CLAUDE.md`, který mu `code-intel-init` napsal. Když to neudělá, spusť ho ručně.
+
+Proč je vůbec potřeba: GrepAI se aktualizuje průběžně, protože na pozadí běží
+hlídač, který si všímá ukládaných souborů. GitNexus ne — jeho mapa se
+přepočítává jen na povel, a právě tenhle skript ten povel dává. Zároveň
+zkontroluje, že hlídač běží, a ohlásí, kdyby něco nesedělo.
+
+Rychlá kontrola bez přeindexování:
+
+```
+./refresh-intel.sh --audit
+```
+
+### Kontrola všech projektů najednou
+
+```
+code-intel-init --status --all
+```
+
+Projde všechny projekty, které jsi kdy nastavil, a řekne, kde něco nesedí.
+Typicky po restartu Macu, kdy neběží hlídač.
+
+### Po restartu počítače
+
+OrbStack i ollama se spustí samy, pokud sis to nastavil v krocích 5 a 6.
+**Hlídač GrepAI se ale sám nespustí.** Vyhledávání pak dál „funguje", jen
+odpovídá ze zastaralých dat, což je horší než chyba. Pojistka je jednoduchá —
+v projektu spusť:
+
+```
+./refresh-intel.sh
+```
+
+Hlídače nastartuje a všechno doindexuje.
+
+---
+
+## 14. Dashboard — přehled o všem najednou
+
+`code-intel-init --status --all` ti řekne, jestli sedí *nastavení* projektů.
+Neřekne ti ale, jestli běží služby pod nimi a jestli opravdu dělají, co mají —
+to je schválně, protože status musí fungovat i na stroji, kde je všechno
+vypnuté.
+
+Na tuhle druhou otázku odpovídá dashboard. Spusť ho:
+
+```
+code-intel-dash --open
+```
+
+Otevře se stránka na `http://127.0.0.1:7717`. Běží jen na tvém počítači, na
+loopbacku, bez hesla — nikam se nedostane. Ukončíš ho Ctrl+C.
+
+Aby šel spustit odkudkoli, zkopíruj si ho vedle `code-intel-init`:
+
+```
+cp code-intel-dash ~/.local/bin/ && chmod +x ~/.local/bin/code-intel-dash
+```
+
+Dashboard nemá vlastní kontroly — všechno o projektech si vytáhne z
+`code-intel-init --status --all --json`. Kdyby měl kontroly vlastní, dřív nebo
+později by se s tím příkazem rozešly a **oba by přitom dál svítily zeleně**.
+Proto potřebuje `code-intel-init` na PATH; bez něj rovnou řekne, že neví nic.
+
+### Co na něm uvidíš
+
+Nahoře **stack**, tedy věci společné všem projektům:
+
+| Karta | Co ověřuje |
+|---|---|
+| docker | běží daemon, běží kontejner, publikuje **oba** porty 6333 i 6334 |
+| qdrant | HTTP odpovídá, gRPC port je otevřený, kolik má kolekcí, jak rychle odpovídá |
+| ollama | server žije, model je stažený a načtený, **a skutečně vrátí vektor** |
+| Node.js | verze, `registerHooks`, a jestli se gitnexus vůbec spustí |
+| MCP servers | jestli běžící `gitnexus mcp` není starší než index — viz níže |
+
+Dole každý **projekt** ve čtyřech záložkách. Rozhraní dashboardu je anglicky:
+
+- **Overview** — hlídač, počet vektorů, velikost grafu, stáří indexu,
+  konfigurace. Když něco nesedí, je pod tím rovnou příkaz, který to spraví.
+- **Search** — vlastní dotaz proti skutečnému indexu. Výsledky se dají
+  rozklikávat: uvidíš cestu, rozsah řádků, skóre podobnosti a samotný úsek kódu
+  s čísly řádků. Je to stejné hledání, jaké dostane agent.
+- **Index contents** — které soubory se do indexu skutečně dostaly a kolik
+  z nich zabírají. **Soubor, který tu chybí, hledání nikdy nenajde** — takhle
+  se pozná tiché vypadnutí souboru z indexu.
+- **Watcher log** — co hlídač poslední dobou dělal, indexační řádky zeleně.
+
+Záložka se propíše do adresy (`#test-intel/search/...`), takže si konkrétní
+pohled můžeš uložit do záložek nebo poslat dál.
+
+### Proč to není jen „svítí zeleně"
+
+Dashboard schválně netestuje jen to, že proces běží — to je slabé tvrzení.
+U každé komponenty zkusí přímo to, kvůli čemu existuje:
+
+- **ollama** dostane skutečný text k převedení na vektor. Když se vrátí 768
+  čísel, je jistota, že embedding funguje; server, který odpovídá na `/api/tags`
+  a přitom neumí embedovat, by jinak vypadal zdravě.
+- **GrepAI** dostane skutečný dotaz. Nula výsledků znamená prázdný index, ne
+  špatný dotaz.
+- **qdrant** ukáže počet vektorů v kolekci. Zelená kolekce s nulou vektorů je
+  rozbitý index, ne zdravý — dashboard to napíše červeně.
+- **GitNexus** hlásí, pod jakou verzí Node byl index postavený. Když se
+  neshoduje s tou, která běží teď, upozorní tě — to je přesně ta past
+  z kapitoly 7.
+- **MCP servers** porovná, kdy se spustil běžící `gitnexus mcp`, s tím, kdy byl
+  balíček naposledy přepsaný. Node si totiž načte kód do paměti při startu
+  procesu, takže po `npm i -g gitnexus` běží každý už otevřený agent dál na
+  staré verzi. Nová `analyze` pak zapíše index, který ten starý server neumí
+  přečíst, a uprostřed práce dostaneš `DB version mismatch, v43 index vs v42
+  MCP server`. Na disku není nic rozbité — jen je čtenář starší než soubor.
+  Spraví to restart klienta a dashboard ti řekne, kterého.
+
+Když je něco špatně, napíše rovnou příkaz, kterým se to spraví.
+
+### Stáří údajů
+
+Stránka se sama obnovuje každých 15 vteřin. Kdyby přestala, **zešedne a napíše,
+že už za nic neručí** — protože dashboard, který po výpadku dál ukazuje poslední
+zelený obrázek, je horší než žádný.
+
+### Bez prohlížeče
+
+Hodí se do skriptů, cronu nebo prompt řádku. Vypíše JSON a skončí s kódem 0 při
+zdraví, 2 když je něco špatně:
+
+```
+code-intel-dash --once
+```
+
+Kdyby port 7717 kolidoval s něčím jiným:
+
+```
+code-intel-dash --port 8080
+```
+
+---
+
+## 15. Když se něco pokazí
+
+### `command not found`
+
+Program buď není nainstalovaný, nebo systém neví, kde ho hledat. Vrať se ke
+kroku, kde se instaloval, a zopakuj kontrolu. U `code-intel-init` bývá příčinou
+chybějící PATH — viz konec kroku 10.
+
+### `docker run failed` nebo `Cannot connect to the Docker daemon`
+
+OrbStack neběží. Spusť ho a počkej, až naběhne:
+
+```
+open -a OrbStack
+sleep 15
+docker info > /dev/null 2>&1 && echo "funguje" || echo "jeste ne"
+```
+
+Pak `code-intel-init` spusť znovu.
+
+### `embedding model ... not pulled` hned po úspěšném stažení
+
+Server o modelu ještě neví. Prostě spusť příkaz znovu, podruhé projde.
+
+### `grepai --version` hlásí `unknown flag`
+
+Správný tvar je `grepai version`, bez pomlček.
+
+### `does not provide an export named 'registerHooks'`
+
+Tvůj Node.js je starý na to, co GitNexus potřebuje. Zákeřné na tom je, že
+`gitnexus --version` funguje — rozbije se až samotné indexování. GrepAI to
+neovlivňuje, sémantické hledání ti mezitím funguje dál.
+
+Nejdřív zjisti, odkud se ti Node bere, protože oprava se podle toho liší:
+
+```
+which node
+brew list --versions node
+```
+
+Pak postupuj podle **kapitoly 7**, sekce „Verze Node.js musí být dost nová" —
+jsou tam popsané všechny tři případy. Pozor hlavně na ten nejčastější: když
+`which node` ukazuje do `/usr/local/bin` a `brew list --versions node` mlčí,
+je Node z instalátoru z nodejs.org a `brew upgrade node` selže na
+`Error: node not installed`. Tam se používá `brew install node`.
+
+Po jakékoli změně verze Node.js je přeinstalace GitNexusu povinná:
+
+```
+npm i -g gitnexus
+```
+
+Pak v projektu:
+
+```
+./refresh-intel.sh
+```
+
+### `workspace ... does not map this project`
+
+Cesta uložená v GrepAI neodpovídá té, ze které skript běží. Nejčastěji kvůli
+velkým písmenům — `~/Projects` versus `~/projects`. Zjisti skutečný tvar:
+
+```
+cd ~/projects/muj-projekt
+pwd -P
+```
+
+Používej ten, který ti to vypsalo.
+
+### Ve složce „nejsou" `.mcp.json` a `CLAUDE.md`
+
+Skoro jistě jsi v jiné složce, než si myslíš. Ověř:
+
+```
+pwd -P
+ls -la
+```
+
+Ve VS Code otevři složku přes `File → Open Folder` přímo na projekt, ne na
+nadřazený adresář. Nebo rovnou z terminálu:
+
+```
+cd ~/projects/muj-projekt && code .
+```
+
+### V Claude Code chybí nástroje grepai a gitnexus
+
+Napiš `/mcp` a podívej se, co je připojené. Když tam nejsou, zavři Claude Code a
+otevři znovu ve složce projektu — při startu se ptá, jestli projektovým MCP
+serverům důvěřuješ, a ten dialog je potřeba potvrdit.
+
+### Vyhledávání vrací nesmysly nebo nic
+
+Projdi to v tomhle pořadí:
+
+1. Běží hlídač? `grepai watch --workspace NAZEV --status`
+2. Jsou v databázi vektory? Viz kontrola v kapitole 12.
+3. Zapomněl jsi `--workspace`? Bez něj hledá GrepAI v prázdném indexu.
+4. Co dělá hlídač? `tail -20 ~/Library/Logs/grepai/grepai-workspace-NAZEV.log`
+
+### Nikdy neupravuj `.grepai/config.yaml` ručně
+
+Tenhle soubor si hlídač drží v paměti a při každém indexování ho **celý
+přepíše**. Tvoje úprava zmizí — bez chyby, bez záznamu v logu, klidně až za pár
+hodin. Když potřebuješ něco změnit, uprav `~/.config/code-intel/defaults.env` a
+spusť `code-intel-init --apply` znovu.
+
+---
+
+## 16. Odinstalace
+
+### Jeden projekt
+
+Ve složce projektu:
+
+```
+code-intel-init --remove
+```
+
+Ukáže, co by smazal. Když souhlasíš:
+
+```
+code-intel-init --remove --apply
+```
+
+Odpojí projekt, zastaví hlídač, smaže vygenerované soubory a vyřízne instrukce z
+`CLAUDE.md`. Tvůj kód ani git se nedotkne. Chceš-li smazat i vektory z databáze,
+přidej `--purge-collection`.
+
+### Celý stack
+
+```
+rm ~/.local/bin/code-intel-init
+rm ~/.local/bin/code-intel-dash
+rm -rf ~/.config/code-intel
+brew uninstall grepai
+npm uninstall -g gitnexus
+docker rm -f grepai-qdrant
+docker volume rm grepai-qdrant-data
+brew services stop ollama
+brew uninstall ollama
+brew uninstall --cask orbstack
+```
+
+Homebrew, Node.js a stažený model si nech, pokud je používáš i k jinému.
+
+---
+
+## 17. Slovníček
+
+**Embedding, vektor** — převod textu na sadu čísel, která zachycuje význam. Dva
+texty o témže mají podobná čísla, i když nemají společné slovo.
+
+**Sémantické vyhledávání** — hledání podle významu místo podle přesného textu.
+To, co dělá GrepAI.
+
+**Kontejner** — izolované prostředí pro jeden program. Nemusíš ho instalovat do
+systému, jen ho spustíš a případně zase zahodíš.
+
+**Image** — předpis, ze kterého se kontejner vytvoří. Stahuje se jednou.
+
+**Hlídač, watcher** — program běžící na pozadí, který sleduje ukládané soubory a
+průběžně je doindexovává.
+
+**Index** — datová struktura pro rychlé hledání. Tady jsou dva: vektorový v
+GrepAI a grafový v GitNexusu.
+
+**MCP** — způsob, jakým se k AI agentovi připojují externí nástroje. Díky němu
+umí Claude Code volat GrepAI a GitNexus.
+
+**PATH** — seznam složek, kde systém hledá programy. Když v něm složka není,
+musíš program spouštět celou cestou.
+
+**Workspace** — pojmenovaná skupina projektů v GrepAI. Tenhle stack zakládá
+jeden workspace na projekt.
+
+**Preflight** — kontrola před startem. Zjistí, co chybí, a vypíše to všechno
+najednou.
+
+**Idempotentní** — vlastnost příkazu, který můžeš spustit vícekrát a výsledek je
+stejný. `code-intel-init --apply` proto můžeš spouštět opakovaně; co je hotové,
+nechá být, co se rozpadlo, opraví.
