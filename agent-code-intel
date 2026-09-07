@@ -371,6 +371,74 @@ registry_add() {   # $1 = workspace, $2 = path
   printf '%s\t%s\n' "$1" "$2" >> "$REGISTRY"
 }
 
+# Reads $1/.code-intel. Always prints exactly one TAB-separated line and
+# returns 0 -- it never dies itself, and this is deliberate: a caller that
+# captures it with $(...) runs it in a subshell, where an internal `exit`
+# would kill only that subshell, and the caller would go on to wrongly treat
+# a MALFORMED file as an ABSENT one -- exactly the silent fallback this file
+# exists to prevent. So the three outcomes are all just text for the caller,
+# which itself calls die() at the top level, where `exit` really does stop
+# the whole program:
+#
+#   ABSENT                          no .code-intel here -- not an error
+#   ERR<TAB><file>[:<line>]: <msg>  present but broken -- caller must die()
+#   OK<TAB><workspace><TAB><project>
+#
+# Parsed by python3, not bash `[[ =~ ]]`, matching how every other structured
+# read in this script works (script_state, doc_state, cfg_*_ok below). Never
+# sourced: the file arrives from a stranger's clone, so `. file` would mean
+# running whatever shell they put in it.
+read_code_intel() {
+  local dir="$1" file base
+  file="$dir/.code-intel"
+  [[ -f "$file" ]] || { printf 'ABSENT\n'; return 0; }
+  base="$(basename "$dir")"
+  python3 - "$file" "$base" <<'PY'
+import re, sys
+
+path, base = sys.argv[1], sys.argv[2]
+LINE_RE = re.compile(r'^[A-Z][A-Z0-9_]*=[^ \t]+$')
+KNOWN = ("SCHEMA", "WORKSPACE", "PROJECT")
+SUPPORTED_SCHEMA = "1"
+
+
+def err(msg):
+    print("ERR\t%s" % msg)
+    sys.exit(0)
+
+
+values = {}
+with open(path, encoding="utf-8", errors="replace") as f:
+    for lineno, raw in enumerate(f, 1):
+        line = raw.rstrip("\n")
+        if not line or line.startswith("#"):
+            continue
+        if not LINE_RE.match(line):
+            err("%s:%d: malformed line: %r" % (path, lineno, line))
+        key, val = line.split("=", 1)
+        if key not in KNOWN:
+            err("%s:%d: unknown key '%s'" % (path, lineno, key))
+        if key in values:
+            err("%s:%d: duplicate key '%s'" % (path, lineno, key))
+        values[key] = val
+
+for key in KNOWN:
+    if key not in values:
+        err("%s: missing required key %s" % (path, key))
+
+if values["SCHEMA"] != SUPPORTED_SCHEMA:
+    err("%s: unsupported SCHEMA=%s (this tool understands %s)"
+        % (path, values["SCHEMA"], SUPPORTED_SCHEMA))
+
+if values["PROJECT"] != base:
+    err("%s: says PROJECT=%s, but this directory is named '%s' -- "
+        "rename the directory back, or fix PROJECT in %s"
+        % (path, values["PROJECT"], base, path))
+
+print("OK\t%s\t%s" % (values["WORKSPACE"], values["PROJECT"]))
+PY
+}
+
 # ------------------------------------------------------- path resolution ----
 
 [[ -d "$ROOT" ]] || die "not a directory: $ROOT"
@@ -389,12 +457,26 @@ if [[ "$MODE" != "status" || "$STATUS_ALL" != true ]]; then
   [[ "$HOME_REAL" != "$ROOT"/* ]] || die "refusing to run over $ROOT: it contains your home directory ($HOME_REAL)"
 fi
 
-if [[ -z "$WS" ]]; then
-  WS="$(basename "$ROOT" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g; s/--*/-/g; s/^-//; s/-$//')"
-fi
+# .code-intel, when present, is authoritative over both the registry and the
+# basename-derivation below (decision 7 in map #2) -- but an explicit
+# workspace argument on the command line still wins outright, unchanged from
+# before this file existed.
+IFS=$'\t' read -r IDENT_STATUS IDENT_A IDENT_B <<< "$(read_code_intel "$ROOT")"
+case "$IDENT_STATUS" in
+  ERR)
+    die "$IDENT_A" ;;
+  OK)
+    [[ -n "$WS" ]] || WS="$IDENT_A"
+    PROJ_NAME="$IDENT_B" ;;
+  ABSENT)
+    if [[ -z "$WS" ]]; then
+      WS="$(basename "$ROOT" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g; s/--*/-/g; s/^-//; s/-$//')"
+    fi
+    PROJ_NAME="$(basename "$ROOT")" ;;
+  *)
+    die "internal error: read_code_intel($ROOT) returned unexpected status '$IDENT_STATUS'" ;;
+esac
 [[ -n "$WS" ]] || die "could not derive a workspace name from $ROOT; pass one explicitly"
-
-PROJ_NAME="$(basename "$ROOT")"
 GREPAI_CFG="$ROOT/.grepai/config.yaml"
 MCP_JSON="$ROOT/.mcp.json"
 REFRESH="$ROOT/refresh-intel.sh"
@@ -1752,9 +1834,21 @@ PY
 
 # ================================================================ status =====
 
-status_one() {   # $1 = workspace, $2 = path ; sets STATUS_DRIFT
+status_one() {   # $1 = workspace (registry fallback, .code-intel wins if present), $2 = path ; sets STATUS_DRIFT
   local w="$1" p="$2" bad=0 out
-  WS="$w"; ROOT="$(canon "$p")"; PROJ_NAME="$(basename "$ROOT")"
+  local ident_status ident_a ident_b
+  ROOT="$(canon "$p")"
+  # .code-intel outranks the registry's own $w: a project renamed since it was
+  # registered, or a stale registry row, should not silently win over what the
+  # project itself declares (decision 7 in map #2).
+  IFS=$'\t' read -r ident_status ident_a ident_b <<< "$(read_code_intel "$ROOT")"
+  case "$ident_status" in
+    ERR)    die "$ident_a" ;;
+    OK)     w="$ident_a"; PROJ_NAME="$ident_b" ;;
+    ABSENT) PROJ_NAME="$(basename "$ROOT")" ;;
+    *)      die "internal error: read_code_intel($ROOT) returned unexpected status '$ident_status'" ;;
+  esac
+  WS="$w"
   GREPAI_CFG="$p/.grepai/config.yaml"; MCP_JSON="$p/.mcp.json"; REFRESH="$p/refresh-intel.sh"
 
   if [[ ! -d "$p" ]]; then
@@ -1860,11 +1954,20 @@ status_json() {
     else printf 'svc.ollama.present\tfalse\n'; fi
 
     # ---- projects ----
-    local i=0 w q bad show
+    local i=0 w q bad show ident_status ident_a ident_b
     if [[ -s "$REGISTRY" ]]; then
       while IFS="	" read -r w q; do
         [[ -n "$w" && -n "$q" ]] || continue
-        WS="$w"; ROOT="$(canon "$q")"; PROJ_NAME="$(basename "$ROOT")"
+        ROOT="$(canon "$q")"
+        # .code-intel outranks the registry row -- see status_one for why.
+        IFS=$'\t' read -r ident_status ident_a ident_b <<< "$(read_code_intel "$ROOT")"
+        case "$ident_status" in
+          ERR)    die "$ident_a" ;;
+          OK)     w="$ident_a"; PROJ_NAME="$ident_b" ;;
+          ABSENT) PROJ_NAME="$(basename "$ROOT")" ;;
+          *)      die "internal error: read_code_intel($ROOT) returned unexpected status '$ident_status'" ;;
+        esac
+        WS="$w"
         GREPAI_CFG="$ROOT/.grepai/config.yaml"
         MCP_JSON="$ROOT/.mcp.json"
         REFRESH="$ROOT/refresh-intel.sh"
