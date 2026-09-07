@@ -122,6 +122,15 @@ test_path_flag_overrides_cwd() {
 }
 
 # --------------------------------------------------------- .code-intel (#12) --
+#
+# #13 (writing .code-intel in --apply) has no automated test here: --apply
+# and --preview both require preflight, which this hermetic harness cannot
+# pass without grepai/gitnexus/qdrant/ollama on PATH -- the same known
+# limitation #20 already notes for --apply's happy path generally, reserved
+# for #16's stub work. Verified manually instead: preview reports CREATE
+# without writing; --apply writes the header/SCHEMA=1/WORKSPACE/PROJECT
+# shape; a second --apply says "already present" and leaves it byte-for-byte
+# unchanged; --status --json afterward reads the workspace back from it.
 
 test_code_intel_overrides_basename() {
   local d; d="$(new_repo 'has-code-intel')"
