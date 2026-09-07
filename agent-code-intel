@@ -717,6 +717,18 @@ AGENTSPY
 
 git_is_repo()   { git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; }
 
+# NOT just existence: an explicit workspace argument on the command line
+# overrides .code-intel for this run (path-resolution block above lets
+# $WS win over $IDENT_A), so a file that exists but declares something
+# else is stale, not satisfied -- it needs rewriting, not "already
+# present". $IDENT_STATUS/$IDENT_A/$IDENT_B are exactly what
+# read_code_intel already read from this file at the top of the script;
+# re-reading here would just re-derive the same answer.
+code_intel_present() {
+  [[ "$IDENT_STATUS" == OK ]] || return 1
+  [[ "$IDENT_A" == "$WS" && "$IDENT_B" == "$PROJ_NAME" ]]
+}
+
 # Is there anything here worth indexing yet? A brand-new project directory is
 # empty, or holds only the files this script itself puts there. `git ls-files`
 # is no good for this: on a fresh `git init` nothing is staged, so a folder
@@ -1403,6 +1415,9 @@ do_preview() {
     plan "skip" "git (--no-git)"
   fi
 
+  plan_probe keep ".code-intel present" CREATE \
+             ".code-intel (WORKSPACE=$WS, PROJECT=$PROJ_NAME)" code_intel_present
+
   local show model
   if ws_exists; then
     show="$(ws_show)"
@@ -1525,8 +1540,8 @@ do_preview() {
 # ================================================================= apply =====
 
 do_apply() {
+  hr "0. Repository"
   if [[ "$DO_GIT" == true ]]; then
-    hr "0. Repository"
     if git_is_repo; then
       say "git repository already present"
     else
@@ -1548,8 +1563,25 @@ do_apply() {
       done
       say ".gitignore +=$added"
     fi
-    say ""
+  else
+    say "skipped git (--no-git)"
   fi
+
+  # Not gated by $DO_GIT: this identity is grepai/GitNexus state, not git
+  # state, so it is written even with --no-git. Still under the "0.
+  # Repository" header printed above -- this is repo-root scaffolding too.
+  if code_intel_present; then
+    say ".code-intel already present"
+  else
+    cat > "$ROOT/.code-intel" <<EOF
+# agent-code-intel — identity of this repository. Generated, do not edit by hand.
+SCHEMA=1
+WORKSPACE=$WS
+PROJECT=$PROJ_NAME
+EOF
+    say "wrote .code-intel"
+  fi
+  say ""
 
   hr "1. GrepAI workspace"
   if ws_exists; then
