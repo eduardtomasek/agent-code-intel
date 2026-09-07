@@ -43,6 +43,11 @@ new_repo() {  # $1 = jméno adresáře; echoes cestu
   printf '%s\n' "$d"
 }
 
+write_code_intel() {  # $1 = adresář, $2.. = řádky souboru .code-intel
+  local d="$1"; shift
+  printf '%s\n' "$@" > "$d/.code-intel"
+}
+
 fail() { FAIL=$((FAIL+1)); FAILED_NAMES+=("$CURRENT"); printf '  FAIL  %s\n        %s\n' "$CURRENT" "$1"; }
 
 assert_status() {
@@ -114,6 +119,163 @@ test_path_flag_overrides_cwd() {
   canon="$(cd "$d" && /bin/pwd -P)"
   run "$TEST_TMP" --status --path "$d"
   assert_contains "Project:   $canon" || return
+}
+
+# --------------------------------------------------------- .code-intel (#12) --
+
+test_code_intel_overrides_basename() {
+  local d; d="$(new_repo 'has-code-intel')"
+  write_code_intel "$d" \
+    '# needitovat ručně' \
+    'SCHEMA=1' \
+    'WORKSPACE=nazev-z-souboru' \
+    'PROJECT=has-code-intel'
+  run "$d" --status
+  assert_contains "Workspace: nazev-z-souboru" || return
+}
+
+# .code-intel má přednost i nad zaregistrovaným jménem, ne jen nad basename:
+# --status --all čte registr, ale projekt s vlastním .code-intel se ohlásí
+# pod jménem ze souboru, ne pod (zastaralým) jménem z registru.
+test_code_intel_overrides_stale_registry() {
+  local d; d="$(new_repo 'registered-project')"
+  write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=aktualni-jmeno' 'PROJECT=registered-project'
+  mkdir -p "$TEST_HOME/.config/code-intel"
+  printf 'zastarale-jmeno\t%s\n' "$d" >> "$TEST_HOME/.config/code-intel/projects"
+  run "$TEST_TMP" --status --all
+  assert_contains "aktualni-jmeno" || return
+  assert_not_contains "zastarale-jmeno" || return
+}
+
+# Explicitní argument na příkazové řádce vyhrává i nad souborem -- to platilo
+# už před .code-intel (nad basename) a zůstává to nejvyšší priorita beze změny.
+test_code_intel_explicit_arg_still_wins() {
+  local d; d="$(new_repo 'has-file-and-arg')"
+  write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=ze-souboru' 'PROJECT=has-file-and-arg'
+  run "$d" --status z-prikazove-radky
+  assert_contains "Workspace: z-prikazove-radky" || return
+}
+
+# --status --all nesmí selhat na projektu, který .code-intel prostě nemá --
+# to je běžný, ne chybový stav (ABSENT větev v registrové smyčce).
+test_status_all_tolerates_project_without_code_intel() {
+  local d; d="$(new_repo 'no-file-registered')"
+  mkdir -p "$TEST_HOME/.config/code-intel"
+  printf 'stary-nazev\t%s\n' "$d" >> "$TEST_HOME/.config/code-intel/projects"
+  run "$TEST_TMP" --status --all
+  assert_status 2 || return   # drift je čekaný, žádný jiný stack tu neběží
+  assert_contains "stary-nazev" || return
+}
+
+test_code_intel_duplicate_key_dies() {
+  local d; d="$(new_repo 'duplicate-key-repo')"
+  write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=x' 'WORKSPACE=y' 'PROJECT=duplicate-key-repo'
+  run "$d" --status
+  [[ "$STATUS" -ne 0 ]] || { fail "duplicitní klíč měl skončit nenulově"; return; }
+  assert_contains "duplicate key" || return
+}
+
+# Minimální fingovaný `grepai`, jen pro `workspace show`, aby šlo otestovat
+# rozpor se skutečným (nebo tady fingovaným) stavem grepai bez závislosti na
+# nainstalovaném stacku. Ostatní příkazy stub nezná -- --status nic dalšího
+# z grepai nepotřebuje.
+stub_grepai() {  # $1 = adresář pro stub, $2 = jméno projektu, $3 = cesta, na kterou je namapován
+  local dir="$1" proj="$2" other_path="$3"
+  cat > "$dir/grepai" <<STUB
+#!/bin/sh
+if [ "\$1" = "workspace" ] && [ "\$2" = "show" ]; then
+  echo "Workspace: \$3"
+  echo "Projects (1):"
+  echo "  - $proj: $other_path"
+fi
+STUB
+  chmod +x "$dir/grepai"
+}
+
+# Rozpor mezi tím, co grepai skutečně má, a tímto adresářem -- jiná věc než
+# "ještě nebylo --apply": jméno je zabrané jinde, --apply samo to nespraví.
+# Nepoužívá sdílený run(), protože potřebuje vlastní PATH se stubem.
+test_grepai_name_conflict_reports_as_conflict_not_generic_drift() {
+  local d stub_dir; d="$(new_repo 'taken-project')"
+  stub_dir="$TEST_TMP/stubbin-conflict"; mkdir -p "$stub_dir"
+  stub_grepai "$stub_dir" "taken-project" "/somewhere/else"
+  OUT="$(env -i HOME="$TEST_HOME" PATH="$stub_dir:$BARE_PATH" TERM=dumb \
+        bash -c "cd '$d' && '$TOOL' --status" 2>&1)"
+  STATUS=$?
+  assert_status 2 || return   # hlášeno jako row, ne die -- --status --all smí pokračovat dál
+  assert_contains "CONFLICT" || return
+  assert_contains "/somewhere/else" || return
+  assert_contains "grepai workspace remove" || return
+}
+
+test_code_intel_malformed_line_dies() {
+  local d; d="$(new_repo 'malformed-repo')"
+  write_code_intel "$d" 'SCHEMA=1' 'workspace=lowercase-key-is-invalid' 'PROJECT=malformed-repo'
+  run "$d" --status
+  [[ "$STATUS" -ne 0 ]] || { fail "rozbitý .code-intel měl skončit nenulově"; return; }
+  assert_contains ".code-intel:2" || return
+}
+
+test_code_intel_unknown_key_dies() {
+  local d; d="$(new_repo 'unknown-key-repo')"
+  write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=x' 'PROJECT=unknown-key-repo' 'BOGUS=1'
+  run "$d" --status
+  [[ "$STATUS" -ne 0 ]] || { fail "neznámý klíč měl skončit nenulově"; return; }
+  assert_contains ".code-intel:4" || return
+  assert_contains "BOGUS" || return
+}
+
+test_code_intel_missing_required_key_dies() {
+  local d; d="$(new_repo 'missing-key-repo')"
+  write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=x'   # bez PROJECT
+  run "$d" --status
+  [[ "$STATUS" -ne 0 ]] || { fail "chybějící PROJECT měl skončit nenulově"; return; }
+  assert_contains "PROJECT" || return
+}
+
+# Rozpor mezi tím, co soubor tvrdí, a skutečným jménem adresáře (typicky po
+# přejmenování) — nikdy tichý pád na basename, vždy tvrdá chyba s návodem.
+test_code_intel_project_mismatch_dies() {
+  local d; d="$(new_repo 'real-dir-name')"
+  write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=x' 'PROJECT=jiny-nazev'
+  run "$d" --status
+  [[ "$STATUS" -ne 0 ]] || { fail "rozpor PROJECT vs. adresář měl skončit nenulově"; return; }
+  assert_contains "jiny-nazev" || return
+  assert_contains "real-dir-name" || return
+}
+
+test_code_intel_unsupported_schema_dies() {
+  local d; d="$(new_repo 'future-schema-repo')"
+  write_code_intel "$d" 'SCHEMA=99' 'WORKSPACE=x' 'PROJECT=future-schema-repo'
+  run "$d" --status
+  [[ "$STATUS" -ne 0 ]] || { fail "nepodporované SCHEMA mělo skončit nenulově"; return; }
+  assert_contains "SCHEMA" || return
+}
+
+# Rozhodnutí 6 v mapě #2: soubor přichází z cizího klonu, takže se nikdy
+# nesmí sourcovat. Vloží se řádek, který by se spuštěním projevil vytvořením
+# souboru — a ověří se, že k tomu nedošlo, ať už nástroj skončí jakkoli.
+test_code_intel_is_never_sourced() {
+  local d marker; d="$(new_repo 'injection-repo')"; marker="$TEST_TMP/pwned-marker"
+  rm -f "$marker"
+  write_code_intel "$d" "\$(touch $marker)" 'SCHEMA=1' 'WORKSPACE=x' 'PROJECT=injection-repo'
+  run "$d" --status
+  [[ ! -e "$marker" ]] || { fail ".code-intel byl sourcován -- vznikl $marker"; return; }
+}
+
+# Regresní test na opravu z code review: rozbitý .code-intel u jednoho
+# registrovaného projektu dřív celý --status --all zabil dřív, než se dostal
+# na další řádek registru. Musí se nahlásit jako BROKEN a pokračovat dál.
+test_status_all_continues_past_broken_code_intel() {
+  local broken healthy
+  broken="$(new_repo 'broken-among-many')"
+  healthy="$(new_repo 'healthy-among-many')"
+  write_code_intel "$broken" 'SCHEMA=1' 'workspace=lowercase-invalid' 'PROJECT=broken-among-many'
+  mkdir -p "$TEST_HOME/.config/code-intel"
+  printf 'broken\t%s\nhealthy\t%s\n' "$broken" "$healthy" >> "$TEST_HOME/.config/code-intel/projects"
+  run "$TEST_TMP" --status --all
+  assert_contains "BROKEN" || return
+  assert_contains "healthy-among-many" || return
 }
 
 # --status a --remove musí jít spustit na stroji, kde služby neběží: člověk musí
