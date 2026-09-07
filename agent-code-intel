@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# code-intel-init v2 — wire a project into the local code-intelligence stack.
+# agent-code-intel v2 — wire a project into the local code-intelligence stack.
 #
 #   mkdir SMS-system && cd SMS-system
-#   code-intel-init --apply
+#   agent-code-intel --apply
 #
 # That one command creates the git repo if missing, brings up qdrant and
 # ollama if they are not running, creates the GrepAI workspace and its qdrant
@@ -13,11 +13,11 @@
 # starts the watcher.
 #
 # MODES
-#   code-intel-init [ws] [--path DIR]            preview (exit 2 if drift)
-#   code-intel-init [ws] [--path DIR] --apply    do it
-#   code-intel-init --status [--all]             health of one / all projects
-#   code-intel-init --remove [--apply]           tear a project back out
-#   code-intel-init --install                    copy self to ~/.local/bin
+#   agent-code-intel [ws] [--path DIR]            preview (exit 2 if drift)
+#   agent-code-intel [ws] [--path DIR] --apply    do it
+#   agent-code-intel --status [--all]             health of one / all projects
+#   agent-code-intel --remove [--apply]           tear a project back out
+#   agent-code-intel --install                    copy self to ~/.local/bin
 #
 # WHY --apply IS STILL REQUIRED
 #   This touches five global places (~/.grepai/workspace.yaml, ~/.claude.json,
@@ -164,12 +164,12 @@ sha256_of() {
 usage() {
   cat <<'EOF'
 Usage:
-  code-intel-init [workspace] [--path DIR] [options]        preview
-  code-intel-init [workspace] [--path DIR] --apply          set up / repair
-  code-intel-init --status [--all]                          health check
-  code-intel-init --status --all --json                     machine-readable
-  code-intel-init --remove [--apply] [--path DIR]           tear out
-  code-intel-init --install                                 self-install
+  agent-code-intel [workspace] [--path DIR] [options]        preview
+  agent-code-intel [workspace] [--path DIR] --apply          set up / repair
+  agent-code-intel --status [--all]                          health check
+  agent-code-intel --status --all --json                     machine-readable
+  agent-code-intel --remove [--apply] [--path DIR]           tear out
+  agent-code-intel --install                                 self-install
 
 Preview exit codes:  0 = everything matches, 2 = drift, 1 = error.
 
@@ -242,7 +242,7 @@ while [[ $# -gt 0 ]]; do
     --force-script)     FORCE_SCRIPT=true; shift ;;
     --purge-collection) PURGE_COLLECTION=true; shift ;;
     --no-perms)         WRITE_PERMS=false; shift ;;
-    --version)          say "code-intel-init $VERSION"; exit 0 ;;
+    --version)          say "agent-code-intel $VERSION"; exit 0 ;;
     -h|--help)          usage; exit 0 ;;
     -*)                 die "unknown flag: $1" ;;
     *)
@@ -309,7 +309,7 @@ PY
 
 if [[ "$MODE" == "install" ]]; then
   SELF="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "${BASH_SOURCE[0]}")"
-  DEST="$HOME/.local/bin/code-intel-init"
+  DEST="$HOME/.local/bin/agent-code-intel"
   mkdir -p "$HOME/.local/bin" "$CONF_DIR"
   if [[ "$SELF" != "$DEST" ]]; then
     cp "$SELF" "$DEST"
@@ -318,6 +318,14 @@ if [[ "$MODE" == "install" ]]; then
   else
     say "already installed at $DEST"
   fi
+  # Leftover from before the rename to agent-code-intel: a stale binary here
+  # would keep working under the old name, generating refresh-intel.sh from
+  # code it no longer matches. No compat symlink either — see issue #11.
+  OLD_DEST="$HOME/.local/bin/code-intel-init"
+  if [[ -e "$OLD_DEST" && "$OLD_DEST" != "$SELF" ]]; then
+    rm -f "$OLD_DEST"
+    say "removed old binary -> $OLD_DEST"
+  fi
   case ":$PATH:" in
     *":$HOME/.local/bin:"*) say "$HOME/.local/bin is on PATH" ;;
     *) say "WARNING: ~/.local/bin is not on PATH. Add to your shell rc:"
@@ -325,7 +333,7 @@ if [[ "$MODE" == "install" ]]; then
   esac
   if [[ ! -f "$CONF_FILE" ]]; then
     cat > "$CONF_FILE" <<EOF
-# code-intel-init defaults — this file survives upgrades of the script.
+# agent-code-intel defaults — this file survives upgrades of the script.
 # Uncomment and change what you need.
 #CHUNK_SIZE=$CHUNK_SIZE
 #CHUNK_OVERLAP=$CHUNK_OVERLAP
@@ -870,7 +878,7 @@ preflight() {
         i=$((i + 1))
       done
       say ""
-      say "All of it is needed by code-intel-init AND by the generated"
+      say "All of it is needed by agent-code-intel AND by the generated"
       say "refresh-intel.sh, which runs after every task that changes code."
     } >&2
     exit 1
@@ -1428,7 +1436,7 @@ do_preview() {
     exit 0
   fi
   say "Nothing was changed. To do the above:"
-  say "  code-intel-init $WS --path $ROOT --agent $AGENT_TARGET --apply"
+  say "  agent-code-intel $WS --path $ROOT --agent $AGENT_TARGET --apply"
   exit 2
 }
 
@@ -1475,7 +1483,7 @@ do_apply() {
           say "or drop the collection and re-index:"
           say "  grepai workspace delete $WS"
           say "  curl -X DELETE $QDRANT_HTTP/collections/workspace_$WS"
-          say "  code-intel-init $WS --path $ROOT --apply"
+          say "  agent-code-intel $WS --path $ROOT --apply"
         } >&2
         exit 1 ;;
       unknown) say "note: could not read the workspace embedder from 'workspace show'" ;;
@@ -1510,7 +1518,7 @@ do_apply() {
       say "Nothing was changed. To repair:"
       say ""
       say "  grepai workspace remove $WS $PROJ_NAME"
-      say "  code-intel-init $WS --path $ROOT --apply"
+      say "  agent-code-intel $WS --path $ROOT --apply"
     } >&2
     exit 1
   else
@@ -1944,7 +1952,7 @@ do_status() {
     say "All good."
     exit 0
   fi
-  say "Repair a project with:  code-intel-init --path <dir> --apply"
+  say "Repair a project with:  agent-code-intel --path <dir> --apply"
   exit 2
 }
 
@@ -1980,7 +1988,7 @@ do_remove() {
     say ""
     if (( acts == 0 )); then say "Nothing to remove."; exit 0; fi
     say "Nothing was changed. To do the above:"
-    say "  code-intel-init --remove --path $ROOT --apply"
+    say "  agent-code-intel --remove --path $ROOT --apply"
     [[ "$PURGE_COLLECTION" == true ]] || say "  (add --purge-collection to also drop the qdrant collection)"
     exit 2
   fi

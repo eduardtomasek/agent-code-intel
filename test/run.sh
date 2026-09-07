@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test/run.sh — black-box testy pro code-intel-init.
+# test/run.sh — black-box testy pro agent-code-intel.
 #
 # Proč černá skříňka: skript nemá source guard (parsuje argumenty a dispatchuje
 # na nejvyšší úrovni), takže se z něj nedají volat jednotlivé funkce, aniž by se
@@ -18,9 +18,8 @@
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-TOOL="${TOOL:-$HERE/../code-intel-init}"
-# Po přejmenování (issue #11) se mění jen tenhle řádek a výchozí TOOL výše.
-EXPECTED_NAME="${EXPECTED_NAME:-code-intel-init}"
+TOOL="${TOOL:-$HERE/../agent-code-intel}"
+EXPECTED_NAME="${EXPECTED_NAME:-agent-code-intel}"
 
 BARE_PATH=/usr/bin:/bin
 
