@@ -84,3 +84,17 @@ If that script's preflight fails, the code-intel stack is not installed on this
 machine. That is not a problem with this project: skip it, say so, and carry
 on. Docs-only changes do not need a refresh.
 <!-- code-intel:end -->
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as GitHub issues in `eduardtomasek/agent-code-intel`, driven by the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles, each label string equal to its name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` and `docs/adr/` at the repo root, both created lazily when something is actually resolved. See `docs/agents/domain.md`.
