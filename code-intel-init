@@ -1,344 +1,253 @@
 #!/usr/bin/env bash
 #
-# code-intel-init — wire a project into the local code-intelligence stack.
+# code-intel-init v2 — wire a project into the local code-intelligence stack.
 #
-#   GrepAI   semantic search  (qdrant workspace + watcher + MCP registration)
-#   GitNexus knowledge graph  (repo index + MCP registration)
-#   refresh-intel.sh          (re-index + audit, generated into the project)
-#   CLAUDE.md / AGENTS.md     (a code-intel block telling agents how/when to use them)
+#   mkdir SMS-system && cd SMS-system
+#   code-intel-init --apply
 #
-# Every step is idempotent: re-running it repairs whatever drifted.
+# That one command creates the git repo if missing, brings up qdrant and
+# ollama if they are not running, creates the GrepAI workspace and its qdrant
+# collection, maps the project into it, fixes chunking, registers MCP servers
+# for Claude Code and Codex, indexes the repo with GitNexus, writes
+# refresh-intel.sh, appends the code-intel block to CLAUDE.md / AGENTS.md and
+# starts the watcher.
 #
-# ---------------------------------------------------------------------------
-# --apply — nothing happens without it.
-# ---------------------------------------------------------------------------
+# MODES
+#   code-intel-init [ws] [--path DIR]            preview (exit 2 if drift)
+#   code-intel-init [ws] [--path DIR] --apply    do it
+#   code-intel-init --status [--all]             health of one / all projects
+#   code-intel-init --remove [--apply]           tear a project back out
+#   code-intel-init --install                    copy self to ~/.local/bin
 #
-# Run without --apply and this script only PRINTS what it would do, then exits
-# without touching anything. It writes files, registers MCP servers and starts
-# daemons only when --apply is passed.
+# WHY --apply IS STILL REQUIRED
+#   This touches five global places (~/.grepai/workspace.yaml, ~/.claude.json,
+#   ~/.codex/config.toml, a qdrant collection, a watcher daemon). A run in the
+#   wrong directory is easy — a Finder double-click lands in $HOME. The flag
+#   makes that impossible by accident. It is --apply, not --init, because the
+#   script is a reconciler: re-running it repairs drift, so "init" would read
+#   wrong on the tenth run. Preview exits 2 when something would change, 0 when
+#   everything already matches, so it is usable from cron.
 #
-# The reason is accidental execution. This script is meant to be handed to
-# other people, and a run in the wrong directory is easy: a double-click in
-# Finder (which opens Terminal with the home directory as cwd), a stray
-# `./code-intel-init` in the wrong shell tab, a copy-pasted command line, or a
-# tab-completion that landed one directory too high. The damage would not be
-# dramatic but it is annoying to undo — a junk workspace in the global
-# registry, a qdrant collection, MCP entries in ~/.claude.json and
-# ~/.codex/config.toml, a refresh-intel.sh and a code-intel block in someone
-# else's CLAUDE.md, plus a watcher daemon indexing a directory nobody asked
-# about. Requiring an explicit flag makes all of that impossible by accident.
+# KNOWLEDGE THAT IS EXPENSIVE TO REDISCOVER
+#   * nomic-embed-text-v2-moe has a hard 512-token window. GrepAI's default
+#     chunking.size of 512 overflows it: every chunk is re-split three times
+#     and then dropped, so whole files never reach the index. 256/25 indexes
+#     cleanly; 384 already loses files.
+#   * qdrant answers on 6333 (HTTP health) and 6334 (gRPC). grepai stores and
+#     queries vectors on 6334. A container published with only 6333 passes a
+#     naive health check and then fails every index. Both are checked.
+#   * <project>/.grepai/config.yaml is owned by this script. A running watcher
+#     holds it in memory and rewrites the WHOLE file on every index, so hand
+#     edits vanish silently, minutes or hours later. Step 3 restarts the
+#     watcher after it edits the file. Never hand-edit that file; re-run this.
+#   * `codex mcp add` has no scope or cwd flag — every entry is global. One
+#     "grepai" entry therefore cannot carry a per-project --workspace, so this
+#     registers "grepai-<workspace>", one per project.
+#   * A plain global "grepai" entry (args = ["mcp-serve"], no --workspace) in
+#     either agent serves the LOCAL gob index instead of the qdrant workspace.
+#     Search keeps "working" and silently answers from the wrong data. Both
+#     agents are checked for it.
+#   * npm's global bin is an nvm-versioned shim. It survives a node switch as a
+#     broken file on PATH, so gitnexus is verified by running it. MCP entries
+#     register it by NAME, never by absolute path, for the same reason.
+#   * `gitnexus analyze` WRITES INTO THE PROJECT: its own AGENTS.md and
+#     CLAUDE.md (in <!-- gitnexus:start --> markers) plus six skill files under
+#     .claude/skills/. So step 8 cannot ask "does AGENTS.md exist" to decide
+#     whether the project keeps one — step 6 just made it, and --agent claude
+#     would adopt it. It asks whether anything is in it besides that block.
+#     Those files are also dead weight in the semantic index (measured: 73 of
+#     96 vectors on a five-file project), hence .claude in the ignore list.
+#   * The refusals below ($HOME, /, a parent of $HOME) guard a directory this
+#     script would WRITE to. `--status --all` reads the registry and never
+#     looks at $PWD, so applying them there only breaks the one command you
+#     run after a reboot, from the one directory a fresh terminal opens in.
 #
-# The flag is --apply rather than --init because this script is not only an
-# installer: it is idempotent and is meant to be re-run to repair drift, so
-# "init" would read wrong on the tenth run. --apply also matches the plan /
-# apply convention people already know from infrastructure tools.
+# CONFIG
+#   Every default below can be overridden in
+#   ${XDG_CONFIG_HOME:-~/.config}/code-intel/defaults.env, which is sourced if
+#   present. That file survives upgrades of this script.
 #
-# The preview is not a stub. It probes the real state — workspace registry,
-# chunking config, MCP entries for each agent, generated files, doc blocks,
-# watcher — and reports per item whether it is already in place or would be
-# created, so a dry run doubles as a diagnostic.
+# STATE THIS CREATES
+#   ~/.grepai/workspace.yaml               workspace + project registry
+#   ~/.config/code-intel/projects          this script's own project registry
+#   ~/.claude/settings.json                one permissions.allow rule for
+#                                          ./refresh-intel.sh (--install, --no-perms)
+#   ~/.claude.json                         user-scope gitnexus MCP entry
+#   ~/.codex/config.toml                   grepai-<ws> + gitnexus MCP entries
+#   <project>/.grepai/config.yaml          chunking + ignore list
+#   <project>/.mcp.json                    project-scope grepai MCP entry
+#   <project>/refresh-intel.sh             generated, version-stamped
+#   <project>/CLAUDE.md, AGENTS.md         the <!-- code-intel --> block
+#   <project>/.gitignore                   .grepai/ and .gitnexus/
+#   qdrant collection workspace_<ws>       inside the container's volume
 #
-# The refusal to run over $HOME (further down) is a separate guard and stays
-# in force even with --apply.
-#
-# ---------------------------------------------------------------------------
-# DEPENDENCIES — everything below must be in place for a full run.
-# ---------------------------------------------------------------------------
-#
-# All of this is verified by the preflight, which runs on EVERY invocation —
-# preview and --apply alike — before anything is inspected or changed. It
-# reports every problem it finds in one pass and then exits 1 with an
-# [ERROR: ...] block naming each missing item and how to fix it. It never
-# fixes anything itself and never continues past a missing dependency.
-#
-# The preflight deliberately covers what the GENERATED refresh-intel.sh will
-# need as well, not only what this run touches. The stack keeps needing its
-# services long after the install: the watcher embeds through ollama on every
-# save, and refresh-intel.sh queries qdrant and re-indexes GitNexus at the end
-# of every task that changes code. A machine that installs cleanly but cannot
-# refresh is not set up — and that failure would otherwise surface much later,
-# inside an agent run, looking like a code or index problem rather than a
-# stopped container. refresh-intel.sh repeats the checks it needs at its own
-# startup, since services stop between runs.
-#
-# Commands on PATH (* = preflight hard-fails without it):
-#
-#   bash 3.2+ *   macOS system bash is enough; no bash 4+ syntax is used
-#   grepai    *   workspace registry, watcher daemon, project-scope MCP entry
-#   claude    *   `claude mcp add` writes the MCP registrations
-#                 (only when --agent includes claude)
-#   codex     *   `codex mcp add` (only when --agent includes codex)
-#   gitnexus  *   repo knowledge graph + user-scope MCP  (npm i -g gitnexus).
-#                 Checked by running it, not just by finding it: npm's global
-#                 bin is an nvm-versioned shim that survives a node switch as
-#                 a broken file on PATH.
-#   python3   *   JSON/YAML edits (stdlib only, no pip packages)
-#   ollama    *   embedding provider; also used to verify the model is pulled
-#   curl      *   qdrant health checks, in both scripts
-#   git       *   GitNexus decides staleness from git state, and
-#                 refresh-intel.sh FAILS its audit unless `gitnexus status`
-#                 reports up-to-date — so without git that audit can never
-#                 pass. (A path that is merely not a repository is a softer
-#                 case and only warns.)
-#   rtk           optional; the generated refresh-intel.sh routes grepai and
-#                 gitnexus through it when present
-#
-# Services that must be running:
-#
-#   qdrant    HTTP  http://127.0.0.1:6333   (health check)
-#             gRPC  127.0.0.1:6334          (what grepai actually talks to)
-#             e.g. the qdrant/qdrant container in Docker/OrbStack.
-#             BOTH ports are checked. A container published with only 6333
-#             passes a naive health check and then fails every index, so the
-#             gRPC port is probed separately with bash's /dev/tcp (no nc, and
-#             no timeout(1), which macOS does not ship).
-#   ollama    http://localhost:11434, with `nomic-embed-text-v2-moe` pulled
-#             (`ollama pull nomic-embed-text-v2-moe`). `ollama list` is itself
-#             a call to the server, so one probe answers both "is the daemon
-#             up" and "is the model pulled"; they are reported separately so a
-#             stopped server does not masquerade as a missing model.
-#
-# State this script creates or edits:
-#
-#   ~/.grepai/workspace.yaml        workspace + project registry (global)
-#   ~/.claude.json                  user-scope gitnexus MCP entry
-#   <project>/.grepai/config.yaml   chunking + ignore list (created if absent)
-#   <project>/.mcp.json             project-scope grepai MCP entry
-#   <project>/refresh-intel.sh      generated re-index + audit script
-#   <project>/CLAUDE.md, AGENTS.md  the <!-- code-intel --> block
-#   qdrant collection workspace_<workspace-name>
-#   ~/Library/Logs/grepai/          watcher logs and pid files (macOS paths)
-#
-# Not required, but honoured if present: rtk (the generated refresh-intel.sh
-# routes grepai/gitnexus through it when it is on PATH).
-#
-# ---------------------------------------------------------------------------
-# RULE — this script owns <project>/.grepai/config.yaml. Do not hand-edit it.
-# ---------------------------------------------------------------------------
-#
-# A running watcher also treats that file as its own: it loads it at startup,
-# keeps it in memory, and rewrites the WHOLE file every time it indexes
-# something (watch.last_index_time lives there). An edit made while the
-# watcher runs is therefore discarded on its next write — silently, with no
-# error in any log, and only when the watcher next has something to index.
-# Measured on this machine: an ignore entry written at 00:11:19 was gone at
-# 00:11:40, the moment one new file was indexed. An edit can look like it
-# stuck for hours and then vanish.
-#
-# The failure is quiet but the blast radius is small: only this one file. The
-# worst realistic outcome is chunking silently reverting to GrepAI's default
-# of 512, after which files start dropping out of the index with nothing but
-# "context limit exceeded" in the watcher log to show for it.
-#
-# So the rule is simply: nobody hand-edits <project>/.grepai/config.yaml.
-#
-#   - To change chunking or the ignore list for ONE project, re-run this
-#     script with --apply. Step 3 rewrites the file and, if a watcher is
-#     running, restarts it so the change survives.
-#   - To change them for EVERY project, edit CHUNK_SIZE / CHUNK_OVERLAP /
-#     EXTRA_IGNORES below and re-run the script per project. Keeping the
-#     values here rather than in each config is what makes the projects
-#     converge instead of drifting.
-#   - To change something this script does not manage (search boost, trace
-#     languages, rpg settings), stop the watcher first, edit, then start it
-#     again:  grepai watch --workspace <ws> --stop
-#             $EDITOR <project>/.grepai/config.yaml
-#             grepai watch --workspace <ws> --background
-#
-# A preview run (no --apply) prints the current chunking and ignore state, so
-# drift is visible without touching anything.
-#
-# ---------------------------------------------------------------------------
-# AGENTS — Claude Code and OpenAI Codex, both by default.
-# ---------------------------------------------------------------------------
-#
-# --agent both (default) registers the MCP servers for Claude Code AND Codex;
-# --agent claude / --agent codex does just one, for people who run only one.
-# The two agents store MCP config very differently, so the wiring differs:
-#
-#   Claude Code   <project>/.mcp.json, written by `claude mcp add -s project`.
-#                 Per project, so the grepai entry is plainly named "grepai"
-#                 and carries --workspace <ws>. Instructions: CLAUDE.md.
-#
-#   Codex         ~/.codex/config.toml, written by `codex mcp add`. GLOBAL
-#                 ONLY — `codex mcp add` has no scope or cwd flag, so every
-#                 entry is visible in every Codex session. A single "grepai"
-#                 entry therefore cannot carry a per-project --workspace, and
-#                 this script registers "grepai-<workspace>" instead, one per
-#                 project. Instructions: AGENTS.md (created when missing).
-#
-# Watch out for a plain global "grepai" entry (args = ["mcp-serve"], no
-# --workspace) in either agent: without --workspace, grepai resolves .grepai/
-# from the current directory and serves the LOCAL gob index, not the qdrant
-# workspace this script sets up. The steps below warn when they find one.
-#
-# ---------------------------------------------------------------------------
-# EMBEDDING PROVIDER — ollama is this script's default, not a hard requirement.
-# ---------------------------------------------------------------------------
-#
-# GrepAI itself supports several embedders. For workspaces (the mode this
-# script sets up) `grepai workspace create --provider` accepts:
-#
-#   ollama     local, what EMBED_PROVIDER/EMBED_MODEL below select
-#   lmstudio   local, OpenAI-compatible server (GrepAI's own lmstudio skill
-#              documents http://localhost:1234 as its endpoint)
-#   openai     cloud
-#
-# (`grepai init -p` additionally lists synthetic and openrouter, but those are
-# not offered by `workspace create`.)
-#
-# The same model is not tied to ollama either: nomic-ai publishes an official
-# nomic-embed-text-v2-moe-GGUF on HuggingFace, so LM Studio can serve it too.
-# NOT VERIFIED: whether the llama.cpp build inside LM Studio supports the
-# nomic-bert-moe architecture — try loading it before committing to a switch.
-#
-# To move this script to another provider:
-#
-#   1. set EMBED_PROVIDER / EMBED_MODEL below;
-#   2. rewrite the ollama-specific preflight (it runs `command -v ollama` and
-#      greps `ollama list` for the model) into a per-provider branch;
-#   3. pass `--endpoint <url>` to `grepai workspace create` if the provider's
-#      default endpoint is wrong — grepai fills in its own default per provider
-#      (ollama lands on http://localhost:11434) and the value is stored per
-#      workspace in ~/.grepai/workspace.yaml.
-#
-# Two things a provider swap does NOT do:
-#
-#   - It does not widen the context window. The 512-token limit that forces
-#     CHUNK_SIZE below is a property of the model weights (`ollama show` ->
-#     "context length 512"), identical in any runtime serving them. A bigger
-#     window means a different model, and then `dimensions` in workspace.yaml
-#     has to match the new model too.
-#   - It does not preserve existing indexes. A different runtime or
-#     quantisation produces different vectors; mixing them into a collection
-#     silently degrades search. Re-index every workspace you convert.
+# Written for bash 3.2 (macOS system bash): no associative arrays, no mapfile,
+# no ${var,,}, and no bare expansion of possibly-empty arrays under `set -u`.
 
 set -euo pipefail
 
-QDRANT_ENDPOINT="http://127.0.0.1"
+VERSION="2.4.1"
+
+# ---------------------------------------------------------------- defaults --
+
+QDRANT_HOST="127.0.0.1"
+QDRANT_HTTP_PORT=6333
 QDRANT_PORT=6334
-QDRANT_HTTP="http://127.0.0.1:6333"
+QDRANT_CONTAINER="grepai-qdrant"
+QDRANT_IMAGE="qdrant/qdrant"
+QDRANT_VOLUME="grepai-qdrant-data"
+
 OLLAMA_HTTP="http://localhost:11434"
 EMBED_PROVIDER="ollama"
 EMBED_MODEL="nomic-embed-text-v2-moe"
 
-# nomic-embed-text-v2-moe has a hard 512-token context window (`ollama show`).
-# GrepAI's default chunking.size of 512 does not fit inside it: every chunk
-# overflows, is re-split three times and then dropped, so whole files never
-# reach the index. 256/25 was measured to index this machine's repos with zero
-# "context limit exceeded" errors; 384 already loses files.
 CHUNK_SIZE=256
 CHUNK_OVERLAP=25
 
-# Lock files are dependency manifests, not code. Embedding them is pure waste,
-# and package-lock.json is big enough to overflow the embedder outright, so it
-# fails the whole file after three re-chunk attempts. Added to each project's
-# ignore list.
 EXTRA_IGNORES=(package-lock.json npm-shrinkwrap.json yarn.lock pnpm-lock.yaml
                bun.lockb go.sum Cargo.lock composer.lock poetry.lock uv.lock
-               Gemfile.lock)
+               Gemfile.lock
+               # The stack's own scaffolding. `gitnexus analyze` installs six
+               # skill files under .claude/skills/; this script writes
+               # refresh-intel.sh and .mcp.json. Measured on a five-file
+               # project they were 73 of 96 vectors — pure dilution of the
+               # index these tools exist to keep useful.
+               .claude refresh-intel.sh .mcp.json)
+
+GITIGNORE_ENTRIES=(".grepai/" ".gitnexus/")
+
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/code-intel"
+CONF_FILE="$CONF_DIR/defaults.env"
+REGISTRY="$CONF_DIR/projects"
+
+# shellcheck source=/dev/null
+[[ -f "$CONF_FILE" ]] && . "$CONF_FILE"
+
+QDRANT_HTTP="http://$QDRANT_HOST:$QDRANT_HTTP_PORT"
+QDRANT_ENDPOINT="http://$QDRANT_HOST"
+
+# ------------------------------------------------------------------- utils --
+
+die()  { printf '[ERROR: %s]\n' "$1" >&2; exit 1; }
+say()  { printf '%s\n' "$1"; }
+row()  { printf '  %-9s %s\n' "$1" "$2"; }
+hr()   { printf '%s\n%s\n' "$1" "$(printf '%*s' "${#1}" '' | tr ' ' '-')"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Canonical physical path of an existing directory.
+#
+# `pwd -P` alone is not enough. Bash's builtin can return the path as it was
+# typed rather than as the filesystem stores it, which on a case-insensitive
+# volume (every stock macOS) means `cd ~/Projects && pwd -P` prints "Projects"
+# while the directory on disk is really "projects". The external /bin/pwd goes
+# through getcwd() and returns the true name, so prefer it and fall back to the
+# builtin where it does not exist.
+canon() {
+  local d="$1" out
+  [[ -d "$d" ]] || { printf '%s\n' "$d"; return 0; }
+  if out="$( cd -- "$d" 2>/dev/null && { if [[ -x /bin/pwd ]]; then /bin/pwd -P; else pwd -P; fi; } )"; then
+    printf '%s\n' "$out"
+  else
+    printf '%s\n' "$d"
+  fi
+}
+
+sha256_of() {
+  if have sha256sum; then sha256sum | awk '{print $1}'
+  elif have shasum;  then shasum -a 256 | awk '{print $1}'
+  else python3 -c 'import hashlib,sys;print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+  fi
+}
+
+# ------------------------------------------------------------ CLI parsing ---
 
 usage() {
   cat <<'EOF'
 Usage:
-  code-intel-init [workspace-name] [--path <dir>] --apply [options]
-  code-intel-init [workspace-name] [--path <dir>]          (preview only)
+  code-intel-init [workspace] [--path DIR] [options]        preview
+  code-intel-init [workspace] [--path DIR] --apply          set up / repair
+  code-intel-init --status [--all]                          health check
+  code-intel-init --status --all --json                     machine-readable
+  code-intel-init --remove [--apply] [--path DIR]           tear out
+  code-intel-init --install                                 self-install
 
-WITHOUT --apply nothing is changed: the run prints what it would do and exits.
-This is deliberate protection against running it by accident in the wrong
-directory (a Finder double-click, the wrong shell tab, a pasted command).
+Preview exit codes:  0 = everything matches, 2 = drift, 1 = error.
 
-With --apply it sets up the full code-intelligence stack for a project:
+Options:
+  --apply           Actually make changes. Without it: preview only.
+  --path DIR        Project directory (default: current directory)
+  --agent WHO       claude | codex | both        (default: both)
+  --no-bootstrap    Do not start qdrant / ollama; only check them
+  --no-git          Do not run `git init` or touch .gitignore
+  --no-watch        Do not start the GrepAI watcher
+  --no-analyze      Skip the initial GitNexus analyze (slow on big repos)
+  --no-docs         Do not touch CLAUDE.md / AGENTS.md
+  --force-docs      Rewrite the code-intel block even if one is present
+  --force-script    Overwrite refresh-intel.sh even if locally modified
+  --all             With --status: every project in the registry
+  --json            With --status: emit JSON instead of a table. Reports the
+                    services too (container runtime, qdrant, ollama, node) and
+                    never starts anything. Feeds code-intel-dash.
+  --purge-collection  With --remove: also delete the qdrant collection
+  --no-perms        With --install: do not touch ~/.claude/settings.json
+  -h, --help        This text
+  --version         Print version
 
-  1. GrepAI workspace (qdrant backend, ollama embeddings)
-  2. project -> workspace mapping
-  3. chunking.size lowered to fit the embedding model's context window, and
-     lock files added to the ignore list
-  4. grepai MCP server at PROJECT scope, with --workspace baked in
-  5. gitnexus MCP server at USER scope (serves every indexed repo)
-  6. GitNexus index for this repository
-  7. ./refresh-intel.sh written into the project (re-index + audit in one script)
-  8. a code-intel block appended to CLAUDE.md / AGENTS.md: how and when agents
-     should use GrepAI vs GitNexus vs plain grep, and the rule that every task
-     which changes the codebase ends with ./refresh-intel.sh
-  9. GrepAI watcher daemon started for the workspace
-
-Arguments:
-  workspace-name   Defaults to the sanitised directory name.
-
-Every run starts with a preflight, in preview mode too. It checks the
-dependencies of this script AND of the refresh-intel.sh it generates, reports
-everything that is missing in one pass, and exits 1 without changing anything
-if any of it is.
-
-Requires: grepai, gitnexus, python3, curl, git, ollama (with
-nomic-embed-text-v2-moe pulled), a running qdrant on 127.0.0.1:6333 AND :6334,
-and the CLI of each agent you target (claude and/or codex). rtk is optional.
-See the dependency block at the top of this file for the full list.
-
-The embedder is ollama by default, not by necessity: GrepAI workspaces also
-accept lmstudio (local) and openai (cloud). See "EMBEDDING PROVIDER" at the
-top of this file for what to change and what a swap costs.
-
-Refuses to run over $HOME or any directory containing it.
-
-Flags:
-  --apply          Actually make the changes. Without it, preview and exit.
-  --path <dir>     Project directory (default: current directory)
-  --agent <who>    claude, codex or both (default: both). Selects which agent
-                   gets MCP registrations and instruction files.
-  --no-watch       Skip starting the watcher daemon
-  --no-analyze     Skip the initial GitNexus analyze (slow on big repos)
-  --no-docs        Do not touch CLAUDE.md / AGENTS.md
-  --force-docs     Rewrite the code-intel block even if one is already present
-  --force-script   Overwrite an existing refresh-intel.sh
-  -h, --help       Show this help
+Config: ~/.config/code-intel/defaults.env (sourced if present) overrides
+chunk size, embedding model, ports and container names.
 EOF
-}
-
-die() {
-  echo "[ERROR: $1]" >&2
-  exit 1
 }
 
 ROOT="$PWD"
 WS=""
 AGENT_TARGET="both"
+MODE="init"
 APPLY=false
+BOOTSTRAP=true
+DO_GIT=true
 START_WATCH=true
 RUN_ANALYZE=true
 WRITE_DOCS=true
 FORCE_DOCS=false
 FORCE_SCRIPT=false
+STATUS_ALL=false
+AS_JSON=false
+PURGE_COLLECTION=false
+WRITE_PERMS=true
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --path)
       [[ $# -ge 2 ]] || die "--path requires a directory argument"
-      ROOT="$2"
-      shift 2
-      ;;
+      ROOT="$2"; shift 2 ;;
     --agent)
-      [[ $# -ge 2 ]] || die "--agent requires a value: claude, codex or both"
+      [[ $# -ge 2 ]] || die "--agent requires: claude, codex or both"
       case "$2" in
         claude|codex|both) AGENT_TARGET="$2" ;;
         *) die "--agent must be claude, codex or both (got '$2')" ;;
       esac
-      shift 2
-      ;;
-    --apply)       APPLY=true; shift ;;
-    --no-watch)    START_WATCH=false; shift ;;
-    --no-analyze)  RUN_ANALYZE=false; shift ;;
-    --no-docs)     WRITE_DOCS=false; shift ;;
-    --force-docs)  FORCE_DOCS=true; shift ;;
-    --force-script) FORCE_SCRIPT=true; shift ;;
-    -h|--help)     usage; exit 0 ;;
-    -*)            die "unknown flag: $1" ;;
+      shift 2 ;;
+    --apply)            APPLY=true; shift ;;
+    --status)           MODE="status"; shift ;;
+    --remove)           MODE="remove"; shift ;;
+    --install)          MODE="install"; shift ;;
+    --all)              STATUS_ALL=true; shift ;;
+    --json)             AS_JSON=true; shift ;;
+    --no-bootstrap)     BOOTSTRAP=false; shift ;;
+    --no-git)           DO_GIT=false; shift ;;
+    --no-watch)         START_WATCH=false; shift ;;
+    --no-analyze)       RUN_ANALYZE=false; shift ;;
+    --no-docs)          WRITE_DOCS=false; shift ;;
+    --force-docs)       FORCE_DOCS=true; shift ;;
+    --force-script)     FORCE_SCRIPT=true; shift ;;
+    --purge-collection) PURGE_COLLECTION=true; shift ;;
+    --no-perms)         WRITE_PERMS=false; shift ;;
+    --version)          say "code-intel-init $VERSION"; exit 0 ;;
+    -h|--help)          usage; exit 0 ;;
+    -*)                 die "unknown flag: $1" ;;
     *)
       [[ -z "$WS" ]] || die "workspace name given twice ('$WS' and '$1')"
-      WS="$1"
-      shift
-      ;;
+      WS="$1"; shift ;;
   esac
 done
 
@@ -350,23 +259,126 @@ case "$AGENT_TARGET" in
   both)   DO_CLAUDE=true; DO_CODEX=true ;;
 esac
 
-[[ -d "$ROOT" ]] || die "not a directory: $ROOT"
-ROOT="$(cd -- "$ROOT" && pwd)"
+# ---------------------------------------------------------- self-install ----
 
-# A workspace must be one project, never a tree that swallows everything.
-# Pointing this at $HOME (or anything above it) makes the watcher crawl
-# ~/.cache, every venv and every node_modules on the machine, embedding
-# gigabytes of third-party code — it saturates ollama for hours and the
-# resulting index is useless. There is deliberately no override flag.
-HOME_REAL="$(cd -- "$HOME" 2>/dev/null && pwd || echo "$HOME")"
-if [[ "$ROOT" == "$HOME_REAL" ]]; then
-  die "refusing to run over your home directory ($ROOT) — point --path at a single project"
+# Allowlist ./refresh-intel.sh in Claude Code's USER settings, once per machine.
+#
+# The rule is relative to the project directory, so one user-level entry covers
+# every project this script ever wires and matches nothing anywhere else — far
+# better than a per-project .claude/settings.json, which would have to be
+# written into (and committed with) each repository.
+#
+# This writes into another tool's configuration, so it is careful about it: it
+# merges instead of replacing, never touches a file it cannot parse, writes
+# through a temporary file, and says exactly what it did. --no-perms skips it.
+install_claude_permission() {
+  python3 - "Bash(./refresh-intel.sh)" "Bash(./refresh-intel.sh *)" <<'PY'
+import json, os, sys
+rules = sys.argv[1:]
+p = os.path.expanduser("~/.claude/settings.json")
+os.makedirs(os.path.dirname(p), exist_ok=True)
+cfg = {}
+if os.path.exists(p) and os.path.getsize(p) > 0:
+    try:
+        with open(p) as f:
+            cfg = json.load(f)
+        if not isinstance(cfg, dict):
+            raise ValueError("not an object")
+    except Exception as e:
+        print("claude: %s is not readable JSON (%s) — left untouched." % (p, e))
+        print("        Add these to permissions.allow by hand: %s" % ", ".join(rules))
+        sys.exit(0)
+allow = cfg.setdefault("permissions", {}).setdefault("allow", [])
+if not isinstance(allow, list):
+    print("claude: permissions.allow in %s is not a list — left untouched." % p)
+    sys.exit(0)
+added = [r for r in rules if r not in allow]
+if not added:
+    print("claude: ./refresh-intel.sh already allowed in %s" % p)
+    sys.exit(0)
+allow.extend(added)
+tmp = p + ".code-intel.tmp"
+with open(tmp, "w") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+os.replace(tmp, p)
+print("claude: allowed %s in %s" % (" and ".join(added), p))
+print("        (so Claude Code can run it after a task without asking every time)")
+PY
+}
+
+if [[ "$MODE" == "install" ]]; then
+  SELF="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "${BASH_SOURCE[0]}")"
+  DEST="$HOME/.local/bin/code-intel-init"
+  mkdir -p "$HOME/.local/bin" "$CONF_DIR"
+  if [[ "$SELF" != "$DEST" ]]; then
+    cp "$SELF" "$DEST"
+    chmod +x "$DEST"
+    say "installed -> $DEST"
+  else
+    say "already installed at $DEST"
+  fi
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*) say "$HOME/.local/bin is on PATH" ;;
+    *) say "WARNING: ~/.local/bin is not on PATH. Add to your shell rc:"
+       say "  export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+  esac
+  if [[ ! -f "$CONF_FILE" ]]; then
+    cat > "$CONF_FILE" <<EOF
+# code-intel-init defaults — this file survives upgrades of the script.
+# Uncomment and change what you need.
+#CHUNK_SIZE=$CHUNK_SIZE
+#CHUNK_OVERLAP=$CHUNK_OVERLAP
+#EMBED_PROVIDER=$EMBED_PROVIDER
+#EMBED_MODEL=$EMBED_MODEL
+#QDRANT_HOST=$QDRANT_HOST
+#QDRANT_HTTP_PORT=$QDRANT_HTTP_PORT
+#QDRANT_PORT=$QDRANT_PORT
+#QDRANT_CONTAINER=$QDRANT_CONTAINER
+EOF
+    say "wrote $CONF_FILE"
+  fi
+  if [[ "$WRITE_PERMS" == true ]]; then
+    install_claude_permission
+  else
+    say "skipped the Claude Code permission rule (--no-perms)"
+  fi
+  exit 0
 fi
-if [[ "$ROOT" == "/" ]]; then
-  die "refusing to run over the filesystem root — point --path at a single project"
-fi
-if [[ "$HOME_REAL" == "$ROOT"/* ]]; then
-  die "refusing to run over $ROOT: it contains your home directory ($HOME_REAL) — point --path at a single project"
+
+# -------------------------------------------------------------- registry ----
+
+# awk with a literal field comparison, not grep: a project path is not a regex
+# ("api.v2", "app+web") and an anchored grep pattern would match the wrong line.
+registry_del() {   # $1 = path
+  [[ -f "$REGISTRY" ]] || return 0
+  awk -F'\t' -v p="$1" '$2 != p' "$REGISTRY" > "$REGISTRY.tmp"
+  mv "$REGISTRY.tmp" "$REGISTRY"
+}
+
+registry_add() {   # $1 = workspace, $2 = path
+  mkdir -p "$CONF_DIR"
+  touch "$REGISTRY"
+  registry_del "$2"
+  printf '%s\t%s\n' "$1" "$2" >> "$REGISTRY"
+}
+
+# ------------------------------------------------------- path resolution ----
+
+[[ -d "$ROOT" ]] || die "not a directory: $ROOT"
+ROOT="$(canon "$ROOT")"       # canonical case and symlinks resolved, so the
+                              # path stored in grepai is the same string
+                              # refresh-intel.sh derives from its own location
+
+# `--status --all` reads the registry and never looks at $PWD, so these guards
+# must not apply to it: someone checking every project after a reboot is sitting
+# in $HOME, which is exactly what they refuse. Every other mode either writes
+# into $ROOT (init, remove) or reports on it (--status), so they keep them.
+if [[ "$MODE" != "status" || "$STATUS_ALL" != true ]]; then
+  HOME_REAL="$(canon "$HOME")"
+  [[ "$ROOT" != "$HOME_REAL" ]] || die "refusing to run over your home directory ($ROOT) — point --path at a single project"
+  [[ "$ROOT" != "/" ]]          || die "refusing to run over the filesystem root"
+  [[ "$HOME_REAL" != "$ROOT"/* ]] || die "refusing to run over $ROOT: it contains your home directory ($HOME_REAL)"
 fi
 
 if [[ -z "$WS" ]]; then
@@ -374,545 +386,505 @@ if [[ -z "$WS" ]]; then
 fi
 [[ -n "$WS" ]] || die "could not derive a workspace name from $ROOT; pass one explicitly"
 
-echo "Project:   $ROOT"
-echo "Workspace: $WS"
-echo "Agents:    $AGENT_TARGET"
-echo
+PROJ_NAME="$(basename "$ROOT")"
+GREPAI_CFG="$ROOT/.grepai/config.yaml"
+MCP_JSON="$ROOT/.mcp.json"
+REFRESH="$ROOT/refresh-intel.sh"
 
-# ---------------------------------------------------------------------------
-# Preflight — runs on every invocation, preview and --apply alike.
-# ---------------------------------------------------------------------------
+# ================================================================ probes ====
 #
-# It checks the dependencies of BOTH scripts: this one, and the
-# refresh-intel.sh it generates. That is deliberate. The stack keeps needing
-# its services long after the install — the watcher embeds through ollama on
-# every save, and refresh-intel.sh queries qdrant and re-indexes GitNexus at
-# the end of every task that touches code. A machine that installs cleanly but
-# cannot refresh is not set up, and that failure would surface much later,
-# inside an agent run, looking like a code or index problem rather than a
-# stopped container.
-#
-# Everything is collected in one pass and reported together. Dying on the
-# first missing item turns setup into install / re-run / hit the next one, N
-# times over.
+# One implementation per question. Preview, apply, status and remove all call
+# these, so they can never disagree with each other. Everything that parses a
+# CLI's human-readable output lives here and nowhere else — when grepai or
+# gitnexus changes its wording, this is the only block to fix.
 
-PF_FAIL_WHAT=()
-PF_FAIL_FIX=()
+qdrant_http_ok() {
+  have curl || return 1
+  [[ "$(curl -s -o /dev/null -w '%{http_code}' "$QDRANT_HTTP/healthz" 2>/dev/null || true)" == "200" ]]
+}
+qdrant_grpc_ok() { (exec 3<>"/dev/tcp/$QDRANT_HOST/$QDRANT_PORT") >/dev/null 2>&1; }
+ollama_up()      { ollama list >/dev/null 2>&1; }
 
-have()   { command -v "$1" >/dev/null 2>&1; }
-pf_row() { printf '  %-8s %s\n' "$1" "$2"; }
-pf_ok()  { pf_row "ok" "$1"; }
-pf_need() {
-  PF_FAIL_WHAT+=("$1")
-  PF_FAIL_FIX+=("$2")
-  pf_row "MISSING" "$1"
+# `ollama show <model>` asks the server about that exact model and is
+# authoritative. Grepping `ollama list` is only the fallback: the listing is a
+# formatted table, so a long name can be wrapped or elided and a freshly
+# pulled model does not always appear in it immediately.
+ollama_has_model() {
+  ollama show "$EMBED_MODEL" >/dev/null 2>&1 && return 0
+  ollama list 2>/dev/null | grep -qF "$EMBED_MODEL"
 }
 
-# bash's own /dev/tcp, so the port check needs neither nc nor timeout(1) —
-# macOS ships no timeout. A localhost port connects or refuses immediately, so
-# there is nothing to time out.
-pf_port_open() { (exec 3<>"/dev/tcp/$1/$2") >/dev/null 2>&1; }
+ws_show()   { grepai workspace show "$WS" 2>/dev/null || true; }
+ws_exists() { grepai workspace show "$WS" >/dev/null 2>&1; }
 
-echo "Preflight — for this script and for the refresh-intel.sh it generates"
-echo "---------------------------------------------------------------------"
+# Pull the mapped path for this project out of a workspace listing.
+#
+# Deliberately tolerant, because two subcommands of the SAME tool print the
+# same fact differently — measured on grepai 0.36.1:
+#
+#   workspace show      "  - name: /path"        two spaces, no decoration
+#   workspace status    "    - name: /path ✓"    four spaces, trailing glyph
+#
+# So match "- <name>: " anywhere on the line instead of at a fixed column, and
+# strip trailing whitespace plus any trailing non-printable decoration. The
+# match is literal (grep -F) because a basename like "api.v2" is not a regex,
+# and the ": " in the needle keeps "my-test-intel: " from matching "test-intel".
+ws_mapped_path() {    # $1 = output of ws_show or `workspace status`
+  local line rest
+  line="$(printf '%s\n' "$1" | grep -F -- "- $PROJ_NAME: " | head -1)"
+  [[ -n "$line" ]] || return 0
+  rest="${line#*- "$PROJ_NAME": }"
+  printf '%s' "$rest" | LC_ALL=C sed -e 's/[[:space:]]*$//' -e 's/[^[:print:]]*$//' -e 's/[[:space:]]*$//'
+  printf '\n'
+}
 
-if have grepai; then
-  pf_ok "grepai on PATH"
-else
-  pf_need "grepai not on PATH" \
-          "install GrepAI — it owns the workspace, watcher and search; both scripts need it"
-fi
+# Same project NAME already in this workspace, wherever it points. grepai keys
+# projects by name, so `workspace add` refuses this and the entry cannot be
+# repointed in place.
+ws_name_taken() {     # $1 = output of ws_show
+  [[ -n "$(ws_mapped_path "$1")" ]]
+}
 
-if ! have gitnexus; then
-  pf_need "gitnexus not on PATH" "npm i -g gitnexus  (both scripts need it)"
-elif ! gitnexus --version >/dev/null 2>&1; then
-  # The npm global bin is an nvm-versioned shim: switching or uninstalling the
-  # node version it was installed under leaves the shim on PATH but broken, so
-  # a plain PATH check is not enough to call this dependency satisfied.
-  pf_need "gitnexus is on PATH but does not run" \
-          "reinstall it under the current node: npm i -g gitnexus"
-else
-  pf_ok "gitnexus $(gitnexus --version 2>/dev/null | head -1) runs"
-fi
+# Compare CANONICALISED paths, never the raw strings. Two spellings of the same
+# directory are routine: macOS is case-insensitive but case-preserving, so a
+# path typed as ~/Projects can be stored while the directory is really
+# ~/projects, and symlinked or trailing-slash forms differ too. A textual
+# comparison then reports "workspace does not map this project" for a project
+# that is mapped perfectly well.
+ws_maps_project() {   # $1 = output of ws_show
+  local mapped
+  mapped="$(ws_mapped_path "$1")"
+  [[ -n "$mapped" ]] || return 1
+  [[ "$(canon "$mapped")" == "$ROOT" ]]
+}
 
-if have python3; then
-  pf_ok "python3 on PATH"
-else
-  pf_need "python3 not on PATH" "install Python 3 — this script edits YAML and JSON with it"
-fi
+# Heuristic: the workspace's model is only visible in `workspace show`. If the
+# configured model is not in that output but some model line is, the workspace
+# was created with a different embedder — mixing vectors from two models into
+# one collection silently degrades search, and no re-run fixes it.
+ws_model_state() {    # $1 = output of ws_show -> match | mismatch | unknown
+  case "$1" in
+    *"$EMBED_MODEL"*) echo match ;;
+    *[Mm]odel*)       echo mismatch ;;
+    *)                echo unknown ;;
+  esac
+}
 
-if have curl; then
-  pf_ok "curl on PATH"
-else
-  pf_need "curl not on PATH" "install curl — the qdrant health checks in both scripts use it"
-fi
+cfg_chunking_ok() {
+  [[ -f "$GREPAI_CFG" ]] || return 1
+  python3 - "$GREPAI_CFG" "$CHUNK_SIZE" "$CHUNK_OVERLAP" <<'PY'
+import re, sys
+try: s = open(sys.argv[1]).read()
+except Exception: sys.exit(1)
+m = re.search(r"^chunking:\n[ \t]+size: (\d+)\n[ \t]+overlap: (\d+)$", s, re.M)
+sys.exit(0 if m and m.group(1) == sys.argv[2] and m.group(2) == sys.argv[3] else 1)
+PY
+}
 
-# git is required, not merely nice to have: GitNexus decides whether an index
-# is stale from git state, and refresh-intel.sh FAILS its audit when `gitnexus
-# status` does not report up-to-date. Without git that audit can never pass.
-# (A directory that is not a repository is a different, softer case — warned
-# about below.)
-if have git; then
-  pf_ok "git on PATH"
-else
-  pf_need "git not on PATH" \
-          "install git — GitNexus needs it for the staleness check refresh-intel.sh audits"
-fi
+cfg_ignores_ok() {
+  [[ -f "$GREPAI_CFG" ]] || return 1
+  python3 - "$GREPAI_CFG" "${EXTRA_IGNORES[@]}" <<'PY'
+import re, sys
+try: s = open(sys.argv[1]).read()
+except Exception: sys.exit(1)
+m = re.search(r"^ignore:\n((?:[ \t]+- .*\n?)*)", s, re.M)
+if not m: sys.exit(1)
+present = set(re.findall(r"^[ \t]+- (.*?)[ \t]*$", m.group(1), re.M))
+sys.exit(0 if all(w in present for w in sys.argv[2:]) else 1)
+PY
+}
 
-if [[ "$DO_CLAUDE" == true ]]; then
-  if have claude; then
-    pf_ok "claude on PATH"
+claude_grepai_ok() {
+  [[ -f "$MCP_JSON" ]] || return 1
+  python3 - "$MCP_JSON" "$WS" <<'PY'
+import json, sys
+try: cfg = json.load(open(sys.argv[1]))
+except Exception: sys.exit(1)
+srv = (cfg.get("mcpServers") or {}).get("grepai")
+args = (srv or {}).get("args") or []
+sys.exit(0 if srv and "--workspace" in args and sys.argv[2] in args else 1)
+PY
+}
+
+# Only the TOP-LEVEL mcpServers block. ~/.claude.json also holds a "projects"
+# map whose per-project blocks contain the same server names — the old
+# `grep -q '"gitnexus"'` matched those and reported a user-scope entry that
+# was not there.
+claude_gitnexus_ok() {
+  python3 - <<'PY'
+import json, os, sys
+p = os.path.expanduser("~/.claude.json")
+try: cfg = json.load(open(p))
+except Exception: sys.exit(1)
+sys.exit(0 if (cfg.get("mcpServers") or {}).get("gitnexus") else 1)
+PY
+}
+
+# A user-scope grepai without --workspace shadows the project entry and serves
+# the local gob index instead of the qdrant workspace.
+claude_stray_grepai() {
+  python3 - <<'PY'
+import json, os, sys
+p = os.path.expanduser("~/.claude.json")
+try: cfg = json.load(open(p))
+except Exception: sys.exit(1)
+srv = (cfg.get("mcpServers") or {}).get("grepai")
+sys.exit(0 if srv and "--workspace" not in (srv.get("args") or []) else 1)
+PY
+}
+
+# An MCP entry pinned to an absolute nvm path breaks on `nvm use`. Report it so
+# step 5 can rewrite it instead of reporting "already registered" forever.
+claude_gitnexus_pinned() {
+  python3 - <<'PY'
+import json, os, sys
+p = os.path.expanduser("~/.claude.json")
+try: cfg = json.load(open(p))
+except Exception: sys.exit(1)
+srv = (cfg.get("mcpServers") or {}).get("gitnexus") or {}
+cmd = srv.get("command") or ""
+sys.exit(0 if cmd.startswith("/") else 1)
+PY
+}
+
+codex_srv()          { echo "grepai-$WS"; }
+codex_grepai_ok()    { have codex && codex mcp get "grepai-$WS" >/dev/null 2>&1; }
+codex_gitnexus_ok()  { have codex && codex mcp get gitnexus     >/dev/null 2>&1; }
+codex_stray_grepai() { have codex && codex mcp get grepai       >/dev/null 2>&1; }
+
+watch_status() { grepai watch --workspace "$WS" --status 2>&1 || true; }
+watcher_running() {   # $1 = output of watch_status
+  case "$1" in
+    *"not running"*|*"stopped"*|*"inactive"*) return 1 ;;
+    *"running"*|*"active"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+gn_status() { (cd "$ROOT" && gitnexus status 2>&1 || true); }
+gn_fresh()  { case "$1" in *"up-to-date"*|*"up to date"*) return 0 ;; *) return 1 ;; esac; }
+
+# refresh-intel.sh state: missing | current | outdated | modified
+# The stamp on line 2 carries the generator version and the sha256 of the rest
+# of the file, so an untouched but old script can be upgraded automatically
+# while a locally edited one is left alone.
+script_state() {
+  [[ -f "$REFRESH" ]] || { echo missing; return; }
+  python3 - "$REFRESH" "$VERSION" <<'PY'
+import hashlib, re, sys
+lines = open(sys.argv[1], "rb").read().split(b"\n")
+stamp = None
+for i, ln in enumerate(lines):
+    m = re.match(rb"^# code-intel-init: version=(\S+) body=([0-9a-f]{64})$", ln)
+    if m:
+        stamp = (i, m.group(1).decode(), m.group(2).decode()); break
+if stamp is None:
+    print("modified"); sys.exit(0)
+i, ver, want = stamp
+body = b"\n".join(lines[:i] + lines[i+1:])
+if hashlib.sha256(body).hexdigest() != want: print("modified")
+elif ver != sys.argv[2]:                     print("outdated")
+else:                                        print("current")
+PY
+}
+
+# docs block state: missing | present | orphaned  (orphaned = :start without
+# :end, which the rewrite regex cannot remove — it would append a second block)
+doc_state() {   # $1 = file
+  [[ -f "$1" ]] || { echo missing; return; }
+  python3 - "$1" <<'PY'
+import sys
+s = open(sys.argv[1], errors="replace").read()
+a, b = s.count("<!-- code-intel:start -->"), s.count("<!-- code-intel:end -->")
+print("missing" if a == 0 and b == 0 else ("present" if a == 1 and b == 1 else "orphaned"))
+PY
+}
+
+# GitNexus's analyzer imports `registerHooks` from node:module. It landed in
+# Node 22.15 (LTS) and 23.5, so on an older Node `gitnexus --version` still
+# runs happily while `gitnexus analyze` dies with a SyntaxError before it does
+# any work. Probe the capability rather than comparing version numbers — that
+# stays correct whatever Node does next.
+node_has_register_hooks() {
+  have node || return 1
+  node -e 'process.exit(typeof require("node:module").registerHooks === "function" ? 0 : 1)' >/dev/null 2>&1
+}
+
+# Step 8 adopts an AGENTS.md that the project "already keeps". Step 6 runs
+# `gitnexus analyze`, which WRITES ITS OWN AGENTS.md (and CLAUDE.md) holding a
+# <!-- gitnexus:start --> block — so a bare `-f AGENTS.md` test three steps
+# later adopts a file this very run created, and `--agent claude` ends up
+# leaving an AGENTS.md behind. Owned means: something in it besides that block.
+agents_md_project_owned() {
+  [[ -f "$ROOT/AGENTS.md" ]] || return 1
+  python3 - "$ROOT/AGENTS.md" <<'AGENTSPY'
+import re, sys
+s = open(sys.argv[1], errors="replace").read()
+s = re.sub(r'<!-- gitnexus:start -->.*?<!-- gitnexus:end -->', '', s, flags=re.S)
+sys.exit(0 if s.strip() else 1)
+AGENTSPY
+}
+
+git_is_repo()   { git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; }
+
+# Is there anything here worth indexing yet? A brand-new project directory is
+# empty, or holds only the files this script itself puts there. `git ls-files`
+# is no good for this: on a fresh `git init` nothing is staged, so a folder
+# full of uncommitted code would look empty.
+project_has_sources() {
+  find "$ROOT" -mindepth 1 \
+    \( -name .git -o -name .grepai -o -name .gitnexus -o -name node_modules \
+       -o -name .venv -o -name venv \) -prune -o \
+    -type f \
+    ! -name '.gitignore' ! -name 'CLAUDE.md' ! -name 'AGENTS.md' \
+    ! -name 'refresh-intel.sh' ! -name '.mcp.json' ! -name '.DS_Store' \
+    -print -quit 2>/dev/null | grep -q .
+}
+gitignore_ok() {
+  local e
+  [[ -f "$ROOT/.gitignore" ]] || return 1
+  for e in "${GITIGNORE_ENTRIES[@]}"; do
+    grep -qxF "$e" "$ROOT/.gitignore" || return 1
+  done
+  return 0
+}
+
+# ====================================================== service bootstrap ====
+
+container_cli() {
+  if have docker;  then echo docker
+  elif have podman; then echo podman
+  elif have nerdctl; then echo nerdctl
+  else echo ""; fi
+}
+
+# The CLI being on PATH says nothing about the daemon. Docker Desktop and
+# OrbStack both leave `docker` installed while stopped, and every command then
+# fails with "Cannot connect to the Docker daemon" — a different problem, with
+# a different fix, than not having Docker at all.
+container_daemon_ok() {
+  local cli="$1"
+  [[ -n "$cli" ]] || return 1
+  "$cli" info >/dev/null 2>&1
+}
+
+qdrant_wait() {   # $1 = seconds
+  local i=0
+  while (( i < $1 )); do
+    if qdrant_http_ok && qdrant_grpc_ok; then return 0; fi
+    sleep 1; i=$((i + 1))
+  done
+  return 1
+}
+
+# Returns 0 when qdrant is usable afterwards.
+ensure_qdrant() {
+  qdrant_http_ok && qdrant_grpc_ok && return 0
+  [[ "$BOOTSTRAP" == true ]] || return 1
+
+  local cli; cli="$(container_cli)"
+  [[ -n "$cli" ]] || return 1
+
+  if "$cli" ps -a --format '{{.Names}}' 2>/dev/null | grep -qxF "$QDRANT_CONTAINER"; then
+    # Existing container. If it does not publish 6334 we must not silently
+    # recreate it — that is where the vectors live.
+    local ports
+    ports="$("$cli" inspect -f '{{json .HostConfig.PortBindings}}' "$QDRANT_CONTAINER" 2>/dev/null || echo '{}')"
+    if [[ "$ports" != *"$QDRANT_PORT"* ]]; then
+      say "  container '$QDRANT_CONTAINER' exists but does not publish $QDRANT_PORT."
+      say "  Recreate it (this discards an unvolumed index):"
+      say "    $cli rm -f $QDRANT_CONTAINER"
+      say "    $cli run -d --name $QDRANT_CONTAINER -p $QDRANT_HTTP_PORT:6333 -p $QDRANT_PORT:6334 \\"
+      say "      -v $QDRANT_VOLUME:/qdrant/storage $QDRANT_IMAGE"
+      return 1
+    fi
+    say "  starting existing container '$QDRANT_CONTAINER'..."
+    if ! CRUN_ERR="$("$cli" start "$QDRANT_CONTAINER" 2>&1)"; then
+      say "  $cli start failed:"; printf '%s\n' "$CRUN_ERR" | sed 's/^/    /'
+      return 1
+    fi
   else
-    pf_need "claude not on PATH" "install Claude Code, or re-run with --agent codex"
+    say "  creating container '$QDRANT_CONTAINER' (volume $QDRANT_VOLUME)..."
+    say "  (first run also pulls the $QDRANT_IMAGE image — this can take a while)"
+    if ! CRUN_ERR="$("$cli" run -d --name "$QDRANT_CONTAINER" \
+        -p "$QDRANT_HTTP_PORT:6333" -p "$QDRANT_PORT:6334" \
+        -v "$QDRANT_VOLUME:/qdrant/storage" \
+        "$QDRANT_IMAGE" 2>&1)"; then
+      # Never swallow the runtime's own message: "Cannot connect to the Docker
+      # daemon" and "image not found" need completely different fixes, and a
+      # bare MISSING line sends you looking in the wrong place.
+      say "  $cli run failed:"; printf '%s\n' "$CRUN_ERR" | sed 's/^/    /'
+      return 1
+    fi
   fi
-fi
-if [[ "$DO_CODEX" == true ]]; then
-  if have codex; then
-    pf_ok "codex on PATH"
+  qdrant_wait 90
+}
+
+ensure_ollama() {
+  have ollama || return 1
+  ollama_up && return 0
+  [[ "$BOOTSTRAP" == true ]] || return 1
+  say "  starting ollama server..."
+  mkdir -p "$CONF_DIR"
+  nohup ollama serve >"$CONF_DIR/ollama.log" 2>&1 &
+  local i=0
+  while (( i < 30 )); do
+    ollama_up && return 0
+    sleep 1; i=$((i + 1))
+  done
+  return 1
+}
+
+ensure_model() {
+  ollama_has_model && return 0
+  [[ "$BOOTSTRAP" == true ]] || return 1
+  say "  pulling $EMBED_MODEL (this downloads ~1 GB, once per machine)..."
+  ollama pull "$EMBED_MODEL" || return 1
+  # A pull that printed "success" and a model the server will admit to having
+  # are not the same instant. Give it a few seconds before calling it a
+  # failure, and if it still is not there, show what the server does have —
+  # otherwise "not pulled" right after a successful pull is unexplainable.
+  local i=0
+  while (( i < 10 )); do
+    ollama_has_model && return 0
+    sleep 1; i=$((i + 1))
+  done
+  say "  the pull reported success but the server still does not list"
+  say "  '$EMBED_MODEL'. What it does have:"
+  ollama list 2>&1 | sed 's/^/    /'
+  return 1
+}
+
+# ============================================================== preflight ====
+#
+# Collects everything that is wrong and reports it in one pass. Covers the
+# dependencies of the GENERATED refresh-intel.sh too, not only this run: the
+# watcher embeds through ollama on every save and refresh-intel.sh queries
+# qdrant after every task, so a machine that installs cleanly but cannot
+# refresh is not set up — and that failure would surface much later, inside an
+# agent run, looking like a code problem rather than a stopped container.
+
+PF_N=0
+pf_need() { PF_WHAT[$PF_N]="$1"; PF_FIX[$PF_N]="$2"; PF_N=$((PF_N + 1)); row "MISSING" "$1"; }
+pf_ok()   { row "ok" "$1"; }
+
+preflight() {
+  hr "Preflight (this script and the refresh-intel.sh it generates)"
+
+  if (( ${BASH_VERSINFO[0]:-3} < 3 )); then
+    pf_need "bash is too old" "install bash 3.2 or newer"
+  fi
+
+  if have grepai; then pf_ok "grepai on PATH"
+  else pf_need "grepai not on PATH" "install GrepAI — it owns the workspace, watcher and search"; fi
+
+  if ! have gitnexus; then
+    pf_need "gitnexus not on PATH" "npm i -g gitnexus"
+  elif ! gitnexus --version >/dev/null 2>&1; then
+    pf_need "gitnexus is on PATH but does not run" \
+            "npm's global bin is an nvm-versioned shim that a node switch leaves broken: npm i -g gitnexus"
   else
-    pf_need "codex not on PATH" "install Codex, or re-run with --agent claude"
+    pf_ok "gitnexus $(gitnexus --version 2>/dev/null | head -1) runs"
+    # Runs is not the same as works: the analyzer needs a newer Node than the
+    # CLI's --version does. Warn rather than fail — GrepAI is unaffected and
+    # wiring the project up is still worth doing.
+    if have node && ! node_has_register_hooks; then
+      row "warn" "node $(node --version 2>/dev/null) is too old for 'gitnexus analyze'"
+      row ""     "it needs module.registerHooks, added in Node 22.15 / 23.5;"
+      row ""     "fix: brew upgrade node, then npm i -g gitnexus"
+    fi
   fi
-fi
 
-# qdrant answers on two ports and both matter. 6333 is the HTTP health and API
-# port this check talks to; $QDRANT_PORT (6334) is the gRPC port grepai
-# actually stores and queries vectors on. A container published with only 6333
-# passes a naive health check and then fails every single index, so both are
-# checked.
-if have curl; then
-  QDRANT_CODE="$(curl -s -o /dev/null -w '%{http_code}' "$QDRANT_HTTP/healthz" 2>/dev/null || true)"
-  if [[ "$QDRANT_CODE" == "200" ]]; then
-    pf_ok "qdrant HTTP healthy at $QDRANT_HTTP"
+  if have python3; then pf_ok "python3 on PATH"
+  else pf_need "python3 not on PATH" "install Python 3 — used for every YAML/JSON edit"; fi
+  if have curl; then pf_ok "curl on PATH"
+  else pf_need "curl not on PATH" "install curl — qdrant health checks"; fi
+  if have git; then pf_ok "git on PATH"
+  else pf_need "git not on PATH" "install git — GitNexus derives staleness from it"; fi
+
+  if [[ "$DO_CLAUDE" == true ]]; then
+    if have claude; then pf_ok "claude on PATH"
+    else pf_need "claude not on PATH" "install Claude Code, or use --agent codex"; fi
+  fi
+  if [[ "$DO_CODEX" == true ]]; then
+    if have codex; then pf_ok "codex on PATH"
+    else pf_need "codex not on PATH" "install Codex, or use --agent claude"; fi
+  fi
+
+  # rtk is optional, but the generated script routes through it when present,
+  # so an installed-but-broken rtk must not pass unnoticed.
+  if have rtk; then
+    if rtk grepai --version >/dev/null 2>&1 || rtk grepai --help >/dev/null 2>&1; then
+      pf_ok "rtk on PATH and proxies grepai — refresh-intel.sh will use it"
+    else
+      pf_need "rtk is on PATH but 'rtk grepai' does not run" \
+              "fix or uninstall rtk — refresh-intel.sh routes through it whenever it is present"
+    fi
   else
-    pf_need "qdrant not healthy at $QDRANT_HTTP/healthz (HTTP ${QDRANT_CODE:-no response})" \
-            "start it: docker run -d --name grepai-qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant"
+    row "note" "rtk not on PATH (optional; refresh-intel.sh uses the raw binaries)"
   fi
-else
-  pf_need "qdrant health unknown — no curl to check it with" "install curl, then re-run"
-fi
 
-if pf_port_open 127.0.0.1 "$QDRANT_PORT"; then
-  pf_ok "qdrant gRPC port $QDRANT_PORT open (grepai indexes through it)"
-else
-  pf_need "qdrant gRPC port $QDRANT_PORT closed — grepai reads and writes vectors there, not on 6333" \
-          "publish it too: docker run -d --name grepai-qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant"
-fi
+  if qdrant_http_ok && qdrant_grpc_ok; then
+    pf_ok "qdrant healthy on $QDRANT_HTTP_PORT (HTTP) and $QDRANT_PORT (gRPC)"
+  elif ensure_qdrant; then
+    pf_ok "qdrant started and healthy on $QDRANT_HTTP_PORT and $QDRANT_PORT"
+  else
+    if qdrant_http_ok && ! qdrant_grpc_ok; then
+      pf_need "qdrant answers on $QDRANT_HTTP_PORT but gRPC $QDRANT_PORT is closed — grepai reads and writes vectors there, so every index would fail" \
+              "republish the container with both ports (see below)"
+    elif [[ -z "$(container_cli)" ]]; then
+      pf_need "qdrant not reachable at $QDRANT_HTTP and no container runtime found" \
+              "install Docker Desktop / OrbStack / podman, or run qdrant yourself on $QDRANT_HTTP_PORT and $QDRANT_PORT"
+    elif ! container_daemon_ok "$(container_cli)"; then
+      pf_need "$(container_cli) is installed but its daemon is not running — that is why qdrant could not be started" \
+              "start Docker Desktop or OrbStack, wait for it to come up, then re-run this command"
+    else
+      pf_need "qdrant not reachable at $QDRANT_HTTP" \
+              "$(container_cli) run -d --name $QDRANT_CONTAINER -p $QDRANT_HTTP_PORT:6333 -p $QDRANT_PORT:6334 -v $QDRANT_VOLUME:/qdrant/storage $QDRANT_IMAGE"
+    fi
+  fi
 
-if ! have ollama; then
-  pf_need "ollama not on PATH" \
-          "install ollama — it serves the $EMBED_MODEL embedder on every index"
-else
-  pf_ok "ollama on PATH"
-  # `ollama list` is itself a call to the server, so one probe answers both
-  # "is the daemon up" and "is the model pulled". They are reported apart so a
-  # stopped server says so instead of masquerading as a missing model.
-  if OLLAMA_MODELS="$(ollama list 2>/dev/null)"; then
-    pf_ok "ollama server responding at $OLLAMA_HTTP"
-    if [[ "$OLLAMA_MODELS" == *"$EMBED_MODEL"* ]]; then
-      pf_ok "embedding model $EMBED_MODEL pulled"
+  if ! have ollama; then
+    pf_need "ollama not on PATH" "install ollama — it serves $EMBED_MODEL on every index"
+  elif ensure_ollama; then
+    pf_ok "ollama responding at $OLLAMA_HTTP"
+    if ensure_model; then
+      pf_ok "embedding model $EMBED_MODEL available"
     else
       pf_need "embedding model $EMBED_MODEL not pulled" "ollama pull $EMBED_MODEL"
     fi
   else
     pf_need "ollama server not responding at $OLLAMA_HTTP" "start it: ollama serve"
   fi
-fi
 
-# Neither of the following blocks a run.
-if have rtk; then
-  pf_ok "rtk on PATH — refresh-intel.sh will route through it"
-else
-  pf_row "note" "rtk not on PATH (optional; refresh-intel.sh falls back to the raw binaries)"
-fi
-
-if git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
-  pf_ok "$ROOT is a git repository"
-else
-  pf_row "warn" "$ROOT is not a git repository — GitNexus staleness detection will be limited"
-fi
-
-echo
-
-if (( ${#PF_FAIL_WHAT[@]} > 0 )); then
-  {
-    pf_n=${#PF_FAIL_WHAT[@]}
-    pf_word="dependencies"; (( pf_n == 1 )) && pf_word="dependency"
-    echo "[ERROR: preflight found $pf_n unmet $pf_word — nothing was changed]"
-    echo
-    pf_i=0
-    while (( pf_i < ${#PF_FAIL_WHAT[@]} )); do
-      echo "  - ${PF_FAIL_WHAT[$pf_i]}"
-      echo "    fix: ${PF_FAIL_FIX[$pf_i]}"
-      pf_i=$((pf_i + 1))
-    done
-    echo
-    echo "All of the above are needed by code-intel-init AND by the generated"
-    echo "refresh-intel.sh, which runs after every task that changes the codebase."
-    echo "Install or start what is listed, then re-run this command."
-  } >&2
-  exit 1
-fi
-
-if [[ "$APPLY" != true ]]; then
-  echo "PREVIEW — no changes will be made (pass --apply to act)"
-  echo "========================================================"
-  echo
-
-  # Tools and services were already reported by the preflight above, which
-  # halts the run when any of them is missing — so everything below can assume
-  # they are present and working.
-  plan() { printf '  %-8s %s\n' "$1" "$2"; }
-
-  echo "Would do"
-  if have grepai && grepai workspace show "$WS" >/dev/null 2>&1; then
-    plan "keep" "workspace '$WS' exists"
-    PLAN_WS_SHOW="$(grepai workspace show "$WS" 2>/dev/null || true)"
-    if [[ "$PLAN_WS_SHOW" == *": $ROOT"* ]]; then
-      plan "keep" "project already mapped into '$WS'"
-    elif printf '%s\n' "$PLAN_WS_SHOW" | grep -q "^  - $(basename "$ROOT"):"; then
-      # Same project name, different path — `workspace add` will refuse. Say so
-      # here rather than printing an ADD that cannot succeed.
-      plan "CONFLICT" "workspace '$WS' maps '$(basename "$ROOT")' to another path:"
-      printf '%s\n' "$PLAN_WS_SHOW" | sed -n 's/^  - /           /p'
-      plan "" "remove that entry and re-add, or --apply will stop here"
-    else
-      plan "ADD" "map $ROOT into workspace '$WS'"
-    fi
-  else
-    plan "CREATE" "workspace '$WS' (qdrant, $EMBED_PROVIDER/$EMBED_MODEL)"
-    plan "ADD" "map $ROOT into workspace '$WS'"
-  fi
-
-  if [[ -f "$ROOT/.grepai/config.yaml" ]]; then
-    PLAN_CHUNK="$(grep -A1 '^chunking:' "$ROOT/.grepai/config.yaml" 2>/dev/null || true)"
-    if [[ "$PLAN_CHUNK" == *"size: $CHUNK_SIZE"* ]]; then
-      plan "keep" ".grepai/config.yaml chunking already $CHUNK_SIZE/$CHUNK_OVERLAP"
-    else
-      plan "EDIT" ".grepai/config.yaml chunking -> $CHUNK_SIZE/$CHUNK_OVERLAP"
-    fi
-    grep -q 'package-lock.json' "$ROOT/.grepai/config.yaml" 2>/dev/null \
-      && plan "keep" "lock files already in the ignore list" \
-      || plan "EDIT" "add lock files to the ignore list"
-  else
-    plan "CREATE" ".grepai/config.yaml (chunking $CHUNK_SIZE/$CHUNK_OVERLAP + lock-file ignores)"
-  fi
-
-  if [[ "$DO_CLAUDE" == true ]]; then
-    if [[ -f "$ROOT/.mcp.json" ]] && grep -q "\"$WS\"" "$ROOT/.mcp.json" 2>/dev/null; then
-      plan "keep" "claude: 'grepai' already in .mcp.json for '$WS'"
-    else
-      plan "ADD" "claude: 'grepai' in .mcp.json with --workspace $WS"
-    fi
-    grep -q '"gitnexus"' "$HOME/.claude.json" 2>/dev/null \
-      && plan "keep" "claude: 'gitnexus' already at user scope" \
-      || plan "ADD" "claude: 'gitnexus' at user scope"
-  fi
-  if [[ "$DO_CODEX" == true ]]; then
-    if have codex && codex mcp get "grepai-$WS" >/dev/null 2>&1; then
-      plan "keep" "codex: 'grepai-$WS' already registered"
-    else
-      plan "ADD" "codex: 'grepai-$WS' with --workspace $WS"
-    fi
-    if have codex && codex mcp get gitnexus >/dev/null 2>&1; then
-      plan "keep" "codex: 'gitnexus' already registered"
-    else
-      plan "ADD" "codex: 'gitnexus'"
-    fi
-  fi
-
-  if [[ "$RUN_ANALYZE" == true ]]; then
-    plan "RUN" "gitnexus analyze in $ROOT"
-  else
-    plan "skip" "gitnexus analyze (--no-analyze)"
-  fi
-
-  if [[ -f "$ROOT/refresh-intel.sh" && "$FORCE_SCRIPT" != true ]]; then
-    plan "keep" "refresh-intel.sh exists (--force-script overwrites)"
-  else
-    plan "WRITE" "refresh-intel.sh"
-  fi
-
-  if [[ "$WRITE_DOCS" == true ]]; then
-    for doc in CLAUDE.md AGENTS.md; do
-      [[ "$doc" == "CLAUDE.md" && "$DO_CLAUDE" != true ]] && continue
-      [[ "$doc" == "AGENTS.md" && "$DO_CODEX" != true && ! -f "$ROOT/AGENTS.md" ]] && continue
-      if [[ -f "$ROOT/$doc" ]] && grep -q '<!-- code-intel:start -->' "$ROOT/$doc" 2>/dev/null; then
-        if [[ "$FORCE_DOCS" == true ]]; then
-          plan "REWRITE" "$doc code-intel block (--force-docs)"
-        else
-          plan "keep" "$doc already has a code-intel block"
-        fi
-      else
-        plan "WRITE" "$doc code-intel block"
-      fi
-    done
-  else
-    plan "skip" "CLAUDE.md / AGENTS.md (--no-docs)"
-  fi
-
-  if [[ "$START_WATCH" == true ]]; then
-    PLAN_WATCH=""
-    have grepai && PLAN_WATCH="$(grepai watch --workspace "$WS" --status 2>&1 || true)"
-    if [[ "$PLAN_WATCH" == *"running"* && "$PLAN_WATCH" != *"not running"* ]]; then
-      plan "keep" "watcher already running for '$WS'"
-    else
-      plan "START" "watcher for '$WS'"
-    fi
-  else
-    plan "skip" "watcher (--no-watch)"
-  fi
-
-  echo
-  echo "Nothing was changed. To do the above:"
-  echo "  code-intel-init $WS --path $ROOT --agent $AGENT_TARGET --apply"
-  exit 0
-fi
-
-echo "1. GrepAI workspace"
-echo "-------------------"
-if grepai workspace show "$WS" >/dev/null 2>&1; then
-  echo "workspace '$WS' already exists, leaving its config untouched"
-else
-  grepai workspace create "$WS" \
-    --backend qdrant \
-    --qdrant-endpoint "$QDRANT_ENDPOINT" \
-    --qdrant-port "$QDRANT_PORT" \
-    --provider "$EMBED_PROVIDER" \
-    --model "$EMBED_MODEL" \
-    --yes
-  echo "created workspace '$WS'"
-fi
-echo
-
-echo "2. Project mapping"
-echo "------------------"
-WS_SHOW="$(grepai workspace show "$WS" 2>/dev/null || true)"
-if [[ "$WS_SHOW" == *": $ROOT"* ]]; then
-  echo "project already mapped into '$WS'"
-else
-  # grepai keys projects inside a workspace by NAME, derived from the directory
-  # basename — not by path. So a workspace that already holds a project of this
-  # name pointing somewhere ELSE cannot simply be added to: `workspace add`
-  # refuses. That is what happens after a project directory is renamed or
-  # re-cloned under a different name, and it is worth reporting loudly, because
-  # the symptom is silent: searches keep working, they just answer from the old
-  # path. A watcher will even recreate that path and write its index there, so
-  # the stale directory looks alive.
-  if ADD_OUT="$(grepai workspace add "$WS" "$ROOT" 2>&1)"; then
-    echo "added $ROOT to '$WS'"
-  elif [[ "$ADD_OUT" == *"already exists"* ]]; then
+  say ""
+  if (( PF_N > 0 )); then
     {
-      echo "[ERROR: workspace '$WS' already maps a project of this name to a different path]"
-      echo
-      echo "  wanted:  $ROOT"
-      printf '%s\n' "$WS_SHOW" | sed -n 's/^  - /  mapped:  /p'
-      echo
-      echo "grepai identifies projects by name, so the entry cannot be repointed"
-      echo "in place. Nothing was changed. To repair it:"
-      echo
-      printf '%s\n' "$WS_SHOW" | sed -n 's/^  - \([^:]*\):.*/  grepai workspace remove '"$WS"' \1/p'
-      echo "  grepai workspace add $WS $ROOT"
-      echo
-      echo "Then re-run this command. If the mapped path is a leftover directory"
-      echo "holding nothing but .grepai/, it can be deleted afterwards."
+      w="dependencies"; (( PF_N == 1 )) && w="dependency"
+      say "[ERROR: preflight found $PF_N unmet $w — nothing was changed]"
+      say ""
+      i=0
+      while (( i < PF_N )); do
+        say "  - ${PF_WHAT[$i]}"
+        say "    fix: ${PF_FIX[$i]}"
+        i=$((i + 1))
+      done
+      say ""
+      say "All of it is needed by code-intel-init AND by the generated"
+      say "refresh-intel.sh, which runs after every task that changes code."
     } >&2
     exit 1
-  else
-    printf '%s\n' "$ADD_OUT" >&2
-    exit 1
   fi
-fi
-echo
+}
 
-echo "3. Chunking + ignore config"
-echo "---------------------------"
-GREPAI_CFG="$ROOT/.grepai/config.yaml"
-cfg_sum() { [[ -f "$GREPAI_CFG" ]] && cksum < "$GREPAI_CFG" || echo absent; }
-CFG_BEFORE="$(cfg_sum)"
-if [[ ! -f "$GREPAI_CFG" ]]; then
-  (cd "$ROOT" && grepai init --yes -p "$EMBED_PROVIDER" -b qdrant -m "$EMBED_MODEL" >/dev/null)
-  echo "created $GREPAI_CFG"
-fi
-if [[ -f "$GREPAI_CFG" ]]; then
-  python3 - "$GREPAI_CFG" "$CHUNK_SIZE" "$CHUNK_OVERLAP" "${EXTRA_IGNORES[@]}" <<'CHUNK_PY'
-import re, sys
-path, size, overlap = sys.argv[1], sys.argv[2], sys.argv[3]
-ignores = sys.argv[4:]
-s = open(path).read()
-m = re.search(r"^chunking:\n(?P<i>[ \t]+)size: (?P<s>\d+)\n[ \t]+overlap: (?P<o>\d+)$", s, re.M)
-if not m:
-    print("WARNING: no chunking block in %s — set size/overlap by hand" % path)
-    sys.exit(0)
-if m.group("s") == size and m.group("o") == overlap:
-    print("chunking already size=%s overlap=%s" % (size, overlap))
-    sys.exit(0)
-i = m.group("i")
-s = s[:m.start()] + "chunking:\n%ssize: %s\n%soverlap: %s" % (i, size, i, overlap) + s[m.end():]
-open(path, "w").write(s)
-print("chunking set to size=%s overlap=%s (was %s/%s) — restart the watcher to apply"
-      % (size, overlap, m.group("s"), m.group("o")))
-CHUNK_PY
-  python3 - "$GREPAI_CFG" "${EXTRA_IGNORES[@]}" <<'IGNORE_PY'
-import re, sys
-path, wanted = sys.argv[1], sys.argv[2:]
-s = open(path).read()
-m = re.search(r"^ignore:\n(?P<items>(?:[ \t]+- .*\n?)*)", s, re.M)
-if not m:
-    print("WARNING: no ignore block in %s — add lock files by hand" % path)
-    sys.exit(0)
-items = m.group("items")
-indent = re.match(r"[ \t]+", items).group(0) if items.strip() else "    "
-present = set(re.findall(r"^[ \t]+- (.*)$", items, re.M))
-missing = [w for w in wanted if w not in present]
-if not missing:
-    print("ignore list already covers the lock files")
-    sys.exit(0)
-if items and not items.endswith("\n"):
-    items += "\n"
-items += "".join("%s- %s\n" % (indent, w) for w in missing)
-s = s[:m.start("items")] + items + s[m.end("items"):]
-open(path, "w").write(s)
-print("ignore += %s" % ", ".join(missing))
-IGNORE_PY
-else
-  echo "WARNING: no $GREPAI_CFG — chunking left at the GrepAI default (512),"
-  echo "         which overflows the ${EMBED_MODEL} context window."
-fi
+# ============================================ refresh-intel.sh generation ====
 
-# A running watcher rewrites this file from its in-memory copy on every index,
-# which would silently revert the edits above. Restart it so it reloads them.
-if [[ "$(cfg_sum)" != "$CFG_BEFORE" ]]; then
-  CFG_WATCH="$(grepai watch --workspace "$WS" --status 2>&1 || true)"
-  if [[ "$CFG_WATCH" == *"running"* && "$CFG_WATCH" != *"not running"* ]]; then
-    grepai watch --workspace "$WS" --stop >/dev/null 2>&1 || true
-    grepai watch --workspace "$WS" --background >/dev/null 2>&1 || true
-    echo "restarted the running watcher so it reloads the config (it would"
-    echo "otherwise overwrite these edits on its next index write)"
-  fi
-fi
-echo
-
-echo "4. GrepAI MCP registration"
-echo "--------------------------"
-MCP_JSON="$ROOT/.mcp.json"
-NEEDS_MCP=true
-if [[ "$DO_CLAUDE" == true ]]; then
-  if [[ -f "$MCP_JSON" ]] && python3 - "$MCP_JSON" "$WS" <<'PY'
-import json, sys
-try:
-    cfg = json.load(open(sys.argv[1]))
-except Exception:
-    sys.exit(1)
-srv = (cfg.get("mcpServers") or {}).get("grepai")
-sys.exit(0 if srv and sys.argv[2] in (srv.get("args") or []) else 1)
-PY
-  then
-    NEEDS_MCP=false
-  fi
-
-  if [[ "$NEEDS_MCP" == true ]]; then
-    (cd "$ROOT" && claude mcp add grepai -s project -- grepai mcp-serve --workspace "$WS")
-    echo "claude: registered 'grepai' in $MCP_JSON with --workspace $WS"
-  else
-    echo "claude: 'grepai' already registered for '$WS' in $MCP_JSON"
-  fi
-
-  if python3 - <<'PY'
-import json, os, sys
-p = os.path.expanduser("~/.claude.json")
-try:
-    cfg = json.load(open(p))
-except Exception:
-    sys.exit(1)
-srv = (cfg.get("mcpServers") or {}).get("grepai")
-sys.exit(0 if srv and "--workspace" not in (srv.get("args") or []) else 1)
-PY
-  then
-    echo "claude: WARNING — a user-scope 'grepai' without --workspace exists in ~/.claude.json."
-    echo "        It serves the local .grepai (gob) index and may shadow this project entry."
-    echo "        Remove it with:  claude mcp remove grepai -s user"
-  fi
-fi
-
-if [[ "$DO_CODEX" == true ]]; then
-  # ~/.codex/config.toml is global: one entry per project, named for the workspace.
-  CODEX_SRV="grepai-$WS"
-  if codex mcp get "$CODEX_SRV" >/dev/null 2>&1; then
-    echo "codex: '$CODEX_SRV' already registered in ~/.codex/config.toml"
-  else
-    codex mcp add "$CODEX_SRV" -- grepai mcp-serve --workspace "$WS" >/dev/null
-    echo "codex: registered '$CODEX_SRV' in ~/.codex/config.toml with --workspace $WS"
-  fi
-
-  if codex mcp get grepai >/dev/null 2>&1; then
-    echo "codex: WARNING — a plain 'grepai' entry also exists in ~/.codex/config.toml."
-    echo "        Without --workspace it serves the local .grepai (gob) index, not this"
-    echo "        workspace. Remove it with:  codex mcp remove grepai"
-  fi
-fi
-echo
-
-echo "5. GitNexus MCP registration (global, serves every indexed repo)"
-echo "----------------------------------------------------------------"
-if [[ "$DO_CLAUDE" == true ]]; then
-  if python3 - <<'PY'
-import json, os, sys
-p = os.path.expanduser("~/.claude.json")
-try:
-    cfg = json.load(open(p))
-except Exception:
-    sys.exit(1)
-sys.exit(0 if (cfg.get("mcpServers") or {}).get("gitnexus") else 1)
-PY
-  then
-    echo "claude: 'gitnexus' already registered at user scope"
-  else
-    claude mcp add gitnexus -s user -- "$(command -v gitnexus)" mcp
-    echo "claude: registered 'gitnexus' at user scope"
-  fi
-fi
-
-if [[ "$DO_CODEX" == true ]]; then
-  if codex mcp get gitnexus >/dev/null 2>&1; then
-    echo "codex: 'gitnexus' already registered in ~/.codex/config.toml"
-  else
-    codex mcp add gitnexus -- "$(command -v gitnexus)" mcp >/dev/null
-    echo "codex: registered 'gitnexus' in ~/.codex/config.toml"
-  fi
-fi
-echo
-
-echo "6. GitNexus index"
-echo "-----------------"
-if [[ "$RUN_ANALYZE" == true ]]; then
-  (
-    cd "$ROOT"
-    if GN_OUT="$(gitnexus analyze --embeddings 2>&1)"; then
-      echo "$GN_OUT" | tail -20
-    else
-      GN_STATUS=$?
-      echo "$GN_OUT" | tail -20 >&2
-      if [[ "$GN_OUT" == *"Embedding generation completed without persisted embeddings"* ]]; then
-        echo "No GitNexus embeddings were persisted; retrying with structural indexing."
-        gitnexus analyze --force
-      else
-        exit "$GN_STATUS"
-      fi
-    fi
-  )
-else
-  echo "skipped (--no-analyze)"
-fi
-echo
-
-echo "7. refresh-intel.sh"
-echo "-------------------"
-REFRESH="$ROOT/refresh-intel.sh"
-if [[ -f "$REFRESH" && "$FORCE_SCRIPT" != true ]]; then
-  echo "$REFRESH already exists, left untouched (use --force-script to overwrite)"
-else
-  cat > "$REFRESH.tmp" <<'REFRESH_EOF'
+render_refresh() {   # writes the finished, stamped script to $1
+  local out="$1" tpl
+  tpl="$(mktemp)"
+  cat > "$tpl" <<'REFRESH_TPL'
 #!/usr/bin/env bash
+__STAMP__
 #
 # refresh-intel.sh — re-index and audit this project's code intelligence.
 #
@@ -921,77 +893,78 @@ else
 # ---------------------------------------------------------------------------
 #
 # This is a LOCAL DEVELOPER TOOL. It is not part of this project's build, its
-# test suite or its CI, and no application code depends on it. All it does is
-# keep two code-search indexes fresh so that AI coding agents can navigate the
-# repository: a GitNexus knowledge graph and a GrepAI semantic index.
+# test suite or its CI, and no application code depends on it. It keeps two
+# code-search indexes fresh so AI coding agents can navigate the repository:
+# a GitNexus knowledge graph and a GrepAI semantic index.
 #
-# It is GENERATED. `code-intel-init` — a script that lives OUTSIDE this
-# repository, normally in ~/.local/bin — writes this file and owns it. Hand
-# edits are lost the next time it runs; change code-intel-init instead.
+# It is GENERATED by `code-intel-init`, which lives OUTSIDE this repository
+# (normally ~/.local/bin). The stamp on line 2 is a version and a hash of the
+# rest of this file: code-intel-init regenerates this script when it is out of
+# date, and leaves it alone once you edit it. Prefer changing code-intel-init.
 #
 # It needs a stack that is NOT part of this repository and that `npm install`
-# (or whatever package manager this project uses) does NOT provide:
-#
-#   - the `grepai` and `gitnexus` CLIs on PATH
-#   - a running qdrant service (HTTP on 6333 AND gRPC on 6334)
-#   - a running ollama server with a specific embedding model pulled
+# does not provide: the `grepai` and `gitnexus` CLIs, a running qdrant (HTTP
+# and gRPC) and a running ollama with one embedding model pulled.
 #
 # ---------------------------------------------------------------------------
 # On a machine that never ran code-intel-init, THIS SCRIPT WILL FAIL — and
 # that failure is EXPECTED AND HARMLESS.
 # ---------------------------------------------------------------------------
 #
-# It stops before touching anything and exits 1 with a message like
+# It stops before touching anything and exits 1 with
 #
-#   [ERROR: refresh-intel preflight found 3 unmet dependencies — nothing was indexed]
+#   [ERROR: refresh-intel preflight found N unmet dependencies — nothing was indexed]
 #
-# followed by what is missing and how to install it. That message says nothing
-# whatsoever about the health of this project's code. Do NOT try to "fix" the
-# repository in response to it, and do NOT add these services to the project's
-# own dependencies, CI or docker-compose.
+# That message says nothing about the health of this project's code. Do NOT
+# "fix" the repository in response to it, and do NOT add these services to the
+# project's dependencies, CI or docker-compose.
 #
-# If you are a coding agent: CLAUDE.md / AGENTS.md here may instruct you to run
-# this after every task that changes code. That instruction silently assumes
-# the stack above is installed. If the preflight fails, skip this script, say
-# so plainly in your summary, and get on with the real task — these indexes are
-# a navigation convenience, never a correctness gate. Nothing about the
-# project is broken.
+# If you are a coding agent: CLAUDE.md / AGENTS.md here may tell you to run
+# this after every task that changes code. That instruction assumes the stack
+# above is installed. If the preflight fails, skip this script, say so plainly
+# in your summary, and get on with the real task — these indexes are a
+# navigation convenience, never a correctness gate.
 #
-# If you inherited this repo and do not want any of it, your options are:
+# To get rid of it: delete this file and the <!-- code-intel --> block in
+# CLAUDE.md / AGENTS.md, or run `code-intel-init --remove --apply` here.
 #
-#   - ignore this file (nothing else in the project reads it),
-#   - delete it, along with the <!-- code-intel --> block in CLAUDE.md /
-#     AGENTS.md that points at it,
-#   - or install the stack, by running code-intel-init against this project.
-#
-# ---------------------------------------------------------------------------
-#
-# Normal use, once the stack IS installed — run it after every task that
-# changes the codebase, before committing:
-#
-#   ./refresh-intel.sh           re-index, make sure the watcher runs, audit
+# Usage:
+#   ./refresh-intel.sh           re-index, ensure the watcher runs, audit
 #   ./refresh-intel.sh --audit   audit only, no re-indexing
 #
-# It exits non-zero if either index is stale or misconfigured.
+# Exits non-zero if either index is stale or misconfigured.
 
 set -euo pipefail
 
-ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE="__WORKSPACE__"
+# Canonical path, not just `pwd -P`: bash's builtin can hand back the path as
+# it was typed, so on a case-insensitive volume (stock macOS) ~/Projects and
+# ~/projects produce different strings for one directory and the audit below
+# would claim the workspace does not map this project. /bin/pwd goes through
+# getcwd() and returns what the filesystem actually stores.
+canon() {
+  local d="$1" out
+  [[ -d "$d" ]] || { printf '%s\n' "$d"; return 0; }
+  if out="$( cd -- "$d" 2>/dev/null && { if [[ -x /bin/pwd ]]; then /bin/pwd -P; else pwd -P; fi; } )"; then
+    printf '%s\n' "$out"
+  else
+    printf '%s\n' "$d"
+  fi
+}
 
-# Baked in by code-intel-init so this script can check the services it needs
-# without importing anything. Re-run code-intel-init to change them.
+ROOT="$(canon "$(dirname -- "${BASH_SOURCE[0]}")")"
+WORKSPACE="__WORKSPACE__"
+PROJECT="__PROJECT__"
+
+QDRANT_HOST="__QDRANT_HOST__"
 QDRANT_HTTP="__QDRANT_HTTP__"
 QDRANT_PORT="__QDRANT_PORT__"
 EMBED_MODEL="__EMBED_MODEL__"
 
 # rtk is a token-saving CLI proxy; fall back to the raw binaries without it.
 if command -v rtk >/dev/null 2>&1; then
-  GREPAI=(rtk grepai)
-  GITNEXUS=(rtk gitnexus)
+  GREPAI=(rtk grepai); GITNEXUS=(rtk gitnexus)
 else
-  GREPAI=(grepai)
-  GITNEXUS=(gitnexus)
+  GREPAI=(grepai);     GITNEXUS=(gitnexus)
 fi
 
 DO_GREPAI=true
@@ -1009,42 +982,32 @@ Usage:
 USAGE
 }
 
-for arg in "$@"; do
-  case "$arg" in
-    --audit)       AUDIT_ONLY=true ;;
-    --no-grepai)   DO_GREPAI=false ;;
-    --no-gitnexus) DO_GITNEXUS=false ;;
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --audit)       AUDIT_ONLY=true; shift ;;
+    --no-grepai)   DO_GREPAI=false; shift ;;
+    --no-gitnexus) DO_GITNEXUS=false; shift ;;
     -h|--help)     usage; exit 0 ;;
-    *)
-      echo "Unknown argument: $arg" >&2
-      echo >&2
-      usage >&2
-      exit 1
-      ;;
+    *) echo "Unknown argument: $1" >&2; echo >&2; usage >&2; exit 1 ;;
   esac
 done
 
-fail() {
-  echo "ERROR: $1" >&2
-  FAILURES=$((FAILURES + 1))
+fail() { echo "ERROR: $1" >&2; FAILURES=$((FAILURES + 1)); }
+
+watcher_running() {
+  case "$1" in
+    *"not running"*|*"stopped"*|*"inactive"*) return 1 ;;
+    *"running"*|*"active"*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # -------------------------------------------------------------- preflight ----
-#
-# This script is the last gate before a commit, so it checks its dependencies
-# before doing any work. Without the check, a stopped qdrant or a missing
-# embedding model shows up as an empty index or a watcher that dies on its
-# first embed — failures that read like a code problem and get debugged as
-# one. Everything missing is collected and reported at once, then this exits.
-#
-# Only what the selected mode actually needs is required: --audit reads status
-# and never embeds, so it does not need ollama.
+# Only what the selected mode needs: --audit reads status and never embeds, so
+# it does not require ollama.
 
-RP_WHAT=()
-RP_FIX=()
-rp_need() { RP_WHAT+=("$1"); RP_FIX+=("$2"); }
-
-# bash's own /dev/tcp — no nc, and no timeout(1), which macOS does not ship.
+RP_N=0
+rp_need() { RP_WHAT[$RP_N]="$1"; RP_FIX[$RP_N]="$2"; RP_N=$((RP_N + 1)); }
 rp_port_open() { (exec 3<>"/dev/tcp/$1/$2") >/dev/null 2>&1; }
 
 if [[ "$DO_GREPAI" == true ]]; then
@@ -1052,27 +1015,25 @@ if [[ "$DO_GREPAI" == true ]]; then
     || rp_need "grepai not on PATH" "install GrepAI, or re-run with --no-grepai"
 
   if command -v curl >/dev/null 2>&1; then
-    # 6333 is qdrant's HTTP health port; QDRANT_PORT (6334) is the gRPC port
-    # grepai actually stores and queries vectors on. Both must be up.
     RP_QCODE="$(curl -s -o /dev/null -w '%{http_code}' "$QDRANT_HTTP/healthz" 2>/dev/null || true)"
     [[ "$RP_QCODE" == "200" ]] \
       || rp_need "qdrant not healthy at $QDRANT_HTTP/healthz (HTTP ${RP_QCODE:-no response})" \
-                 "start it: docker run -d --name grepai-qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant"
+                 "start it, or run: code-intel-init $WORKSPACE --path $ROOT --apply"
   else
     rp_need "curl not on PATH" "install curl — needed to health-check qdrant"
   fi
 
-  rp_port_open 127.0.0.1 "$QDRANT_PORT" \
-    || rp_need "qdrant gRPC port $QDRANT_PORT closed — grepai reads and writes vectors there" \
-               "publish 6334 as well as 6333 on the qdrant container"
+  rp_port_open "$QDRANT_HOST" "$QDRANT_PORT" \
+    || rp_need "qdrant gRPC port $QDRANT_PORT closed — grepai reads and writes vectors there, not on the HTTP port" \
+               "publish both ports on the qdrant container"
 
-  # Only a real re-index embeds; --audit just reads status.
   if [[ "$AUDIT_ONLY" == false ]]; then
     if ! command -v ollama >/dev/null 2>&1; then
       rp_need "ollama not on PATH" "install ollama — the watcher embeds every change through it"
     elif ! RP_MODELS="$(ollama list 2>/dev/null)"; then
       rp_need "ollama server not responding" "start it: ollama serve"
-    elif [[ "$RP_MODELS" != *"$EMBED_MODEL"* ]]; then
+    elif ! ollama show "$EMBED_MODEL" >/dev/null 2>&1 && [[ "$RP_MODELS" != *"$EMBED_MODEL"* ]]; then
+      # `ollama show` is authoritative; the list is only a formatted fallback.
       rp_need "embedding model $EMBED_MODEL not pulled" "ollama pull $EMBED_MODEL"
     fi
   fi
@@ -1082,37 +1043,35 @@ if [[ "$DO_GITNEXUS" == true ]]; then
   if ! command -v gitnexus >/dev/null 2>&1; then
     rp_need "gitnexus not on PATH" "npm i -g gitnexus, or re-run with --no-gitnexus"
   elif ! gitnexus --version >/dev/null 2>&1; then
-    # npm's global bin is an nvm-versioned shim: switching node versions
-    # leaves it on PATH but broken, so existing is not the same as working.
     rp_need "gitnexus is on PATH but does not run" \
-            "reinstall it under the current node: npm i -g gitnexus"
+            "npm's global bin is an nvm shim that a node switch breaks: npm i -g gitnexus"
   fi
-  # The audit below asserts that `gitnexus status` reports up-to-date, and
-  # that staleness verdict comes from git — without git it can never pass.
   command -v git >/dev/null 2>&1 \
-    || rp_need "git not on PATH" "install git — GitNexus needs it to tell whether the index is stale"
+    || rp_need "git not on PATH" "install git — GitNexus derives staleness from it"
 fi
 
-if (( ${#RP_WHAT[@]} > 0 )); then
+if command -v rtk >/dev/null 2>&1; then
+  rtk grepai --version >/dev/null 2>&1 || rtk grepai --help >/dev/null 2>&1 \
+    || rp_need "rtk is on PATH but 'rtk grepai' does not run" \
+               "fix or uninstall rtk — this script routes through it whenever it is present"
+fi
+
+if (( RP_N > 0 )); then
   {
-    rp_n=${#RP_WHAT[@]}
-    rp_word="dependencies"; (( rp_n == 1 )) && rp_word="dependency"
-    echo "[ERROR: refresh-intel preflight found $rp_n unmet $rp_word — nothing was indexed]"
+    rp_word="dependencies"; (( RP_N == 1 )) && rp_word="dependency"
+    echo "[ERROR: refresh-intel preflight found $RP_N unmet $rp_word — nothing was indexed]"
     echo
     rp_i=0
-    while (( rp_i < ${#RP_WHAT[@]} )); do
+    while (( rp_i < RP_N )); do
       echo "  - ${RP_WHAT[$rp_i]}"
       echo "    fix: ${RP_FIX[$rp_i]}"
       rp_i=$((rp_i + 1))
     done
     echo
-    echo "Install or start what is listed, then re-run ./refresh-intel.sh."
-    echo
     echo "If you did not set this up: this is a local developer tool generated by"
     echo "code-intel-init. It is NOT part of this project's build, tests or CI, and"
     echo "this failure says nothing about the health of the code. It is safe to"
-    echo "ignore. See the comment block at the top of this file for what it is and"
-    echo "how to remove it."
+    echo "ignore. See the comment block at the top of this file."
   } >&2
   exit 1
 fi
@@ -1123,7 +1082,7 @@ if [[ "$AUDIT_ONLY" == false && "$DO_GREPAI" == true ]]; then
   echo "GrepAI watcher"
   echo "--------------"
   WATCH_STATUS="$("${GREPAI[@]}" watch --workspace "$WORKSPACE" --status 2>&1 || true)"
-  if [[ "$WATCH_STATUS" == *"running"* && "$WATCH_STATUS" != *"not running"* ]]; then
+  if watcher_running "$WATCH_STATUS"; then
     echo "already running for workspace $WORKSPACE"
   else
     echo "starting watcher for workspace $WORKSPACE..."
@@ -1135,21 +1094,32 @@ fi
 if [[ "$AUDIT_ONLY" == false && "$DO_GITNEXUS" == true ]]; then
   echo "GitNexus re-index"
   echo "-----------------"
-  (
+  # A failed re-index must NOT abort the script: the audit below still has
+  # useful things to report, and the exit code already carries the failure.
+  if ! (
     cd "$ROOT"
     if GN_OUT="$("${GITNEXUS[@]}" analyze --embeddings 2>&1)"; then
       echo "$GN_OUT"
     else
-      GN_STATUS=$?
+      GN_CODE=$?
       echo "$GN_OUT" >&2
       if [[ "$GN_OUT" == *"Embedding generation completed without persisted embeddings"* ]]; then
         echo "No GitNexus embeddings were persisted; retrying with structural indexing."
         "${GITNEXUS[@]}" analyze --force
       else
-        exit "$GN_STATUS"
+        exit "$GN_CODE"
       fi
     fi
-  )
+  ); then
+    fail "gitnexus analyze failed"
+    # Its analyzer imports module.registerHooks, added in Node 22.15 / 23.5,
+    # while `gitnexus --version` runs fine on older Node. Name that directly.
+    if command -v node >/dev/null 2>&1 &&
+       ! node -e 'process.exit(typeof require("node:module").registerHooks==="function"?0:1)' >/dev/null 2>&1; then
+      echo "  Node $(node --version 2>/dev/null) is too old for the GitNexus analyzer." >&2
+      echo "  Fix: brew upgrade node && npm i -g gitnexus" >&2
+    fi
+  fi
   echo
 fi
 
@@ -1158,22 +1128,35 @@ fi
 if [[ "$DO_GREPAI" == true ]]; then
   echo "GrepAI audit"
   echo "------------"
-  WORKSPACE_STATUS="$("${GREPAI[@]}" workspace status "$WORKSPACE" 2>&1 || true)"
-  echo "$WORKSPACE_STATUS"
+  WS_STATUS="$("${GREPAI[@]}" workspace status "$WORKSPACE" 2>&1 || true)"
+  echo "$WS_STATUS"
 
-  [[ "$WORKSPACE_STATUS" == *"Backend: qdrant"* ]] \
-    || fail "workspace backend is not qdrant"
-  [[ "$WORKSPACE_STATUS" == *": $ROOT"* ]] \
-    || fail "workspace $WORKSPACE does not map this project ($ROOT)"
+  [[ "$WS_STATUS" == *"Backend: qdrant"* ]] || fail "workspace backend is not qdrant"
+
+  # Tolerant extraction, then a CANONICALISED comparison.
+  #
+  # `workspace status` indents the project line further than `workspace show`
+  # and appends a status glyph, so anchoring at a fixed column finds nothing.
+  # Match "- <name>: " anywhere on the line, then strip trailing whitespace and
+  # non-printable decoration. Comparing canonical paths, not raw strings, is
+  # what makes ~/Projects and ~/projects the same directory again.
+  MAPPED_LINE="$(printf '%s\n' "$WS_STATUS" | grep -F -- "- $PROJECT: " | head -1)"
+  MAPPED="${MAPPED_LINE#*- "$PROJECT": }"
+  [[ -n "$MAPPED_LINE" ]] || MAPPED=""
+  MAPPED="$(printf '%s' "$MAPPED" | LC_ALL=C sed -e 's/[[:space:]]*$//' -e 's/[^[:print:]]*$//' -e 's/[[:space:]]*$//')"
+  if [[ -z "$MAPPED" ]]; then
+    fail "workspace $WORKSPACE has no project named $PROJECT"
+  elif [[ "$(canon "$MAPPED")" != "$ROOT" ]]; then
+    fail "workspace $WORKSPACE maps $PROJECT to $MAPPED, not $ROOT"
+  fi
 
   WATCH_STATUS="$("${GREPAI[@]}" watch --workspace "$WORKSPACE" --status 2>&1 || true)"
   echo "$WATCH_STATUS"
-  [[ "$WATCH_STATUS" == *"running"* && "$WATCH_STATUS" != *"not running"* ]] \
-    || fail "workspace watcher is not running"
+  watcher_running "$WATCH_STATUS" || fail "workspace watcher is not running"
 
   if [[ -f "$ROOT/.grepai/index.gob" ]]; then
-    echo "WARNING: .grepai/index.gob is present from local GOB indexing;"
-    echo "         workspace searches still use qdrant, so it is stale weight."
+    echo "NOTE: .grepai/index.gob is a leftover from local GOB indexing."
+    echo "      Workspace searches use qdrant, so it is dead weight: rm it."
   fi
   echo
 fi
@@ -1183,8 +1166,10 @@ if [[ "$DO_GITNEXUS" == true ]]; then
   echo "--------------"
   GN_STATUS_OUT="$(cd "$ROOT" && "${GITNEXUS[@]}" status 2>&1 || true)"
   echo "$GN_STATUS_OUT"
-  [[ "$GN_STATUS_OUT" == *"up-to-date"* ]] \
-    || fail "GitNexus index is not up to date for this repo"
+  case "$GN_STATUS_OUT" in
+    *"up-to-date"*|*"up to date"*) ;;
+    *) fail "GitNexus index is not up to date for this repo" ;;
+  esac
   echo
 fi
 
@@ -1194,41 +1179,38 @@ if (( FAILURES > 0 )); then
 fi
 
 echo "Code intelligence is fresh."
-REFRESH_EOF
-  sed -e "s|__WORKSPACE__|$WS|g" \
-      -e "s|__QDRANT_HTTP__|$QDRANT_HTTP|g" \
-      -e "s|__QDRANT_PORT__|$QDRANT_PORT|g" \
-      -e "s|__EMBED_MODEL__|$EMBED_MODEL|g" \
-      "$REFRESH.tmp" > "$REFRESH"
-  rm -f "$REFRESH.tmp"
-  chmod +x "$REFRESH"
-  echo "wrote $REFRESH"
-fi
-echo
+REFRESH_TPL
 
-echo "8. Agent instructions"
-echo "---------------------"
-if [[ "$WRITE_DOCS" == true ]]; then
-  write_block() {
-    local target="$1"
-    if [[ -f "$target" ]] && grep -q '<!-- code-intel:start -->' "$target"; then
-      if [[ "$FORCE_DOCS" != true ]]; then
-        echo "$(basename "$target"): code-intel block already present, left untouched (use --force-docs)"
-        return
-      fi
-      python3 - "$target" <<'PY'
-import re, sys
-p = sys.argv[1]
-s = open(p).read()
-s = re.sub(r'\n*<!-- code-intel:start -->.*?<!-- code-intel:end -->\n*', '\n', s, flags=re.S)
-open(p, 'w').write(s)
+  WS="$WS" PROJ_NAME="$PROJ_NAME" QDRANT_HOST="$QDRANT_HOST" \
+  QDRANT_HTTP="$QDRANT_HTTP" QDRANT_PORT="$QDRANT_PORT" \
+  EMBED_MODEL="$EMBED_MODEL" VERSION="$VERSION" \
+  python3 - "$tpl" "$out" <<'PY'
+import hashlib, os, sys
+tpl, out = sys.argv[1], sys.argv[2]
+s = open(tpl).read()
+for k, v in (("__WORKSPACE__", os.environ["WS"]),
+             ("__PROJECT__",   os.environ["PROJ_NAME"]),
+             ("__QDRANT_HOST__", os.environ["QDRANT_HOST"]),
+             ("__QDRANT_HTTP__", os.environ["QDRANT_HTTP"]),
+             ("__QDRANT_PORT__", os.environ["QDRANT_PORT"]),
+             ("__EMBED_MODEL__", os.environ["EMBED_MODEL"])):
+    s = s.replace(k, v)                      # replace(), not sed: no delimiter
+                                             # or backslash escaping to get wrong
+lines = s.split("\n")
+i = lines.index("__STAMP__")
+body = "\n".join(lines[:i] + lines[i+1:])
+h = hashlib.sha256(body.encode()).hexdigest()
+lines[i] = "# code-intel-init: version=%s body=%s" % (os.environ["VERSION"], h)
+open(out, "w").write("\n".join(lines))
 PY
-    fi
+  rm -f "$tpl"
+  chmod +x "$out"
+}
 
-    [[ -f "$target" ]] || : > "$target"
-    [[ -s "$target" ]] && printf '\n' >> "$target"
+# ============================================================ docs block =====
 
-    cat >> "$target" <<'DOC_EOF'
+DOC_BLOCK_TEXT() {
+  cat <<'DOC_EOF'
 <!-- code-intel:start -->
 ## Code intelligence: GrepAI, GitNexus, grep
 
@@ -1258,8 +1240,8 @@ Rules of thumb:
 
 Never hand-edit `.grepai/config.yaml`. It is generated by `code-intel-init`,
 and a running GrepAI watcher rewrites that file from memory on every index —
-manual edits are silently reverted. Re-run `code-intel-init <workspace>
---apply` instead.
+manual edits are silently reverted, minutes or hours later, with nothing in any
+log. Re-run `code-intel-init --apply` instead.
 
 ### After every task that changes the codebase
 
@@ -1268,51 +1250,799 @@ committing. It re-indexes GitNexus, makes sure the GrepAI watcher is running,
 and audits both; it exits non-zero if either index is stale or misconfigured.
 `./refresh-intel.sh --audit` checks without re-indexing.
 
-Docs-only changes do not need a refresh.
+If that script's preflight fails, the code-intel stack is not installed on this
+machine. That is not a problem with this project: skip it, say so, and carry
+on. Docs-only changes do not need a refresh.
 <!-- code-intel:end -->
 DOC_EOF
-    echo "$(basename "$target"): code-intel block written"
-  }
+}
+
+write_doc_block() {   # $1 = target file
+  local target="$1" st
+  st="$(doc_state "$target")"
+
+  if [[ "$st" == "orphaned" ]]; then
+    say "$(basename "$target"): unbalanced code-intel markers — fix them by hand, left untouched"
+    return
+  fi
+  if [[ "$st" == "present" && "$FORCE_DOCS" != true ]]; then
+    say "$(basename "$target"): code-intel block already present (use --force-docs to rewrite)"
+    return
+  fi
+  if [[ "$st" == "present" ]]; then
+    python3 - "$target" <<'PY'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+s = re.sub(r'\n*<!-- code-intel:start -->.*?<!-- code-intel:end -->\n*', '\n', s, flags=re.S)
+open(p, 'w').write(s)
+PY
+  fi
+
+  [[ -f "$target" ]] || : > "$target"
+  [[ -s "$target" ]] && printf '\n' >> "$target"
+  DOC_BLOCK_TEXT >> "$target"
+  say "$(basename "$target"): code-intel block written"
+}
+
+# =============================================================== preview =====
+
+DRIFT=0
+plan() { row "$1" "$2"; case "$1" in ""|keep|skip|note) ;; *) DRIFT=1 ;; esac; }
+
+# plan_probe <okverb> <okmsg> <badverb> <badmsg> <probe...>
+# Deliberately not `probe && plan A || plan B`: in that form B also runs when
+# A succeeded but plan A returned non-zero.
+plan_probe() {
+  local okv="$1" okm="$2" badv="$3" badm="$4"
+  shift 4
+  if "$@"; then plan "$okv" "$okm"; else plan "$badv" "$badm"; fi
+}
+
+do_preview() {
+  say "PREVIEW — no changes will be made (pass --apply to act)"
+  say "======================================================"
+  say ""
+  say "Would do"
+
+  if [[ "$DO_GIT" == true ]]; then
+    plan_probe keep "git repository present" INIT "git init" git_is_repo
+    plan_probe keep ".gitignore covers .grepai/ and .gitnexus/" \
+               EDIT ".gitignore += .grepai/ .gitnexus/" gitignore_ok
+  else
+    plan "skip" "git (--no-git)"
+  fi
+
+  local show model
+  if ws_exists; then
+    show="$(ws_show)"
+    plan "keep" "workspace '$WS' exists"
+    model="$(ws_model_state "$show")"
+    case "$model" in
+      match)    plan "keep" "workspace embedder is $EMBED_MODEL" ;;
+      mismatch) plan "MISMATCH" "workspace '$WS' was created with a different embedder than $EMBED_MODEL"
+                plan ""         "vectors from two models in one collection degrade search; delete the"
+                plan ""         "collection and re-index, or set EMBED_MODEL back in $CONF_FILE" ;;
+      unknown)  plan "note" "could not read the workspace embedder from 'workspace show'" ;;
+    esac
+    if ws_maps_project "$show"; then
+      plan "keep" "project already mapped into '$WS'"
+    elif ws_name_taken "$show"; then
+      plan "CONFLICT" "'$WS' already maps a project named '$PROJ_NAME' to $(ws_mapped_path "$show")"
+      plan ""         "grepai keys projects by name, so it cannot be repointed: remove and re-add"
+    else
+      plan "ADD" "map $ROOT into workspace '$WS'"
+    fi
+  else
+    plan "CREATE" "workspace '$WS' (qdrant, $EMBED_PROVIDER/$EMBED_MODEL)"
+    plan "ADD"    "map $ROOT into workspace '$WS'"
+  fi
+
+  if [[ -f "$GREPAI_CFG" ]]; then
+    plan_probe keep "chunking already $CHUNK_SIZE/$CHUNK_OVERLAP" \
+               EDIT "chunking -> $CHUNK_SIZE/$CHUNK_OVERLAP" cfg_chunking_ok
+    plan_probe keep "lock files already ignored" \
+               EDIT "add lock files to the ignore list" cfg_ignores_ok
+  else
+    plan "CREATE" ".grepai/config.yaml (chunking $CHUNK_SIZE/$CHUNK_OVERLAP + lock-file ignores)"
+  fi
 
   if [[ "$DO_CLAUDE" == true ]]; then
-    write_block "$ROOT/CLAUDE.md"
+    plan_probe keep "claude: 'grepai' in .mcp.json for '$WS'" \
+               ADD  "claude: 'grepai' in .mcp.json with --workspace $WS" claude_grepai_ok
+    if claude_gitnexus_ok; then
+      plan_probe REPAIR "claude: 'gitnexus' is pinned to an absolute path — will re-register by name" \
+                 keep   "claude: 'gitnexus' at user scope" claude_gitnexus_pinned
+    else
+      plan "ADD" "claude: 'gitnexus' at user scope"
+    fi
+    if claude_stray_grepai; then
+      plan "WARN" "claude: a user-scope 'grepai' without --workspace shadows this project"
+    fi
   fi
-  # Codex reads AGENTS.md, so it is created when Codex is a target; otherwise
-  # it is only updated when the project already keeps one.
-  if [[ "$DO_CODEX" == true || -f "$ROOT/AGENTS.md" ]]; then
-    write_block "$ROOT/AGENTS.md"
+  if [[ "$DO_CODEX" == true ]]; then
+    plan_probe keep "codex: 'grepai-$WS' registered" \
+               ADD  "codex: 'grepai-$WS' with --workspace $WS" codex_grepai_ok
+    plan_probe keep "codex: 'gitnexus' registered" \
+               ADD  "codex: 'gitnexus'" codex_gitnexus_ok
+    if codex_stray_grepai; then
+      plan "WARN" "codex: a plain 'grepai' entry serves the local gob index"
+    fi
   fi
-else
-  echo "skipped (--no-docs)"
-fi
-echo
 
-if [[ "$START_WATCH" == true ]]; then
-  echo "9. GrepAI watcher"
-  echo "-----------------"
-  WATCH_STATUS="$(grepai watch --workspace "$WS" --status 2>&1 || true)"
-  if [[ "$WATCH_STATUS" == *"running"* && "$WATCH_STATUS" != *"not running"* ]]; then
-    echo "watcher already running for '$WS'"
+  # analyze is a refresh, not a repair — it re-runs on every --apply. Report
+  # drift only when the index is actually stale, otherwise a fully converged
+  # project could never exit 0 and the exit code would be useless in cron.
+  if [[ "$RUN_ANALYZE" != true ]]; then
+    plan "skip" "gitnexus analyze (--no-analyze)"
+  elif ! project_has_sources; then
+    plan "note" "no source files yet — nothing for GitNexus to index"
+  elif gn_fresh "$(gn_status)"; then
+    plan "keep" "GitNexus index up to date (analyze re-runs anyway on --apply)"
   else
-    grepai watch --workspace "$WS" --background
-    echo "started watcher for '$WS'"
+    plan "RUN" "gitnexus analyze in $ROOT"
   fi
-  echo
+
+  case "$(script_state)" in
+    missing)  plan "WRITE"   "refresh-intel.sh" ;;
+    current)  plan "keep"    "refresh-intel.sh is current (v$VERSION)" ;;
+    outdated) plan "UPGRADE" "refresh-intel.sh is from an older generator" ;;
+    modified)
+      if [[ "$FORCE_SCRIPT" == true ]]; then
+        plan "OVERWRITE" "refresh-intel.sh is locally modified (--force-script)"
+      else
+        plan "keep" "refresh-intel.sh is locally modified, left alone"
+      fi ;;
+  esac
+
+  if [[ "$WRITE_DOCS" == true ]]; then
+    local doc
+    for doc in CLAUDE.md AGENTS.md; do
+      if [[ "$doc" == "CLAUDE.md" && "$DO_CLAUDE" != true ]]; then continue; fi
+      if [[ "$doc" == "AGENTS.md" && "$DO_CODEX" != true ]] && ! agents_md_project_owned; then continue; fi
+      case "$(doc_state "$ROOT/$doc")" in
+        present)
+          if [[ "$FORCE_DOCS" == true ]]; then
+            plan "REWRITE" "$doc code-intel block"
+          else
+            plan "keep" "$doc has a code-intel block"
+          fi ;;
+        orphaned) plan "BROKEN" "$doc has unbalanced code-intel markers — fix by hand" ;;
+        *)        plan "WRITE"  "$doc code-intel block" ;;
+      esac
+    done
+  else
+    plan "skip" "CLAUDE.md / AGENTS.md (--no-docs)"
+  fi
+
+  if [[ "$START_WATCH" == true ]]; then
+    plan_probe keep  "watcher running for '$WS'" \
+               START "watcher for '$WS'" watcher_running "$(watch_status)"
+  else
+    plan "skip" "watcher (--no-watch)"
+  fi
+
+  say ""
+  if (( DRIFT == 0 )); then
+    say "Everything already matches. Nothing to do."
+    exit 0
+  fi
+  say "Nothing was changed. To do the above:"
+  say "  code-intel-init $WS --path $ROOT --agent $AGENT_TARGET --apply"
+  exit 2
+}
+
+# ================================================================= apply =====
+
+do_apply() {
+  if [[ "$DO_GIT" == true ]]; then
+    hr "0. Repository"
+    if git_is_repo; then
+      say "git repository already present"
+    else
+      git -C "$ROOT" init -q
+      say "git init"
+    fi
+    if gitignore_ok; then
+      say ".gitignore already covers the index directories"
+    else
+      [[ -f "$ROOT/.gitignore" ]] || : > "$ROOT/.gitignore"
+      [[ -s "$ROOT/.gitignore" ]] && [[ "$(tail -c1 "$ROOT/.gitignore" | od -An -c | tr -d ' ')" != '\n' ]] \
+        && printf '\n' >> "$ROOT/.gitignore"
+      local e added=""
+      for e in "${GITIGNORE_ENTRIES[@]}"; do
+        if ! grep -qxF "$e" "$ROOT/.gitignore"; then
+          printf '%s\n' "$e" >> "$ROOT/.gitignore"
+          added="$added $e"
+        fi
+      done
+      say ".gitignore +=$added"
+    fi
+    say ""
+  fi
+
+  hr "1. GrepAI workspace"
+  if ws_exists; then
+    say "workspace '$WS' exists"
+    case "$(ws_model_state "$(ws_show)")" in
+      mismatch)
+        {
+          say "[ERROR: workspace '$WS' uses a different embedder than $EMBED_MODEL]"
+          say ""
+          say "Vectors from two models in one collection silently degrade search, and"
+          say "re-running this cannot fix it. Either set EMBED_MODEL back in"
+          say "  $CONF_FILE"
+          say "or drop the collection and re-index:"
+          say "  grepai workspace delete $WS"
+          say "  curl -X DELETE $QDRANT_HTTP/collections/workspace_$WS"
+          say "  code-intel-init $WS --path $ROOT --apply"
+        } >&2
+        exit 1 ;;
+      unknown) say "note: could not read the workspace embedder from 'workspace show'" ;;
+      match)   say "embedder is $EMBED_MODEL" ;;
+    esac
+  else
+    grepai workspace create "$WS" \
+      --backend qdrant \
+      --qdrant-endpoint "$QDRANT_ENDPOINT" \
+      --qdrant-port "$QDRANT_PORT" \
+      --provider "$EMBED_PROVIDER" \
+      --model "$EMBED_MODEL" \
+      --yes
+    say "created workspace '$WS'"
+  fi
+  say ""
+
+  hr "2. Project mapping"
+  local show; show="$(ws_show)"
+  if ws_maps_project "$show"; then
+    say "project already mapped into '$WS'"
+  elif ws_name_taken "$show"; then
+    {
+      say "[ERROR: workspace '$WS' already maps a project named '$PROJ_NAME' elsewhere]"
+      say ""
+      say "  wanted: $ROOT"
+      say "  mapped: $(ws_mapped_path "$show")"
+      say ""
+      say "grepai keys projects by name, so the entry cannot be repointed in place."
+      say "This is what a renamed or re-cloned project directory looks like, and the"
+      say "symptom is silent: searches keep working and answer from the old path."
+      say "Nothing was changed. To repair:"
+      say ""
+      say "  grepai workspace remove $WS $PROJ_NAME"
+      say "  code-intel-init $WS --path $ROOT --apply"
+    } >&2
+    exit 1
+  else
+    grepai workspace add "$WS" "$ROOT"
+    say "added $ROOT to '$WS'"
+  fi
+  registry_add "$WS" "$ROOT"
+  say ""
+
+  hr "3. Chunking + ignore config"
+  local cfg_before cfg_after
+  cfg_before="$( [[ -f "$GREPAI_CFG" ]] && cksum < "$GREPAI_CFG" || echo absent )"
+  if [[ ! -f "$GREPAI_CFG" ]]; then
+    (cd "$ROOT" && grepai init --yes -p "$EMBED_PROVIDER" -b qdrant -m "$EMBED_MODEL" >/dev/null)
+    say "created $GREPAI_CFG"
+  fi
+  if [[ -f "$GREPAI_CFG" ]]; then
+    python3 - "$GREPAI_CFG" "$CHUNK_SIZE" "$CHUNK_OVERLAP" <<'PY'
+import re, sys
+path, size, overlap = sys.argv[1], sys.argv[2], sys.argv[3]
+s = open(path).read()
+m = re.search(r"^chunking:\n(?P<i>[ \t]+)size: (?P<s>\d+)\n[ \t]+overlap: (?P<o>\d+)$", s, re.M)
+if not m:
+    print("WARNING: no chunking block in %s — set size/overlap by hand" % path); sys.exit(0)
+if m.group("s") == size and m.group("o") == overlap:
+    print("chunking already size=%s overlap=%s" % (size, overlap)); sys.exit(0)
+i = m.group("i")
+s = s[:m.start()] + "chunking:\n%ssize: %s\n%soverlap: %s" % (i, size, i, overlap) + s[m.end():]
+open(path, "w").write(s)
+print("chunking set to size=%s overlap=%s (was %s/%s)" % (size, overlap, m.group("s"), m.group("o")))
+PY
+    python3 - "$GREPAI_CFG" "${EXTRA_IGNORES[@]}" <<'PY'
+import re, sys
+path, wanted = sys.argv[1], sys.argv[2:]
+s = open(path).read()
+m = re.search(r"^ignore:\n(?P<items>(?:[ \t]+- .*\n?)*)", s, re.M)
+if not m:
+    print("WARNING: no ignore block in %s — add lock files by hand" % path); sys.exit(0)
+items = m.group("items")
+indent = re.match(r"[ \t]+", items).group(0) if items.strip() else "    "
+present = set(re.findall(r"^[ \t]+- (.*?)[ \t]*$", items, re.M))
+missing = [w for w in wanted if w not in present]
+if not missing:
+    print("ignore list already covers the lock files"); sys.exit(0)
+if items and not items.endswith("\n"): items += "\n"
+items += "".join("%s- %s\n" % (indent, w) for w in missing)
+s = s[:m.start("items")] + items + s[m.end("items"):]
+open(path, "w").write(s)
+print("ignore += %s" % ", ".join(missing))
+PY
+  else
+    say "WARNING: no $GREPAI_CFG — chunking left at GrepAI's default (512),"
+    say "         which overflows the $EMBED_MODEL context window."
+  fi
+
+  # A running watcher holds this file in memory and rewrites the whole thing on
+  # its next index, which would silently revert everything above. Restart it.
+  cfg_after="$( [[ -f "$GREPAI_CFG" ]] && cksum < "$GREPAI_CFG" || echo absent )"
+  if [[ "$cfg_after" != "$cfg_before" ]] && watcher_running "$(watch_status)"; then
+    grepai watch --workspace "$WS" --stop >/dev/null 2>&1 || true
+    grepai watch --workspace "$WS" --background >/dev/null 2>&1 || true
+    say "restarted the watcher so it reloads the config (it would otherwise"
+    say "overwrite these edits on its next index write)"
+  fi
+  say ""
+
+  hr "4. GrepAI MCP registration"
+  if [[ "$DO_CLAUDE" == true ]]; then
+    if claude_grepai_ok; then
+      say "claude: 'grepai' already registered for '$WS'"
+    else
+      (cd "$ROOT" && claude mcp add grepai -s project -- grepai mcp-serve --workspace "$WS")
+      say "claude: registered 'grepai' in $MCP_JSON with --workspace $WS"
+    fi
+    if claude_stray_grepai; then
+      say "claude: WARNING — a user-scope 'grepai' without --workspace exists."
+      say "        It serves the local .grepai (gob) index and shadows this entry."
+      say "        Remove it:  claude mcp remove grepai -s user"
+    fi
+  fi
+  if [[ "$DO_CODEX" == true ]]; then
+    if codex_grepai_ok; then
+      say "codex: 'grepai-$WS' already registered"
+    else
+      codex mcp add "grepai-$WS" -- grepai mcp-serve --workspace "$WS" >/dev/null
+      say "codex: registered 'grepai-$WS' with --workspace $WS"
+    fi
+    if codex_stray_grepai; then
+      say "codex: WARNING — a plain 'grepai' entry also exists. Without --workspace"
+      say "       it serves the local gob index.  Remove it:  codex mcp remove grepai"
+    fi
+  fi
+  say ""
+
+  hr "5. GitNexus MCP registration (global, serves every indexed repo)"
+  # Registered by NAME, never by absolute path: npm's global bin is an
+  # nvm-versioned shim, and a pinned path breaks for every project at once on
+  # the next `nvm use`.
+  if [[ "$DO_CLAUDE" == true ]]; then
+    if claude_gitnexus_ok && claude_gitnexus_pinned; then
+      claude mcp remove gitnexus -s user >/dev/null 2>&1 || true
+      claude mcp add gitnexus -s user -- gitnexus mcp
+      say "claude: re-registered 'gitnexus' by name (was pinned to an absolute path)"
+    elif claude_gitnexus_ok; then
+      say "claude: 'gitnexus' already registered at user scope"
+    else
+      claude mcp add gitnexus -s user -- gitnexus mcp
+      say "claude: registered 'gitnexus' at user scope"
+    fi
+  fi
+  if [[ "$DO_CODEX" == true ]]; then
+    if codex_gitnexus_ok; then
+      say "codex: 'gitnexus' already registered"
+    else
+      codex mcp add gitnexus -- gitnexus mcp >/dev/null
+      say "codex: registered 'gitnexus'"
+    fi
+  fi
+  say ""
+
+  hr "6. GitNexus index"
+  # Indexing is never allowed to abort the run. On a brand-new project the
+  # folder is empty and there is nothing to analyze; on an odd repo the
+  # analyzer may fail outright. Neither is a reason to leave the project
+  # half-wired, without refresh-intel.sh or the agent instructions — those are
+  # exactly what you need in order to index later.
+  ANALYZE_RESULT="ok"
+  if [[ "$RUN_ANALYZE" != true ]]; then
+    ANALYZE_RESULT="skipped"
+    say "skipped (--no-analyze)"
+  elif ! project_has_sources; then
+    ANALYZE_RESULT="empty"
+    say "no source files yet — nothing to index."
+    say "The GrepAI watcher picks up files as you create them. Run"
+    say "./refresh-intel.sh once you have code, to build the GitNexus graph."
+  elif (
+      cd "$ROOT"
+      if GN_OUT="$(gitnexus analyze --embeddings 2>&1)"; then
+        printf '%s\n' "$GN_OUT" | tail -20
+      else
+        GN_CODE=$?
+        printf '%s\n' "$GN_OUT" | tail -20 >&2
+        if [[ "$GN_OUT" == *"Embedding generation completed without persisted embeddings"* ]]; then
+          echo "No GitNexus embeddings were persisted; retrying with structural indexing."
+          gitnexus analyze --force
+        else
+          exit "$GN_CODE"
+        fi
+      fi
+    ); then
+    :
+  else
+    ANALYZE_RESULT="failed"
+    say ""
+    if have node && ! node_has_register_hooks; then
+      say "WARNING: gitnexus analyze failed because Node is too old."
+      say "         Its analyzer imports module.registerHooks, added in Node"
+      say "         22.15 / 23.5. You have $(node --version 2>/dev/null). Fix it with:"
+      say "           brew upgrade node"
+      say "           npm i -g gitnexus"
+      say "         Then run ./refresh-intel.sh here. Everything else is wired"
+      say "         and GrepAI search works already."
+    else
+      say "WARNING: gitnexus analyze failed. Setup continues — the knowledge graph"
+      say "         is simply empty until it succeeds. Re-run ./refresh-intel.sh"
+      say "         later, or ./refresh-intel.sh --no-gitnexus to skip it."
+    fi
+  fi
+  say ""
+
+  hr "7. refresh-intel.sh"
+  case "$(script_state)" in
+    missing)  render_refresh "$REFRESH"; say "wrote $REFRESH (v$VERSION)" ;;
+    current)  say "refresh-intel.sh is current (v$VERSION)" ;;
+    outdated) render_refresh "$REFRESH"; say "upgraded refresh-intel.sh to v$VERSION" ;;
+    modified)
+      if [[ "$FORCE_SCRIPT" == true ]]; then
+        render_refresh "$REFRESH"; say "overwrote locally modified refresh-intel.sh (--force-script)"
+      else
+        say "refresh-intel.sh is locally modified — left alone (--force-script overwrites)"
+      fi ;;
+  esac
+  say ""
+
+  hr "8. Agent instructions"
+  if [[ "$WRITE_DOCS" == true ]]; then
+    [[ "$DO_CLAUDE" == true ]] && write_doc_block "$ROOT/CLAUDE.md"
+    # Codex reads AGENTS.md, so create it when Codex is a target; otherwise
+    # only update one the project already keeps.
+    if [[ "$DO_CODEX" == true ]] || agents_md_project_owned; then
+      write_doc_block "$ROOT/AGENTS.md"
+    fi
+  else
+    say "skipped (--no-docs)"
+  fi
+  say ""
+
+  if [[ "$START_WATCH" == true ]]; then
+    hr "9. GrepAI watcher"
+    if watcher_running "$(watch_status)"; then
+      say "watcher already running for '$WS'"
+    else
+      grepai watch --workspace "$WS" --background
+      say "started watcher for '$WS'"
+    fi
+    say ""
+  fi
+
+  hr "Result"
+  grepai workspace show "$WS" || true
+  say ""
+  (cd "$ROOT" && gitnexus status 2>&1 || true)
+  say ""
+  say "Done."
+  if [[ "$DO_CLAUDE" == true ]]; then say "- Claude Code: restart it here so it picks up $MCP_JSON."; fi
+  if [[ "$DO_CODEX"  == true ]]; then say "- Codex: restart it; this project's tools come from 'grepai-$WS'."; fi
+  case "$ANALYZE_RESULT" in
+    empty)
+      say "- Both indexes are empty: there is no code here yet. The watcher indexes"
+      say "  files into GrepAI as you save them; GitNexus only updates when you run"
+      say "  ./refresh-intel.sh, so run it once the first files exist."
+      say "- Make an initial commit early: GitNexus derives staleness from git, and"
+      say "  a repository with no commits cannot report an up-to-date index." ;;
+    failed)
+      say "- GitNexus indexing FAILED — the graph is empty. Everything else is wired." ;;
+    skipped)
+      say "- GitNexus was not indexed (--no-analyze). Run ./refresh-intel.sh to do it." ;;
+  esac
+  say "- Run ./refresh-intel.sh after each task that changes the codebase."
+}
+
+# ================================================================ status =====
+
+status_one() {   # $1 = workspace, $2 = path ; sets STATUS_DRIFT
+  local w="$1" p="$2" bad=0 out
+  WS="$w"; ROOT="$(canon "$p")"; PROJ_NAME="$(basename "$ROOT")"
+  GREPAI_CFG="$p/.grepai/config.yaml"; MCP_JSON="$p/.mcp.json"; REFRESH="$p/refresh-intel.sh"
+
+  if [[ ! -d "$p" ]]; then
+    row "GONE" "$w  $p  (directory no longer exists)"
+    STATUS_DRIFT=1
+    return
+  fi
+
+  out="$(ws_show)"
+  ws_exists                 || { bad=1; row "" "  workspace '$w' does not exist"; }
+  ws_maps_project "$out"    || { bad=1; row "" "  workspace does not map this path"; }
+  [[ "$(ws_model_state "$out")" != "mismatch" ]] || { bad=1; row "" "  embedder differs from $EMBED_MODEL"; }
+  cfg_chunking_ok           || { bad=1; row "" "  chunking is not $CHUNK_SIZE/$CHUNK_OVERLAP"; }
+  cfg_ignores_ok            || { bad=1; row "" "  lock files not in the ignore list"; }
+  watcher_running "$(watch_status)" || { bad=1; row "" "  watcher not running"; }
+  case "$(script_state)" in
+    missing)  bad=1; row "" "  refresh-intel.sh missing" ;;
+    outdated) bad=1; row "" "  refresh-intel.sh is from an older generator" ;;
+  esac
+  [[ -f "$p/.grepai/index.gob" ]] && row "" "  stale .grepai/index.gob present (rm it)"
+
+  if (( bad == 0 )); then row "ok" "$w  $p"; else row "DRIFT" "$w  $p"; STATUS_DRIFT=1; fi
+}
+
+# Machine-readable status. Deliberately built on the SAME probes as the table
+# above — a second implementation of "is the watcher running" would drift from
+# this one silently, and both would keep printing green. It reports the
+# services as well, which the table does not: --status must stay usable on a
+# machine where they are down, so it never asks. Nothing here starts anything.
+#
+# The probes emit "dotted.key<TAB>value" lines; python assembles the document.
+# Building JSON by hand in bash 3.2 is how quoting bugs get in.
+status_json() {
+  local out tmp; tmp="$(mktemp)"
+  {
+    printf 'meta.schema\t1\n'
+    printf 'meta.generated_at\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'meta.script_version\t%s\n' "$VERSION"
+    printf 'meta.config_file\t%s\n' "$CONF_FILE"
+    printf 'meta.chunk_size\t%s\n' "$CHUNK_SIZE"
+    printf 'meta.chunk_overlap\t%s\n' "$CHUNK_OVERLAP"
+    printf 'meta.embed_model\t%s\n' "$EMBED_MODEL"
+    printf 'meta.embed_provider\t%s\n' "$EMBED_PROVIDER"
+
+    # ---- tools ----
+    if have grepai; then
+      printf 'tool.grepai.present\ttrue\n'
+      printf 'tool.grepai.version\t%s\n' "$(grepai version 2>/dev/null | head -1)"
+    else printf 'tool.grepai.present\tfalse\n'; fi
+
+    if have gitnexus; then
+      printf 'tool.gitnexus.present\ttrue\n'
+      if gitnexus --version >/dev/null 2>&1; then
+        printf 'tool.gitnexus.runs\ttrue\n'
+        printf 'tool.gitnexus.version\t%s\n' "$(gitnexus --version 2>/dev/null | head -1)"
+      else printf 'tool.gitnexus.runs\tfalse\n'; fi
+    else printf 'tool.gitnexus.present\tfalse\n'; fi
+
+    if have node; then
+      printf 'tool.node.present\ttrue\n'
+      printf 'tool.node.version\t%s\n' "$(node --version 2>/dev/null)"
+      printf 'tool.node.path\t%s\n' "$(command -v node)"
+      if node_has_register_hooks; then printf 'tool.node.register_hooks\ttrue\n'
+      else printf 'tool.node.register_hooks\tfalse\n'; fi
+    else printf 'tool.node.present\tfalse\n'; fi
+
+    have claude  && printf 'tool.claude.present\ttrue\n'  || printf 'tool.claude.present\tfalse\n'
+    have codex   && printf 'tool.codex.present\ttrue\n'   || printf 'tool.codex.present\tfalse\n'
+    have rtk     && printf 'tool.rtk.present\ttrue\n'     || printf 'tool.rtk.present\tfalse\n'
+
+    # ---- container runtime ----
+    local cli; cli="$(container_cli)"
+    printf 'svc.container.cli\t%s\n' "$cli"
+    if [[ -n "$cli" ]] && container_daemon_ok "$cli"; then
+      printf 'svc.container.daemon\ttrue\n'
+      local cstate
+      cstate="$("$cli" inspect -f '{{.State.Status}}' "$QDRANT_CONTAINER" 2>/dev/null || echo absent)"
+      printf 'svc.container.qdrant_state\t%s\n' "$cstate"
+      printf 'svc.container.qdrant_ports\t%s\n' \
+        "$("$cli" inspect -f '{{json .HostConfig.PortBindings}}' "$QDRANT_CONTAINER" 2>/dev/null || echo '{}')"
+      printf 'svc.container.qdrant_started\t%s\n' \
+        "$("$cli" inspect -f '{{.State.StartedAt}}' "$QDRANT_CONTAINER" 2>/dev/null || echo '')"
+    else
+      printf 'svc.container.daemon\tfalse\n'
+    fi
+    printf 'svc.container.name\t%s\n' "$QDRANT_CONTAINER"
+
+    # ---- qdrant ----
+    printf 'svc.qdrant.http_url\t%s\n' "$QDRANT_HTTP"
+    printf 'svc.qdrant.grpc_port\t%s\n' "$QDRANT_PORT"
+    qdrant_http_ok && printf 'svc.qdrant.http\ttrue\n' || printf 'svc.qdrant.http\tfalse\n'
+    qdrant_grpc_ok && printf 'svc.qdrant.grpc\ttrue\n' || printf 'svc.qdrant.grpc\tfalse\n'
+
+    # ---- ollama ----
+    printf 'svc.ollama.endpoint\t%s\n' "$OLLAMA_HTTP"
+    if have ollama; then
+      printf 'svc.ollama.present\ttrue\n'
+      if ollama_up; then
+        printf 'svc.ollama.up\ttrue\n'
+        ollama_has_model && printf 'svc.ollama.model_present\ttrue\n' \
+                         || printf 'svc.ollama.model_present\tfalse\n'
+      else printf 'svc.ollama.up\tfalse\n'; fi
+    else printf 'svc.ollama.present\tfalse\n'; fi
+
+    # ---- projects ----
+    local i=0 w q bad show
+    if [[ -s "$REGISTRY" ]]; then
+      while IFS="	" read -r w q; do
+        [[ -n "$w" && -n "$q" ]] || continue
+        WS="$w"; ROOT="$(canon "$q")"; PROJ_NAME="$(basename "$ROOT")"
+        GREPAI_CFG="$ROOT/.grepai/config.yaml"
+        MCP_JSON="$ROOT/.mcp.json"
+        REFRESH="$ROOT/refresh-intel.sh"
+        bad=0
+        printf 'project.%s.workspace\t%s\n' "$i" "$w"
+        printf 'project.%s.path\t%s\n'      "$i" "$ROOT"
+        printf 'project.%s.name\t%s\n'      "$i" "$PROJ_NAME"
+        if [[ ! -d "$ROOT" ]]; then
+          printf 'project.%s.exists\tfalse\n' "$i"
+          printf 'project.%s.ok\tfalse\n'     "$i"
+          i=$((i + 1)); continue
+        fi
+        printf 'project.%s.exists\ttrue\n' "$i"
+        show="$(ws_show)"
+        if ws_exists; then printf 'project.%s.workspace_exists\ttrue\n' "$i"
+        else printf 'project.%s.workspace_exists\tfalse\n' "$i"; bad=1; fi
+        if ws_maps_project "$show"; then printf 'project.%s.mapped\ttrue\n' "$i"
+        else printf 'project.%s.mapped\tfalse\n' "$i"; bad=1; fi
+        printf 'project.%s.mapped_path\t%s\n' "$i" "$(ws_mapped_path "$show")"
+        printf 'project.%s.embedder\t%s\n' "$i" "$(ws_model_state "$show")"
+        [[ "$(ws_model_state "$show")" == "mismatch" ]] && bad=1
+        if cfg_chunking_ok; then printf 'project.%s.chunking_ok\ttrue\n' "$i"
+        else printf 'project.%s.chunking_ok\tfalse\n' "$i"; bad=1; fi
+        if cfg_ignores_ok; then printf 'project.%s.ignores_ok\ttrue\n' "$i"
+        else printf 'project.%s.ignores_ok\tfalse\n' "$i"; bad=1; fi
+        if watcher_running "$(watch_status)"; then printf 'project.%s.watcher\ttrue\n' "$i"
+        else printf 'project.%s.watcher\tfalse\n' "$i"; bad=1; fi
+        printf 'project.%s.script_state\t%s\n' "$i" "$(script_state)"
+        case "$(script_state)" in missing|outdated) bad=1 ;; esac
+        [[ -f "$ROOT/.grepai/index.gob" ]] \
+          && printf 'project.%s.gob_leftover\ttrue\n' "$i" \
+          || printf 'project.%s.gob_leftover\tfalse\n' "$i"
+        printf 'project.%s.collection\tworkspace_%s\n' "$i" "$w"
+        (( bad == 0 )) && printf 'project.%s.ok\ttrue\n' "$i" \
+                       || printf 'project.%s.ok\tfalse\n' "$i"
+        i=$((i + 1))
+      done < "$REGISTRY"
+    fi
+    printf 'meta.project_count\t%s\n' "$i"
+  } > "$tmp"
+
+  python3 - "$tmp" <<'JSONPY'
+import json, sys
+doc = {"meta": {}, "tool": {}, "svc": {}, "projects": []}
+projects = {}
+for line in open(sys.argv[1]):
+    line = line.rstrip("\n")
+    if not line or "\t" not in line:
+        continue
+    key, _, val = line.partition("\t")
+    if val in ("true", "false"):
+        val = (val == "true")
+    parts = key.split(".")
+    if parts[0] == "project":
+        projects.setdefault(parts[1], {})[".".join(parts[2:])] = val
+    elif parts[0] in ("tool", "svc"):
+        doc[parts[0]].setdefault(parts[1], {})[".".join(parts[2:])] = val
+    else:
+        doc["meta"][".".join(parts[1:])] = val
+doc["projects"] = [projects[k] for k in sorted(projects, key=int)]
+json.dump(doc, sys.stdout, indent=2, ensure_ascii=False)
+sys.stdout.write("\n")
+JSONPY
+  rm -f "$tmp"
+}
+
+do_status() {
+  STATUS_DRIFT=0
+  if [[ "$STATUS_ALL" == true ]]; then
+    hr "code-intel status — all registered projects"
+    if [[ ! -s "$REGISTRY" ]]; then
+      say "registry is empty ($REGISTRY)"
+      exit 0
+    fi
+    while IFS="	" read -r w p; do
+      [[ -n "$w" && -n "$p" ]] || continue
+      status_one "$w" "$p"
+    done < "$REGISTRY"
+  else
+    hr "code-intel status — $ROOT"
+    status_one "$WS" "$ROOT"
+  fi
+  say ""
+  if (( STATUS_DRIFT == 0 )); then
+    say "All good."
+    exit 0
+  fi
+  say "Repair a project with:  code-intel-init --path <dir> --apply"
+  exit 2
+}
+
+# ================================================================ remove =====
+
+do_remove() {
+  local acts=0
+  hr "Remove code-intel from $ROOT (workspace '$WS')"
+
+  removal_plan() {
+    local verb="$1"
+    watcher_running "$(watch_status)" && { row "$verb" "stop the watcher for '$WS'"; acts=$((acts+1)); }
+    ws_maps_project "$(ws_show)"      && { row "$verb" "grepai workspace remove $WS $PROJ_NAME"; acts=$((acts+1)); }
+    if [[ "$DO_CLAUDE" == true ]]; then
+      claude_grepai_ok && { row "$verb" "claude mcp remove grepai -s project"; acts=$((acts+1)); }
+    fi
+    if [[ "$DO_CODEX" == true ]]; then
+      codex_grepai_ok && { row "$verb" "codex mcp remove grepai-$WS"; acts=$((acts+1)); }
+    fi
+    [[ -f "$REFRESH" ]]        && { row "$verb" "rm refresh-intel.sh"; acts=$((acts+1)); }
+    [[ -d "$ROOT/.grepai" ]]   && { row "$verb" "rm -rf .grepai/"; acts=$((acts+1)); }
+    [[ -d "$ROOT/.gitnexus" ]] && { row "$verb" "rm -rf .gitnexus/"; acts=$((acts+1)); }
+    local d
+    for d in CLAUDE.md AGENTS.md; do
+      [[ "$(doc_state "$ROOT/$d")" == "present" ]] && { row "$verb" "strip code-intel block from $d"; acts=$((acts+1)); }
+    done
+    [[ "$PURGE_COLLECTION" == true ]] && { row "$verb" "DELETE qdrant collection workspace_$WS"; acts=$((acts+1)); }
+    return 0
+  }
+
+  if [[ "$APPLY" != true ]]; then
+    removal_plan "would"
+    say ""
+    if (( acts == 0 )); then say "Nothing to remove."; exit 0; fi
+    say "Nothing was changed. To do the above:"
+    say "  code-intel-init --remove --path $ROOT --apply"
+    [[ "$PURGE_COLLECTION" == true ]] || say "  (add --purge-collection to also drop the qdrant collection)"
+    exit 2
+  fi
+
+  watcher_running "$(watch_status)" && { grepai watch --workspace "$WS" --stop >/dev/null 2>&1 || true; say "stopped watcher"; }
+  ws_maps_project "$(ws_show)" && { grepai workspace remove "$WS" "$PROJ_NAME" >/dev/null 2>&1 || true; say "unmapped from '$WS'"; }
+  if [[ "$DO_CLAUDE" == true ]] && claude_grepai_ok; then
+    (cd "$ROOT" && claude mcp remove grepai -s project >/dev/null 2>&1 || true); say "claude: removed project 'grepai'"
+  fi
+  if [[ "$DO_CODEX" == true ]] && codex_grepai_ok; then
+    codex mcp remove "grepai-$WS" >/dev/null 2>&1 || true; say "codex: removed 'grepai-$WS'"
+  fi
+  rm -f "$REFRESH"
+  rm -rf "$ROOT/.grepai" "$ROOT/.gitnexus"
+  say "removed refresh-intel.sh, .grepai/ and .gitnexus/"
+  local d
+  for d in CLAUDE.md AGENTS.md; do
+    if [[ "$(doc_state "$ROOT/$d")" == "present" ]]; then
+      python3 - "$ROOT/$d" <<'PY'
+import re, sys
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r'\n*<!-- code-intel:start -->.*?<!-- code-intel:end -->\n*', '\n', s, flags=re.S)
+open(p, 'w').write(s)
+PY
+      # If the block was the file's only content, do not leave an empty stub.
+      if [[ ! -s "$ROOT/$d" ]] || ! grep -q '[^[:space:]]' "$ROOT/$d"; then
+        rm -f "$ROOT/$d"
+        say "removed $d (the code-intel block was its only content)"
+      else
+        say "stripped the code-intel block from $d"
+      fi
+    fi
+  done
+  if [[ "$PURGE_COLLECTION" == true ]]; then
+    curl -s -X DELETE "$QDRANT_HTTP/collections/workspace_$WS" >/dev/null || true
+    say "deleted qdrant collection workspace_$WS"
+  fi
+  registry_del "$ROOT"
+  say ""
+  say "Done. The user-scope 'gitnexus' MCP entry was left in place — it serves"
+  say "every indexed repo, not just this one."
+}
+
+# ================================================================== main =====
+
+if [[ "$AS_JSON" != true ]]; then
+  say "Project:   $ROOT"
+  say "Workspace: $WS"
+  say "Agents:    $AGENT_TARGET"
+  say ""
 fi
 
-echo "Result"
-echo "------"
-grepai workspace show "$WS"
-echo
-(cd "$ROOT" && gitnexus status 2>&1 || true)
-echo
-echo "Done."
-if [[ "$DO_CLAUDE" == true ]]; then
-  echo "- Claude Code: restart it in this project so it picks up $MCP_JSON;"
-  echo "  GrepAI calls then need no workspace parameter."
-fi
-if [[ "$DO_CODEX" == true ]]; then
-  echo "- Codex: restart it so it picks up ~/.codex/config.toml; the grepai"
-  echo "  tools for this project come from the 'grepai-$WS' server."
-fi
-echo "Run ./refresh-intel.sh after each task that changes the codebase."
+case "$MODE" in
+  # No full preflight for status or remove: you must be able to inspect and
+  # tear down a project on a machine where the services are down. Only what
+  # those two modes actually call is required.
+  status)
+    have python3 || die "python3 is required"
+    if [[ "$AS_JSON" == true ]]; then status_json; exit 0; fi
+    do_status ;;
+  remove) have python3 || die "python3 is required"; do_remove ;;
+  init)
+    preflight
+    if [[ "$APPLY" == true ]]; then do_apply; else do_preview; fi ;;
+esac
