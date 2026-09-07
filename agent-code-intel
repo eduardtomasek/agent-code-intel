@@ -397,7 +397,7 @@ read_code_intel() {
 import re, sys
 
 path, base = sys.argv[1], sys.argv[2]
-LINE_RE = re.compile(r'^[A-Z][A-Z0-9_]*=[^ \t]+$')
+LINE_RE = re.compile(r'^[A-Z][A-Z0-9_]*=\S+$')
 KNOWN = ("SCHEMA", "WORKSPACE", "PROJECT")
 SUPPORTED_SCHEMA = "1"
 
@@ -1841,9 +1841,19 @@ status_one() {   # $1 = workspace (registry fallback, .code-intel wins if presen
   # .code-intel outranks the registry's own $w: a project renamed since it was
   # registered, or a stale registry row, should not silently win over what the
   # project itself declares (decision 7 in map #2).
+  #
+  # A malformed file is reported as a row and never dies here, unlike the
+  # global path-resolution block: this function also runs inside the
+  # --status --all loop, one call per registered project, and one broken
+  # .code-intel must not hide every other project's status behind it -- the
+  # same reason a missing directory below is a "GONE" row, not a die().
   IFS=$'\t' read -r ident_status ident_a ident_b <<< "$(read_code_intel "$ROOT")"
   case "$ident_status" in
-    ERR)    die "$ident_a" ;;
+    ERR)
+      row "BROKEN" "$w  $p"
+      row "" "  $ident_a"
+      STATUS_DRIFT=1
+      return ;;
     OK)     w="$ident_a"; PROJ_NAME="$ident_b" ;;
     ABSENT) PROJ_NAME="$(basename "$ROOT")" ;;
     *)      die "internal error: read_code_intel($ROOT) returned unexpected status '$ident_status'" ;;
@@ -1858,6 +1868,17 @@ status_one() {   # $1 = workspace (registry fallback, .code-intel wins if presen
   fi
 
   out="$(ws_show)"
+  # A name genuinely taken by another path is a different problem than "not
+  # applied yet": grepai keys projects by name, so the entry can't be
+  # repointed in place, and re-running --apply alone will not fix it (this is
+  # the same conflict do_apply already refuses to create; see ws_name_taken).
+  if ws_name_taken "$out" && ! ws_maps_project "$out"; then
+    row "CONFLICT" "$w  $p"
+    row "" "  '$PROJ_NAME' is mapped to $(ws_mapped_path "$out"), not here"
+    row "" "  fix: grepai workspace remove $WS $PROJ_NAME && agent-code-intel $WS --path $ROOT --apply"
+    STATUS_DRIFT=1
+    return
+  fi
   ws_exists                 || { bad=1; row "" "  workspace '$w' does not exist"; }
   ws_maps_project "$out"    || { bad=1; row "" "  workspace does not map this path"; }
   [[ "$(ws_model_state "$out")" != "mismatch" ]] || { bad=1; row "" "  embedder differs from $EMBED_MODEL"; }
@@ -1959,14 +1980,23 @@ status_json() {
       while IFS="	" read -r w q; do
         [[ -n "$w" && -n "$q" ]] || continue
         ROOT="$(canon "$q")"
-        # .code-intel outranks the registry row -- see status_one for why.
+        # .code-intel outranks the registry row -- see status_one for why a
+        # broken file reports as one project's row instead of dying: this
+        # loop must keep enumerating every other registered project.
         IFS=$'\t' read -r ident_status ident_a ident_b <<< "$(read_code_intel "$ROOT")"
-        case "$ident_status" in
-          ERR)    die "$ident_a" ;;
-          OK)     w="$ident_a"; PROJ_NAME="$ident_b" ;;
-          ABSENT) PROJ_NAME="$(basename "$ROOT")" ;;
-          *)      die "internal error: read_code_intel($ROOT) returned unexpected status '$ident_status'" ;;
-        esac
+        if [[ "$ident_status" == ERR ]]; then
+          printf 'project.%s.workspace\t%s\n' "$i" "$w"
+          printf 'project.%s.path\t%s\n'      "$i" "$ROOT"
+          printf 'project.%s.code_intel_error\t%s\n' "$i" "$ident_a"
+          printf 'project.%s.ok\tfalse\n'     "$i"
+          i=$((i + 1)); continue
+        elif [[ "$ident_status" == OK ]]; then
+          w="$ident_a"; PROJ_NAME="$ident_b"
+        elif [[ "$ident_status" == ABSENT ]]; then
+          PROJ_NAME="$(basename "$ROOT")"
+        else
+          die "internal error: read_code_intel($ROOT) returned unexpected status '$ident_status'"
+        fi
         WS="$w"
         GREPAI_CFG="$ROOT/.grepai/config.yaml"
         MCP_JSON="$ROOT/.mcp.json"

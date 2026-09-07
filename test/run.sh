@@ -167,6 +167,47 @@ test_status_all_tolerates_project_without_code_intel() {
   assert_contains "stary-nazev" || return
 }
 
+test_code_intel_duplicate_key_dies() {
+  local d; d="$(new_repo 'duplicate-key-repo')"
+  write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=x' 'WORKSPACE=y' 'PROJECT=duplicate-key-repo'
+  run "$d" --status
+  [[ "$STATUS" -ne 0 ]] || { fail "duplicitní klíč měl skončit nenulově"; return; }
+  assert_contains "duplicate key" || return
+}
+
+# Minimální fingovaný `grepai`, jen pro `workspace show`, aby šlo otestovat
+# rozpor se skutečným (nebo tady fingovaným) stavem grepai bez závislosti na
+# nainstalovaném stacku. Ostatní příkazy stub nezná -- --status nic dalšího
+# z grepai nepotřebuje.
+stub_grepai() {  # $1 = adresář pro stub, $2 = jméno projektu, $3 = cesta, na kterou je namapován
+  local dir="$1" proj="$2" other_path="$3"
+  cat > "$dir/grepai" <<STUB
+#!/bin/sh
+if [ "\$1" = "workspace" ] && [ "\$2" = "show" ]; then
+  echo "Workspace: \$3"
+  echo "Projects (1):"
+  echo "  - $proj: $other_path"
+fi
+STUB
+  chmod +x "$dir/grepai"
+}
+
+# Rozpor mezi tím, co grepai skutečně má, a tímto adresářem -- jiná věc než
+# "ještě nebylo --apply": jméno je zabrané jinde, --apply samo to nespraví.
+# Nepoužívá sdílený run(), protože potřebuje vlastní PATH se stubem.
+test_grepai_name_conflict_reports_as_conflict_not_generic_drift() {
+  local d stub_dir; d="$(new_repo 'taken-project')"
+  stub_dir="$TEST_TMP/stubbin-conflict"; mkdir -p "$stub_dir"
+  stub_grepai "$stub_dir" "taken-project" "/somewhere/else"
+  OUT="$(env -i HOME="$TEST_HOME" PATH="$stub_dir:$BARE_PATH" TERM=dumb \
+        bash -c "cd '$d' && '$TOOL' --status" 2>&1)"
+  STATUS=$?
+  assert_status 2 || return   # hlášeno jako row, ne die -- --status --all smí pokračovat dál
+  assert_contains "CONFLICT" || return
+  assert_contains "/somewhere/else" || return
+  assert_contains "grepai workspace remove" || return
+}
+
 test_code_intel_malformed_line_dies() {
   local d; d="$(new_repo 'malformed-repo')"
   write_code_intel "$d" 'SCHEMA=1' 'workspace=lowercase-key-is-invalid' 'PROJECT=malformed-repo'
@@ -220,6 +261,21 @@ test_code_intel_is_never_sourced() {
   write_code_intel "$d" "\$(touch $marker)" 'SCHEMA=1' 'WORKSPACE=x' 'PROJECT=injection-repo'
   run "$d" --status
   [[ ! -e "$marker" ]] || { fail ".code-intel byl sourcován -- vznikl $marker"; return; }
+}
+
+# Regresní test na opravu z code review: rozbitý .code-intel u jednoho
+# registrovaného projektu dřív celý --status --all zabil dřív, než se dostal
+# na další řádek registru. Musí se nahlásit jako BROKEN a pokračovat dál.
+test_status_all_continues_past_broken_code_intel() {
+  local broken healthy
+  broken="$(new_repo 'broken-among-many')"
+  healthy="$(new_repo 'healthy-among-many')"
+  write_code_intel "$broken" 'SCHEMA=1' 'workspace=lowercase-invalid' 'PROJECT=broken-among-many'
+  mkdir -p "$TEST_HOME/.config/code-intel"
+  printf 'broken\t%s\nhealthy\t%s\n' "$broken" "$healthy" >> "$TEST_HOME/.config/code-intel/projects"
+  run "$TEST_TMP" --status --all
+  assert_contains "BROKEN" || return
+  assert_contains "healthy-among-many" || return
 }
 
 # --status a --remove musí jít spustit na stroji, kde služby neběží: člověk musí
