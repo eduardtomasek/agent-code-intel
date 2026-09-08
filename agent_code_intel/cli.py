@@ -17,10 +17,12 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import sys
 from collections.abc import Mapping
 from typing import Sequence, TextIO
 
-from . import __version__, config, project
+from . import __version__, config, install, project
+from .commands import Reporter
 from .config import CliError
 
 
@@ -252,7 +254,7 @@ def main(
         # --version exactly as the reference's `. "$CONF_FILE"` on :126 does.
         # The Config / ChildEnvironment it returns are consumed once a mode is
         # converted (#53+); here the load matters for its validation.
-        config.load(_conf_dir(environ), environ, cwd)
+        loaded = config.load(_conf_dir(environ), environ, cwd)
 
         opts = parse_args(argv, default_root=cwd)
 
@@ -264,9 +266,14 @@ def main(
             return 0
 
         if opts.mode == "install":
-            raise CliError(
-                "the Python port does not implement the 'install' mode yet "
-                "(issue #52)"
+            return install.run(
+                home=_home(environ),
+                conf_dir=_conf_dir(environ),
+                config_source=loaded.source,
+                write_perms=opts.write_perms,
+                path=environ.get("PATH", ""),
+                source_launcher=_source_launcher(),
+                reporter=Reporter(stdout, stderr),
             )
 
         project.resolve_project(
@@ -296,6 +303,19 @@ def main(
 
 def _home(environ: Mapping[str, str]) -> str:
     return environ.get("HOME") or os.path.expanduser("~")
+
+
+def _source_launcher() -> str | None:
+    """Absolute path of the launcher now running, for ``--install`` to tell a
+    checkout run from an already-installed one (:mod:`install` decisions 61,
+    65). ``__main__.__file__`` is the launcher both thin entrypoints run as;
+    ``None`` when there is no such file (e.g. an embedding test harness) — the
+    installer then simply never takes its "from installed copy" shortcut.
+    """
+
+    main_module = sys.modules.get("__main__")
+    launcher = getattr(main_module, "__file__", None)
+    return os.path.realpath(launcher) if launcher else None
 
 
 def _conf_dir(environ: Mapping[str, str]) -> str:

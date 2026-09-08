@@ -208,6 +208,46 @@ def default_config() -> Config:
     )
 
 
+def _render_defaults_toml_template() -> str:
+    """The commented ``defaults.toml`` ``--install`` drops on a clean machine
+    (issue #48, decisions 23, 57; issue #39 decision 1 / issue #37).
+
+    Rendered here, next to the schema and the built-in values, so the template
+    a user gets and the values the tool actually uses cannot drift — the exact
+    trap (P9, issue #36) that bit the old ``defaults.env`` heredoc, which
+    shipped 8 of 11 keys. Still a module string, never a data file the
+    installer copies (decision 57)."""
+
+    lines = [
+        "# agent-code-intel defaults — this file survives upgrades of the tool.",
+        "# Every key is optional; uncomment and change only what you need. The",
+        "# values shown are the built-in defaults.",
+        "#",
+        "# Ports and chunk sizes are integers; everything else is a string or a",
+        "# list of strings. An unknown key or a wrong type is a hard error, never",
+        "# silently ignored. This file does not expand ~ or environment variables",
+        "# — write literal values. Keep only one of defaults.toml and defaults.env",
+        "# in this directory (having both is an error).",
+        "",
+    ]
+    for key in _SCALAR_KEYS:
+        value = _DEFAULT_SCALARS[key]
+        if key in _INT_KEYS:
+            lines.append("#%s = %s" % (key, value))
+        else:
+            lines.append('#%s = "%s"' % (key, value))
+    for key, items in (
+        ("extra_ignores", _DEFAULT_EXTRA_IGNORES),
+        ("gitignore_entries", _DEFAULT_GITIGNORE_ENTRIES),
+    ):
+        rendered = ", ".join('"%s"' % item for item in items)
+        lines.append("#%s = [%s]" % (key, rendered))
+    return "\n".join(lines) + "\n"
+
+
+DEFAULTS_TOML_TEMPLATE = _render_defaults_toml_template()
+
+
 def load(
     conf_dir: str,
     environ: Mapping[str, str],
