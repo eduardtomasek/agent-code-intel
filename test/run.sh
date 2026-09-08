@@ -37,7 +37,12 @@ HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TOOL="${TOOL:-$HERE/../agent-code-intel}"
 EXPECTED_NAME="${EXPECTED_NAME:-agent-code-intel}"
 
-BARE_PATH=/usr/bin:/bin
+# /usr/bin:/bin by default (no grepai/gitnexus/ollama/node/claude/codex — a
+# faithful model of a machine without the stack). The migration harness
+# (test/reference-suite.sh) overrides this via ACI_TEST_PATH to prepend a
+# python3 >= 3.11 symlink dir; nothing else about the suite changes. See
+# test/lib/isolated_path.sh and issue #43 §3.
+BARE_PATH="${ACI_TEST_PATH:-/usr/bin:/bin}"
 
 PASS=0; FAIL=0; FAILED_NAMES=()
 EXTRA_TMP=()   # dirs from mktemp_home(), cleaned up alongside TEST_TMP/TEST_HOME
