@@ -9,7 +9,7 @@
 # ollama if they are not running, creates the GrepAI workspace and its qdrant
 # collection, maps the project into it, fixes chunking, registers MCP servers
 # for Claude Code and Codex, indexes the repo with GitNexus, writes
-# refresh-intel.sh, appends the code-intel block to CLAUDE.md / AGENTS.md and
+# .code-intel, appends the code-intel block to CLAUDE.md / AGENTS.md and
 # starts the watcher.
 #
 # MODES
@@ -77,7 +77,7 @@
 #   ~/.codex/config.toml                   grepai-<ws> + gitnexus MCP entries
 #   <project>/.grepai/config.yaml          chunking + ignore list
 #   <project>/.mcp.json                    project-scope grepai MCP entry
-#   <project>/refresh-intel.sh             generated, version-stamped
+#   <project>/.code-intel                  identity: WORKSPACE + PROJECT
 #   <project>/CLAUDE.md, AGENTS.md         the <!-- code-intel --> block
 #   <project>/.gitignore                   .grepai/ and .gitnexus/
 #   qdrant collection workspace_<ws>       inside the container's volume
@@ -195,7 +195,6 @@ Options:
   --no-analyze      Skip the initial GitNexus analyze (slow on big repos)
   --no-docs         Do not touch CLAUDE.md / AGENTS.md
   --force-docs      Rewrite the code-intel block even if one is present
-  --force-script    Overwrite refresh-intel.sh even if locally modified
   --no-grepai       With --refresh: skip the GrepAI watcher check/start
   --no-gitnexus     With --refresh: skip the GitNexus re-index
   --all             With --status: every project in the registry
@@ -225,7 +224,6 @@ START_WATCH=true
 RUN_ANALYZE=true
 WRITE_DOCS=true
 FORCE_DOCS=false
-FORCE_SCRIPT=false
 STATUS_ALL=false
 AS_JSON=false
 PURGE_COLLECTION=false
@@ -258,7 +256,6 @@ while [[ $# -gt 0 ]]; do
     --no-analyze)       RUN_ANALYZE=false; shift ;;
     --no-docs)          WRITE_DOCS=false; shift ;;
     --force-docs)       FORCE_DOCS=true; shift ;;
-    --force-script)     FORCE_SCRIPT=true; shift ;;
     --no-grepai)        DO_GREPAI=false; shift ;;
     --no-gitnexus)      DO_GITNEXUS=false; shift ;;
     --purge-collection) PURGE_COLLECTION=true; shift ;;
@@ -279,20 +276,6 @@ case "$AGENT_TARGET" in
   codex)  DO_CODEX=true ;;
   both)   DO_CLAUDE=true; DO_CODEX=true ;;
 esac
-
-# --apply stopped generating refresh-intel.sh (issue #16), so this flag's
-# only two call sites are gone. Kept parseable rather than a hard error --
-# --force-script scripted into someone's CI would otherwise suddenly break --
-# but silently doing nothing would be worse than saying so. stderr, and
-# before the mode dispatch below: --status --json's stdout must stay pure
-# JSON regardless of what other flags came along for the ride. Full removal
-# is issue #17's job, alongside render_refresh() and the rest of what it drove.
-if [[ "$FORCE_SCRIPT" == true ]]; then
-  {
-    echo "WARNING: --force-script no longer does anything -- --apply does not"
-    echo "         generate refresh-intel.sh at all anymore (issue #16)."
-  } >&2
-fi
 
 # ---------------------------------------------------------- self-install ----
 
@@ -383,6 +366,15 @@ if [[ "$MODE" == "install" ]]; then
     *) say "WARNING: ~/.local/bin is not on PATH. Add to your shell rc:"
        say "  export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
   esac
+  # code-intel-dash reads this tool's --status --all --json and breaks
+  # silently if the two drift apart (issue #17 dropped project.N.script_state
+  # from that JSON; older dashboard copies still expect it). --install only
+  # ever touches this binary, so a dashboard sitting in ~/.local/bin needs a
+  # manual, matching update.
+  if [[ -e "$HOME/.local/bin/code-intel-dash" ]]; then
+    say "WARNING: ~/.local/bin/code-intel-dash also needs reinstalling to match:"
+    say "         cp code-intel-dash ~/.local/bin/ && chmod +x ~/.local/bin/code-intel-dash"
+  fi
   if [[ ! -f "$CONF_FILE" ]]; then
     cat > "$CONF_FILE" <<EOF
 # agent-code-intel defaults — this file survives upgrades of the script.
@@ -437,9 +429,9 @@ registry_add() {   # $1 = workspace, $2 = path
 #   OK<TAB><workspace><TAB><project>
 #
 # Parsed by python3, not bash `[[ =~ ]]`, matching how every other structured
-# read in this script works (script_state, doc_state, cfg_*_ok below). Never
-# sourced: the file arrives from a stranger's clone, so `. file` would mean
-# running whatever shell they put in it.
+# read in this script works (doc_state, cfg_*_ok below). Never sourced: the
+# file arrives from a stranger's clone, so `. file` would mean running
+# whatever shell they put in it.
 read_code_intel() {
   local dir="$1" file base
   file="$dir/.code-intel"
@@ -506,8 +498,8 @@ fi
 
 [[ -d "$ROOT" ]] || die "not a directory: $ROOT"
 ROOT="$(canon "$ROOT")"       # canonical case and symlinks resolved, so the
-                              # path stored in grepai is the same string
-                              # refresh-intel.sh derives from its own location
+                              # path stored in grepai and .code-intel matches
+                              # what every other probe in this file compares
 
 # `--status --all` reads the registry and never looks at $PWD, so these guards
 # must not apply to it: someone checking every project after a reboot is sitting
@@ -724,46 +716,28 @@ watcher_running() {   # $1 = output of watch_status
 gn_status() { (cd "$ROOT" && gitnexus status 2>&1 || true); }
 gn_fresh()  { case "$1" in *"up-to-date"*|*"up to date"*) return 0 ;; *) return 1 ;; esac; }
 
-# refresh-intel.sh state: missing | current | outdated | modified
-# The stamp on line 2 carries the generator version and the sha256 of the rest
-# of the file. --apply no longer generates or upgrades this script (issue
-# #16); "current" and "outdated" now both just mean "untouched since it was
-# generated" -- see legacy_refresh_script_is_pristine() below, which is what
-# migration actually asks.
-script_state() {
-  [[ -f "$REFRESH" ]] || { echo missing; return; }
-  python3 - "$REFRESH" "$VERSION" <<'PY'
+# ---- transitional: legacy refresh-intel.sh migration (issue #16/#17) ------
+#
+# Once no legacy refresh-intel.sh remains anywhere, this whole block can go.
+# Migration needs exactly one yes/no answer: is this an untouched,
+# tool-generated script (safe to delete), or was it hand-edited or never
+# stamped (must not be touched)? The stamp (`# code-intel-init:
+# version=... body=<sha256>`) used to carry a generator VERSION to compare
+# too, back when there was something to upgrade to -- since --apply no
+# longer generates or upgrades this file, only the sha256-of-body check
+# still means anything.
+legacy_refresh_script_is_pristine() {
+  [[ -f "$REFRESH" ]] || return 1
+  python3 - "$REFRESH" <<'PY'
 import hashlib, re, sys
 lines = open(sys.argv[1], "rb").read().split(b"\n")
-stamp = None
 for i, ln in enumerate(lines):
     m = re.match(rb"^# code-intel-init: version=(\S+) body=([0-9a-f]{64})$", ln)
     if m:
-        stamp = (i, m.group(1).decode(), m.group(2).decode()); break
-if stamp is None:
-    print("modified"); sys.exit(0)
-i, ver, want = stamp
-body = b"\n".join(lines[:i] + lines[i+1:])
-if hashlib.sha256(body).hexdigest() != want: print("modified")
-elif ver != sys.argv[2]:                     print("outdated")
-else:                                        print("current")
+        body = b"\n".join(lines[:i] + lines[i + 1:])
+        sys.exit(0 if hashlib.sha256(body).hexdigest() == m.group(2).decode() else 1)
+sys.exit(1)
 PY
-}
-
-# ---- transitional: legacy refresh-intel.sh migration (issue #16) ----------
-#
-# Once no legacy refresh-intel.sh remains anywhere, this whole block --
-# script_state() above included -- can go (issue #17 tracks the rest of that
-# cleanup). Migration only needs one yes/no question, not script_state()'s
-# four states: is this an untouched, tool-generated script (safe to delete),
-# or was it hand-edited or never stamped (must not be touched)? "outdated"
-# still means the body's sha256 matched the stamp -- only the VERSION
-# comparison is meaningless now that nothing regenerates the file.
-legacy_refresh_script_is_pristine() {
-  case "$(script_state)" in
-    current|outdated) return 0 ;;
-    *)                return 1 ;;
-  esac
 }
 
 # WORKSPACE= from a script already confirmed pristine. No side effects and no
@@ -974,19 +948,19 @@ ensure_model() {
 
 # ============================================================== preflight ====
 #
-# Collects everything that is wrong and reports it in one pass. Covers the
-# dependencies of the GENERATED refresh-intel.sh too, not only this run: the
-# watcher embeds through ollama on every save and refresh-intel.sh queries
-# qdrant after every task, so a machine that installs cleanly but cannot
-# refresh is not set up — and that failure would surface much later, inside an
-# agent run, looking like a code problem rather than a stopped container.
+# Collects everything that is wrong and reports it in one pass. Covers what
+# --refresh needs too, not only this run: the watcher embeds through ollama
+# on every save and --refresh queries qdrant after every task, so a machine
+# that installs cleanly but cannot refresh is not set up — and that failure
+# would surface much later, inside an agent run, looking like a code problem
+# rather than a stopped container.
 
 PF_N=0
 pf_need() { PF_WHAT[$PF_N]="$1"; PF_FIX[$PF_N]="$2"; PF_N=$((PF_N + 1)); row "MISSING" "$1"; }
 pf_ok()   { row "ok" "$1"; }
 
 preflight() {
-  hr "Preflight (this script and the refresh-intel.sh it generates)"
+  hr "Preflight"
 
   if (( ${BASH_VERSINFO[0]:-3} < 3 )); then
     pf_need "bash is too old" "install bash 3.2 or newer"
@@ -1026,19 +1000,6 @@ preflight() {
   if [[ "$DO_CODEX" == true ]]; then
     if have codex; then pf_ok "codex on PATH"
     else pf_need "codex not on PATH" "install Codex, or use --agent claude"; fi
-  fi
-
-  # rtk is optional, but the generated script routes through it when present,
-  # so an installed-but-broken rtk must not pass unnoticed.
-  if have rtk; then
-    if rtk grepai --version >/dev/null 2>&1 || rtk grepai --help >/dev/null 2>&1; then
-      pf_ok "rtk on PATH and proxies grepai — refresh-intel.sh will use it"
-    else
-      pf_need "rtk is on PATH but 'rtk grepai' does not run" \
-              "fix or uninstall rtk — refresh-intel.sh routes through it whenever it is present"
-    fi
-  else
-    row "note" "rtk not on PATH (optional; refresh-intel.sh uses the raw binaries)"
   fi
 
   if qdrant_http_ok && qdrant_grpc_ok; then
@@ -1087,341 +1048,11 @@ preflight() {
         i=$((i + 1))
       done
       say ""
-      say "All of it is needed by agent-code-intel AND by the generated"
-      say "refresh-intel.sh, which runs after every task that changes code."
+      say "All of it is needed by agent-code-intel AND by --refresh, which runs"
+      say "after every task that changes code."
     } >&2
     exit 1
   fi
-}
-
-# ============================================ refresh-intel.sh generation ====
-
-render_refresh() {   # writes the finished, stamped script to $1
-  local out="$1" tpl
-  tpl="$(mktemp)"
-  cat > "$tpl" <<'REFRESH_TPL'
-#!/usr/bin/env bash
-__STAMP__
-#
-# refresh-intel.sh — re-index and audit this project's code intelligence.
-#
-# ---------------------------------------------------------------------------
-# READ THIS FIRST if you did not set this up — humans and coding agents alike.
-# ---------------------------------------------------------------------------
-#
-# This is a LOCAL DEVELOPER TOOL. It is not part of this project's build, its
-# test suite or its CI, and no application code depends on it. It keeps two
-# code-search indexes fresh so AI coding agents can navigate the repository:
-# a GitNexus knowledge graph and a GrepAI semantic index.
-#
-# It is GENERATED by `code-intel-init`, which lives OUTSIDE this repository
-# (normally ~/.local/bin). The stamp on line 2 is a version and a hash of the
-# rest of this file: code-intel-init regenerates this script when it is out of
-# date, and leaves it alone once you edit it. Prefer changing code-intel-init.
-#
-# It needs a stack that is NOT part of this repository and that `npm install`
-# does not provide: the `grepai` and `gitnexus` CLIs, a running qdrant (HTTP
-# and gRPC) and a running ollama with one embedding model pulled.
-#
-# ---------------------------------------------------------------------------
-# On a machine that never ran code-intel-init, THIS SCRIPT WILL FAIL — and
-# that failure is EXPECTED AND HARMLESS.
-# ---------------------------------------------------------------------------
-#
-# It stops before touching anything and exits 1 with
-#
-#   [ERROR: refresh-intel preflight found N unmet dependencies — nothing was indexed]
-#
-# That message says nothing about the health of this project's code. Do NOT
-# "fix" the repository in response to it, and do NOT add these services to the
-# project's dependencies, CI or docker-compose.
-#
-# If you are a coding agent: CLAUDE.md / AGENTS.md here may tell you to run
-# this after every task that changes code. That instruction assumes the stack
-# above is installed. If the preflight fails, skip this script, say so plainly
-# in your summary, and get on with the real task — these indexes are a
-# navigation convenience, never a correctness gate.
-#
-# To get rid of it: delete this file and the <!-- code-intel --> block in
-# CLAUDE.md / AGENTS.md, or run `code-intel-init --remove --apply` here.
-#
-# Usage:
-#   ./refresh-intel.sh           re-index, ensure the watcher runs, audit
-#   ./refresh-intel.sh --audit   audit only, no re-indexing
-#
-# Exits non-zero if either index is stale or misconfigured.
-
-set -euo pipefail
-
-# Canonical path, not just `pwd -P`: bash's builtin can hand back the path as
-# it was typed, so on a case-insensitive volume (stock macOS) ~/Projects and
-# ~/projects produce different strings for one directory and the audit below
-# would claim the workspace does not map this project. /bin/pwd goes through
-# getcwd() and returns what the filesystem actually stores.
-canon() {
-  local d="$1" out
-  [[ -d "$d" ]] || { printf '%s\n' "$d"; return 0; }
-  if out="$( cd -- "$d" 2>/dev/null && { if [[ -x /bin/pwd ]]; then /bin/pwd -P; else pwd -P; fi; } )"; then
-    printf '%s\n' "$out"
-  else
-    printf '%s\n' "$d"
-  fi
-}
-
-ROOT="$(canon "$(dirname -- "${BASH_SOURCE[0]}")")"
-WORKSPACE="__WORKSPACE__"
-PROJECT="__PROJECT__"
-
-QDRANT_HOST="__QDRANT_HOST__"
-QDRANT_HTTP="__QDRANT_HTTP__"
-QDRANT_PORT="__QDRANT_PORT__"
-EMBED_MODEL="__EMBED_MODEL__"
-
-# rtk is a token-saving CLI proxy; fall back to the raw binaries without it.
-if command -v rtk >/dev/null 2>&1; then
-  GREPAI=(rtk grepai); GITNEXUS=(rtk gitnexus)
-else
-  GREPAI=(grepai);     GITNEXUS=(gitnexus)
-fi
-
-DO_GREPAI=true
-DO_GITNEXUS=true
-AUDIT_ONLY=false
-FAILURES=0
-
-usage() {
-  cat <<'USAGE'
-Usage:
-  ./refresh-intel.sh                 Refresh GitNexus + GrepAI, then audit
-  ./refresh-intel.sh --audit         Audit only, no re-indexing
-  ./refresh-intel.sh --no-grepai     Skip the GrepAI watcher check/start
-  ./refresh-intel.sh --no-gitnexus   Skip the GitNexus re-index
-USAGE
-}
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --audit)       AUDIT_ONLY=true; shift ;;
-    --no-grepai)   DO_GREPAI=false; shift ;;
-    --no-gitnexus) DO_GITNEXUS=false; shift ;;
-    -h|--help)     usage; exit 0 ;;
-    *) echo "Unknown argument: $1" >&2; echo >&2; usage >&2; exit 1 ;;
-  esac
-done
-
-fail() { echo "ERROR: $1" >&2; FAILURES=$((FAILURES + 1)); }
-
-watcher_running() {
-  case "$1" in
-    *"not running"*|*"stopped"*|*"inactive"*) return 1 ;;
-    *"running"*|*"active"*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-# -------------------------------------------------------------- preflight ----
-# Only what the selected mode needs: --audit reads status and never embeds, so
-# it does not require ollama.
-
-RP_N=0
-rp_need() { RP_WHAT[$RP_N]="$1"; RP_FIX[$RP_N]="$2"; RP_N=$((RP_N + 1)); }
-rp_port_open() { (exec 3<>"/dev/tcp/$1/$2") >/dev/null 2>&1; }
-
-if [[ "$DO_GREPAI" == true ]]; then
-  command -v grepai >/dev/null 2>&1 \
-    || rp_need "grepai not on PATH" "install GrepAI, or re-run with --no-grepai"
-
-  if command -v curl >/dev/null 2>&1; then
-    RP_QCODE="$(curl -s -o /dev/null -w '%{http_code}' "$QDRANT_HTTP/healthz" 2>/dev/null || true)"
-    [[ "$RP_QCODE" == "200" ]] \
-      || rp_need "qdrant not healthy at $QDRANT_HTTP/healthz (HTTP ${RP_QCODE:-no response})" \
-                 "start it, or run: code-intel-init $WORKSPACE --path $ROOT --apply"
-  else
-    rp_need "curl not on PATH" "install curl — needed to health-check qdrant"
-  fi
-
-  rp_port_open "$QDRANT_HOST" "$QDRANT_PORT" \
-    || rp_need "qdrant gRPC port $QDRANT_PORT closed — grepai reads and writes vectors there, not on the HTTP port" \
-               "publish both ports on the qdrant container"
-
-  if [[ "$AUDIT_ONLY" == false ]]; then
-    if ! command -v ollama >/dev/null 2>&1; then
-      rp_need "ollama not on PATH" "install ollama — the watcher embeds every change through it"
-    elif ! RP_MODELS="$(ollama list 2>/dev/null)"; then
-      rp_need "ollama server not responding" "start it: ollama serve"
-    elif ! ollama show "$EMBED_MODEL" >/dev/null 2>&1 && [[ "$RP_MODELS" != *"$EMBED_MODEL"* ]]; then
-      # `ollama show` is authoritative; the list is only a formatted fallback.
-      rp_need "embedding model $EMBED_MODEL not pulled" "ollama pull $EMBED_MODEL"
-    fi
-  fi
-fi
-
-if [[ "$DO_GITNEXUS" == true ]]; then
-  if ! command -v gitnexus >/dev/null 2>&1; then
-    rp_need "gitnexus not on PATH" "npm i -g gitnexus, or re-run with --no-gitnexus"
-  elif ! gitnexus --version >/dev/null 2>&1; then
-    rp_need "gitnexus is on PATH but does not run" \
-            "npm's global bin is an nvm shim that a node switch breaks: npm i -g gitnexus"
-  fi
-  command -v git >/dev/null 2>&1 \
-    || rp_need "git not on PATH" "install git — GitNexus derives staleness from it"
-fi
-
-if command -v rtk >/dev/null 2>&1; then
-  rtk grepai --version >/dev/null 2>&1 || rtk grepai --help >/dev/null 2>&1 \
-    || rp_need "rtk is on PATH but 'rtk grepai' does not run" \
-               "fix or uninstall rtk — this script routes through it whenever it is present"
-fi
-
-if (( RP_N > 0 )); then
-  {
-    rp_word="dependencies"; (( RP_N == 1 )) && rp_word="dependency"
-    echo "[ERROR: refresh-intel preflight found $RP_N unmet $rp_word — nothing was indexed]"
-    echo
-    rp_i=0
-    while (( rp_i < RP_N )); do
-      echo "  - ${RP_WHAT[$rp_i]}"
-      echo "    fix: ${RP_FIX[$rp_i]}"
-      rp_i=$((rp_i + 1))
-    done
-    echo
-    echo "If you did not set this up: this is a local developer tool generated by"
-    echo "code-intel-init. It is NOT part of this project's build, tests or CI, and"
-    echo "this failure says nothing about the health of the code. It is safe to"
-    echo "ignore. See the comment block at the top of this file."
-  } >&2
-  exit 1
-fi
-
-# ---------------------------------------------------------------- refresh ----
-
-if [[ "$AUDIT_ONLY" == false && "$DO_GREPAI" == true ]]; then
-  echo "GrepAI watcher"
-  echo "--------------"
-  WATCH_STATUS="$("${GREPAI[@]}" watch --workspace "$WORKSPACE" --status 2>&1 || true)"
-  if watcher_running "$WATCH_STATUS"; then
-    echo "already running for workspace $WORKSPACE"
-  else
-    echo "starting watcher for workspace $WORKSPACE..."
-    "${GREPAI[@]}" watch --workspace "$WORKSPACE" --background
-  fi
-  echo
-fi
-
-if [[ "$AUDIT_ONLY" == false && "$DO_GITNEXUS" == true ]]; then
-  echo "GitNexus re-index"
-  echo "-----------------"
-  # A failed re-index must NOT abort the script: the audit below still has
-  # useful things to report, and the exit code already carries the failure.
-  if ! (
-    cd "$ROOT"
-    if GN_OUT="$("${GITNEXUS[@]}" analyze --embeddings 2>&1)"; then
-      echo "$GN_OUT"
-    else
-      GN_CODE=$?
-      echo "$GN_OUT" >&2
-      if [[ "$GN_OUT" == *"Embedding generation completed without persisted embeddings"* ]]; then
-        echo "No GitNexus embeddings were persisted; retrying with structural indexing."
-        "${GITNEXUS[@]}" analyze --force
-      else
-        exit "$GN_CODE"
-      fi
-    fi
-  ); then
-    fail "gitnexus analyze failed"
-    # Its analyzer imports module.registerHooks, added in Node 22.15 / 23.5,
-    # while `gitnexus --version` runs fine on older Node. Name that directly.
-    if command -v node >/dev/null 2>&1 &&
-       ! node -e 'process.exit(typeof require("node:module").registerHooks==="function"?0:1)' >/dev/null 2>&1; then
-      echo "  Node $(node --version 2>/dev/null) is too old for the GitNexus analyzer." >&2
-      echo "  Fix: brew upgrade node && npm i -g gitnexus" >&2
-    fi
-  fi
-  echo
-fi
-
-# ------------------------------------------------------------------ audit ----
-
-if [[ "$DO_GREPAI" == true ]]; then
-  echo "GrepAI audit"
-  echo "------------"
-  WS_STATUS="$("${GREPAI[@]}" workspace status "$WORKSPACE" 2>&1 || true)"
-  echo "$WS_STATUS"
-
-  [[ "$WS_STATUS" == *"Backend: qdrant"* ]] || fail "workspace backend is not qdrant"
-
-  # Tolerant extraction, then a CANONICALISED comparison.
-  #
-  # `workspace status` indents the project line further than `workspace show`
-  # and appends a status glyph, so anchoring at a fixed column finds nothing.
-  # Match "- <name>: " anywhere on the line, then strip trailing whitespace and
-  # non-printable decoration. Comparing canonical paths, not raw strings, is
-  # what makes ~/Projects and ~/projects the same directory again.
-  MAPPED_LINE="$(printf '%s\n' "$WS_STATUS" | grep -F -- "- $PROJECT: " | head -1)"
-  MAPPED="${MAPPED_LINE#*- "$PROJECT": }"
-  [[ -n "$MAPPED_LINE" ]] || MAPPED=""
-  MAPPED="$(printf '%s' "$MAPPED" | LC_ALL=C sed -e 's/[[:space:]]*$//' -e 's/[^[:print:]]*$//' -e 's/[[:space:]]*$//')"
-  if [[ -z "$MAPPED" ]]; then
-    fail "workspace $WORKSPACE has no project named $PROJECT"
-  elif [[ "$(canon "$MAPPED")" != "$ROOT" ]]; then
-    fail "workspace $WORKSPACE maps $PROJECT to $MAPPED, not $ROOT"
-  fi
-
-  WATCH_STATUS="$("${GREPAI[@]}" watch --workspace "$WORKSPACE" --status 2>&1 || true)"
-  echo "$WATCH_STATUS"
-  watcher_running "$WATCH_STATUS" || fail "workspace watcher is not running"
-
-  if [[ -f "$ROOT/.grepai/index.gob" ]]; then
-    echo "NOTE: .grepai/index.gob is a leftover from local GOB indexing."
-    echo "      Workspace searches use qdrant, so it is dead weight: rm it."
-  fi
-  echo
-fi
-
-if [[ "$DO_GITNEXUS" == true ]]; then
-  echo "GitNexus audit"
-  echo "--------------"
-  GN_STATUS_OUT="$(cd "$ROOT" && "${GITNEXUS[@]}" status 2>&1 || true)"
-  echo "$GN_STATUS_OUT"
-  case "$GN_STATUS_OUT" in
-    *"up-to-date"*|*"up to date"*) ;;
-    *) fail "GitNexus index is not up to date for this repo" ;;
-  esac
-  echo
-fi
-
-if (( FAILURES > 0 )); then
-  echo "Code-intel audit failed with $FAILURES error(s)." >&2
-  exit 1
-fi
-
-echo "Code intelligence is fresh."
-REFRESH_TPL
-
-  WS="$WS" PROJ_NAME="$PROJ_NAME" QDRANT_HOST="$QDRANT_HOST" \
-  QDRANT_HTTP="$QDRANT_HTTP" QDRANT_PORT="$QDRANT_PORT" \
-  EMBED_MODEL="$EMBED_MODEL" VERSION="$VERSION" \
-  python3 - "$tpl" "$out" <<'PY'
-import hashlib, os, sys
-tpl, out = sys.argv[1], sys.argv[2]
-s = open(tpl).read()
-for k, v in (("__WORKSPACE__", os.environ["WS"]),
-             ("__PROJECT__",   os.environ["PROJ_NAME"]),
-             ("__QDRANT_HOST__", os.environ["QDRANT_HOST"]),
-             ("__QDRANT_HTTP__", os.environ["QDRANT_HTTP"]),
-             ("__QDRANT_PORT__", os.environ["QDRANT_PORT"]),
-             ("__EMBED_MODEL__", os.environ["EMBED_MODEL"])):
-    s = s.replace(k, v)                      # replace(), not sed: no delimiter
-                                             # or backslash escaping to get wrong
-lines = s.split("\n")
-i = lines.index("__STAMP__")
-body = "\n".join(lines[:i] + lines[i+1:])
-h = hashlib.sha256(body.encode()).hexdigest()
-lines[i] = "# code-intel-init: version=%s body=%s" % (os.environ["VERSION"], h)
-open(out, "w").write("\n".join(lines))
-PY
-  rm -f "$tpl"
-  chmod +x "$out"
 }
 
 # ============================================================ docs block =====
@@ -2233,8 +1864,8 @@ status_json() {
         else printf 'project.%s.ignores_ok\tfalse\n' "$i"; bad=1; fi
         if watcher_running "$(watch_status)"; then printf 'project.%s.watcher\ttrue\n' "$i"
         else printf 'project.%s.watcher\tfalse\n' "$i"; bad=1; fi
-        printf 'project.%s.script_state\t%s\n' "$i" "$(script_state)"
-        # See status_one's identical comment: "missing" is normal post-#16.
+        # See status_one's identical comment: a legacy, unmigrated script is
+        # the only refresh-intel.sh state still worth flagging as drift.
         [[ "$ident_status" == "ABSENT" ]] && legacy_refresh_script_is_pristine && bad=1
         [[ -f "$ROOT/.grepai/index.gob" ]] \
           && printf 'project.%s.gob_leftover\ttrue\n' "$i" \
