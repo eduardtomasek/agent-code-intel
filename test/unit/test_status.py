@@ -200,11 +200,10 @@ class TextTable(unittest.TestCase):
             show="  - widget: %s\n  model nomic-embed-text-v2-moe\n" % root,
             watch="watcher running",
         )
-        drift = commands._Drift()
         rep = commands.Reporter(io.StringIO(), io.StringIO())
         out = rep._stdout  # type: ignore[attr-defined]
-        commands._status_one(rep, "team", root, default_config(), stack, drift)
-        self.assertFalse(drift.hit)
+        drifted = commands._status_one(rep, "team", root, default_config(), stack)
+        self.assertFalse(drifted)
         self.assertIn("  ok        team  %s\n" % root, out.getvalue())
 
     def test_all_empty_registry_is_exit_0(self):
@@ -267,22 +266,20 @@ class TextTable(unittest.TestCase):
             show="  - widget: %s\n  model nomic-embed-text-v2-moe\n" % root,
             watch="running",
         )
-        drift = commands._Drift()
         rep = commands.Reporter(io.StringIO(), io.StringIO())
-        commands._status_one(rep, "team", root, default_config(), stack, drift)
+        drifted = commands._status_one(rep, "team", root, default_config(), stack)
         text = rep._stdout.getvalue()  # type: ignore[attr-defined]
         self.assertIn("stale .grepai/index.gob present (rm it)", text)
         self.assertIn("  ok        team  %s\n" % root, text)  # still ok, not DRIFT
-        self.assertFalse(drift.hit)
+        self.assertFalse(drifted)
 
     def test_name_conflict_is_a_conflict_row_not_generic_drift(self):
         root = _mkrepo("taken")
         stack = _Stack(show="  - taken: /somewhere/else\n")
-        drift = commands._Drift()
         rep = commands.Reporter(io.StringIO(), io.StringIO())
-        commands._status_one(rep, "ws", root, default_config(), stack, drift)
+        drifted = commands._status_one(rep, "ws", root, default_config(), stack)
         text = rep._stdout.getvalue()  # type: ignore[attr-defined]
-        self.assertTrue(drift.hit)
+        self.assertTrue(drifted)
         self.assertIn("  CONFLICT  ws  %s" % root, text)
         self.assertIn("'taken' is mapped to /somewhere/else, not here", text)
         self.assertIn(

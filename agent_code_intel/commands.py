@@ -1,12 +1,17 @@
-"""commands — mode orchestration, the subprocess seam, and the reporter.
+"""commands — mode orchestration and the reporter.
 
-Holds the imperative sequences for preview, apply, refresh, status (table and
-JSON) and remove — none converted yet (issues #53–#56) — plus the narrow,
-testable seams every mode shares (issue #41 §3, §6, §7; issue #51 criterion 5):
+Holds the imperative sequences for the modes: ``status`` (table and JSON) is
+converted here (issue #53); preview, apply, refresh and remove are not yet
+(issues #54–#56). Plus the narrow, testable seams the modes share (issue #41
+§3, §6, §7; issue #51 criterion 5):
 
-* :class:`CommandRunner` — the *one* generic seam for external processes. The
-  :class:`CommandSpec` carries ``cwd``, ``env``, the stream mode and
-  foreground/background explicitly; the caller owns the error policy.
+* :class:`CommandRunner` — the generic *capturing* subprocess seam for the
+  converted modes (a whole run, output collected). The streaming external-stack
+  probes ``status`` needs are their own seam in
+  :mod:`agent_code_intel.integrations` (``commands`` sits above it and cannot
+  route through this class without inverting the dependency). The
+  :class:`CommandSpec` carries ``cwd`` and ``env`` explicitly; the caller owns
+  the error policy.
 * :class:`Reporter` — writes to the passed streams immediately, preserving the
   order of this tool's own output and any subprocess output (never buffers a
   whole run).
@@ -49,7 +54,7 @@ class CommandSpec:
     """A subprocess to run: the argv, and the ``cwd`` / ``env`` it runs under,
     both explicit (issue #41 §3 — no ambient state). Streaming, background
     delegation and the polling windows land with the modes that need them
-    (issues #53–#56)."""
+    (issues #54–#56)."""
 
     argv: tuple[str, ...]
     cwd: str | None = None
@@ -138,19 +143,17 @@ class ModeOutcome:
 #
 # The reference's `--status` (``9406cce`` :1708–:1967). Text mode carries health
 # in the exit code (0 ok / 2 drift); JSON mode always exits 0 after a successful
-# build and carries health in the data (DEV-5 / JSON-2). Both are driven by the
-# same probes — a second "is the watcher running" would drift silently — and
-# neither ever starts a service (issue #53 AC 4).
-
-
-class _Drift:
-    """A tiny mutable flag: ``_status_one`` sets it, ``_do_status`` reads it —
-    the reference's ``STATUS_DRIFT`` global, scoped to one run."""
-
-    __slots__ = ("hit",)
-
-    def __init__(self) -> None:
-        self.hit = False
+# build and carries health in the data (DEV-5 / JSON-2). Neither ever starts a
+# service (issue #53 AC 4).
+#
+# The reference is two code paths — `status_one` (table) and the projects loop
+# inside `status_json` — and this port keeps that shape. What is genuinely
+# shared is the *probe layer*: `integrations.ws_show` / `mapped_path` /
+# `model_state` / `watcher_running` and `project.grepai_config_*` /
+# `legacy_refresh_is_pristine` have one implementation each, and both renderers
+# call that same set, so "is the watcher running" cannot answer two ways. The
+# per-project identity resolution is shared too (`_identity_names`); only the
+# rendering of the answers — table rows vs a JSON object — differs.
 
 
 def run_status(
@@ -194,7 +197,30 @@ def run_status(
             stdout, config, registry_path, _meta_config_file(loaded), version, stack
         )
         return 0
-    return _do_status(reporter, context, status_all, registry_path, config, stack)
+    return _status_text(reporter, context, status_all, registry_path, config, stack)
+
+
+def _identity_names(
+    root: str, identity: "project.Identity", registry_workspace: str
+) -> tuple[str, str]:
+    """``(workspace, proj_name)`` for a non-ERR identity: ``.code-intel`` wins
+    over the registry's own workspace, and ``PROJ_NAME`` is always the file's
+    (or the basename when ABSENT) — the reference's ``:1730``–``:1733`` /
+    ``:1869``–``:1872``, identical in both renderers."""
+
+    if identity.status == "OK":
+        return (
+            identity.workspace or registry_workspace,
+            identity.project or os.path.basename(root),
+        )
+    if identity.status == "ABSENT":
+        return registry_workspace, os.path.basename(root)
+    # pragma: no cover - read_code_intel only returns OK / ABSENT / ERR, and ERR
+    # is handled by each caller before this point (the reference `die`s here).
+    raise CliError(
+        "internal error: read_code_intel(%s) returned unexpected status '%s'"
+        % (root, identity.status)
+    )
 
 
 def _meta_config_file(loaded: LoadedConfig) -> str:
@@ -212,7 +238,7 @@ def _meta_config_file(loaded: LoadedConfig) -> str:
 # ---------------------------------------------------------------- text table --
 
 
-def _do_status(
+def _status_text(
     reporter: Reporter,
     context: ProjectContext,
     status_all: bool,
@@ -220,7 +246,7 @@ def _do_status(
     config: Config,
     stack: integrations.Stack,
 ) -> int:
-    drift = _Drift()
+    drift = False
     if status_all:
         reporter.hr("code-intel status — all registered projects")
         rows = project.read_registry(registry_path)
@@ -228,13 +254,15 @@ def _do_status(
             reporter.say("registry is empty (%s)" % registry_path)
             return 0
         for workspace, path in rows:
-            _status_one(reporter, workspace, path, config, stack, drift)
+            drift |= _status_one(reporter, workspace, path, config, stack)
     else:
         reporter.hr("code-intel status — %s" % context.root)
-        _status_one(reporter, context.workspace, context.root, config, stack, drift)
+        drift = _status_one(
+            reporter, context.workspace, context.root, config, stack
+        )
 
     reporter.say("")
-    if not drift.hit:
+    if not drift:
         reporter.say("All good.")
         return 0
     reporter.say("Repair a project with:  agent-code-intel --path <dir> --apply")
@@ -247,10 +275,9 @@ def _status_one(
     path: str,
     config: Config,
     stack: integrations.Stack,
-    drift: _Drift,
-) -> None:
-    """One project's table rows and its contribution to drift (``9406cce``
-    :1710–:1771).
+) -> bool:
+    """One project's table rows; returns whether it contributed drift
+    (``9406cce`` :1710–:1771).
 
     ``.code-intel`` outranks the registry's own workspace; a broken file is a
     ``BROKEN`` row, never a ``die`` — this also runs inside the ``--all`` loop,
@@ -263,19 +290,9 @@ def _status_one(
     if identity.status == "ERR":
         reporter.row("BROKEN", "%s  %s" % (workspace, path))
         reporter.row("", "  %s" % identity.message)
-        drift.hit = True
-        return
-    if identity.status == "OK":
-        workspace = identity.workspace or workspace
-        proj_name = identity.project or os.path.basename(root)
-    elif identity.status == "ABSENT":
-        proj_name = os.path.basename(root)
-    else:  # pragma: no cover - read_code_intel only returns the three above
-        raise CliError(
-            "internal error: read_code_intel(%s) returned unexpected status '%s'"
-            % (root, identity.status)
-        )
+        return True
 
+    workspace, proj_name = _identity_names(root, identity, workspace)
     grepai_cfg = os.path.join(path, ".grepai", "config.yaml")
     refresh_script = os.path.join(path, "refresh-intel.sh")
 
@@ -283,8 +300,7 @@ def _status_one(
         reporter.row(
             "GONE", "%s  %s  (directory no longer exists)" % (workspace, path)
         )
-        drift.hit = True
-        return
+        return True
 
     show = stack.ws_show(workspace)
     mapped = integrations.mapped_path(show, proj_name)
@@ -298,8 +314,7 @@ def _status_one(
             "  fix: grepai workspace remove %s %s && agent-code-intel %s "
             "--path %s --apply" % (workspace, proj_name, workspace, root),
         )
-        drift.hit = True
-        return
+        return True
 
     bad = False
     if not stack.ws_exists(workspace):
@@ -334,11 +349,8 @@ def _status_one(
     if os.path.isfile(os.path.join(path, ".grepai", "index.gob")):
         reporter.row("", "  stale .grepai/index.gob present (rm it)")
 
-    if not bad:
-        reporter.row("ok", "%s  %s" % (workspace, path))
-    else:
-        reporter.row("DRIFT", "%s  %s" % (workspace, path))
-        drift.hit = True
+    reporter.row("DRIFT" if bad else "ok", "%s  %s" % (workspace, path))
+    return bad
 
 
 # ------------------------------------------------------------- JSON document --
@@ -486,11 +498,7 @@ def _json_projects(
             projects.append(entry)
             continue
 
-        if identity.status == "OK":
-            workspace = identity.workspace or workspace
-            proj_name = identity.project or os.path.basename(root)
-        else:  # ABSENT
-            proj_name = os.path.basename(root)
+        workspace, proj_name = _identity_names(root, identity, workspace)
 
         grepai_cfg = os.path.join(root, ".grepai", "config.yaml")
         refresh_script = os.path.join(root, "refresh-intel.sh")

@@ -61,12 +61,6 @@ def _real_exec(
 
 ExecFn = Callable[[tuple[str, ...], Mapping[str, str], "str | None"], Exec]
 
-# gRPC probe timeout. The reference's `exec 3<>/dev/tcp/host/port` uses the
-# kernel's default connect timeout; a refused port still returns immediately.
-# A bounded wait keeps `--status` responsive on a host where the port is
-# firewalled rather than closed — it never *starts* anything (issue #53 AC 4).
-_GRPC_TIMEOUT_S = 3.0
-
 _TRAILING_WS = re.compile(r"[ \t\r\n\f\v]+$")
 _TRAILING_NONPRINT = re.compile(r"[^\x20-\x7e]+$")
 _MODEL_WORD = re.compile(r"[Mm]odel")
@@ -118,9 +112,14 @@ class Stack:
         return got.stdout.strip() == "200"
 
     def qdrant_grpc_ok(self, host: str, port: str) -> bool:
-        """An open TCP connection to the gRPC port (``9406cce`` :585)."""
+        """An open TCP connection to the gRPC port (``9406cce`` :585).
+
+        No explicit timeout — like the reference's ``exec 3<>/dev/tcp/host/port``
+        it inherits the kernel's connect timeout: a refused port fails at once,
+        a silently-dropping one takes the full SYN-retry window (both end up
+        ``False``)."""
         try:
-            with socket.create_connection((host, int(port)), timeout=_GRPC_TIMEOUT_S):
+            with socket.create_connection((host, int(port))):
                 return True
         except (OSError, ValueError):
             return False
