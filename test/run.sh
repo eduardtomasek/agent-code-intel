@@ -117,6 +117,18 @@ test_help_exits_zero_and_lists_modes() {
   done
 }
 
+# (#18) The 45-line "this is a local dev tool, a failed preflight is
+# harmless" explanation moved out of the generated refresh-intel.sh header
+# (which no longer exists, per #16) and into --help, the one place it lives
+# instead of a copy in every wired-up repo.
+test_help_carries_the_local_dev_tool_explanation() {
+  run "$TEST_TMP" --help
+  assert_status 0 || return
+  assert_contains "LOCAL DEVELOPER TOOL" || return
+  assert_contains "EXPECTED AND HARMLESS" || return
+  assert_contains "do NOT add these services to a" || return
+}
+
 test_unknown_flag_is_rejected() {
   run "$TEST_TMP" --definitely-not-a-flag
   [[ "$STATUS" -ne 0 ]] || { fail "neznámý flag měl skončit nenulově"; return; }
