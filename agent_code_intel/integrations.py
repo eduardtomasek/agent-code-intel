@@ -61,6 +61,15 @@ def _real_exec(
 
 ExecFn = Callable[[tuple[str, ...], Mapping[str, str], "str | None"], Exec]
 
+# Bounded wait on the qdrant health probes. Approved divergence (issue #35
+# DEV-15): the reference's `curl` and `/dev/tcp` have no timeout, so
+# `--status --json` hangs forever against a qdrant that accepts the TCP
+# connection but never answers HTTP. `--status` must stay usable on a machine
+# where the services are unhealthy, and a hung service is a kind of unhealthy —
+# so the port caps the connect and the whole request. It still starts nothing.
+_PROBE_CONNECT_TIMEOUT_S = 3
+_PROBE_TOTAL_TIMEOUT_S = 5
+
 _TRAILING_WS = re.compile(r"[ \t\r\n\f\v]+$")
 _TRAILING_NONPRINT = re.compile(r"[^\x20-\x7e]+$")
 _MODEL_WORD = re.compile(r"[Mm]odel")
@@ -103,23 +112,35 @@ class Stack:
 
     def qdrant_http_ok(self, http_url: str) -> bool:
         """``curl -s -w '%{http_code}' <url>/healthz`` == 200 (``9406cce``
-        :581)."""
+        :581), with a bounded connect + total time (DEV-15)."""
         if not self.have("curl"):
             return False
         got = self._run(
-            ("curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", http_url + "/healthz")
+            (
+                "curl",
+                "-s",
+                "--connect-timeout",
+                str(_PROBE_CONNECT_TIMEOUT_S),
+                "--max-time",
+                str(_PROBE_TOTAL_TIMEOUT_S),
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                http_url + "/healthz",
+            )
         )
         return got.stdout.strip() == "200"
 
     def qdrant_grpc_ok(self, host: str, port: str) -> bool:
-        """An open TCP connection to the gRPC port (``9406cce`` :585).
-
-        No explicit timeout — like the reference's ``exec 3<>/dev/tcp/host/port``
-        it inherits the kernel's connect timeout: a refused port fails at once,
-        a silently-dropping one takes the full SYN-retry window (both end up
-        ``False``)."""
+        """An open TCP connection to the gRPC port (``9406cce`` :585), with a
+        bounded connect time (DEV-15). A refused port fails at once; a
+        silently-dropping one now fails after the cap instead of the kernel's
+        full SYN-retry window."""
         try:
-            with socket.create_connection((host, int(port))):
+            with socket.create_connection(
+                (host, int(port)), timeout=_PROBE_CONNECT_TIMEOUT_S
+            ):
                 return True
         except (OSError, ValueError):
             return False

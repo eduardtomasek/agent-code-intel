@@ -100,6 +100,20 @@ class StackProbes(unittest.TestCase):
         stack = self._stack({})
         self.assertFalse(stack.qdrant_http_ok("http://127.0.0.1:6333"))
 
+    def test_qdrant_probes_are_time_bounded(self):  # DEV-15
+        seen = {}
+
+        def execute(argv, env, cwd):
+            seen["argv"] = argv
+            return Exec(0, "200", "")
+
+        stack = Stack({"PATH": "/usr/bin:/bin"}, execute=execute)
+        self.assertTrue(stack.qdrant_http_ok("http://127.0.0.1:6333"))
+        self.assertIn("--connect-timeout", seen["argv"])
+        self.assertIn("--max-time", seen["argv"])
+        # gRPC: a refused local port still returns fast and False
+        self.assertFalse(stack.qdrant_grpc_ok("127.0.0.1", "9"))
+
     def test_qdrant_grpc_refused_port_is_false(self):
         stack = self._stack({})
         # 9 is discard; nothing listens → connection refused → False, fast
