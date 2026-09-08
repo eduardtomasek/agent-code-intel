@@ -11,18 +11,24 @@ RT-14 (usage → stdout), FMT-1 (``die`` wording).
 import dataclasses
 import io
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from agent_code_intel import __version__
-from agent_code_intel.cli import USAGE, main, parse_args
+from agent_code_intel.cli import USAGE, _conf_dir, main, parse_args
+
+# main() now loads config before parsing (issue #41 §4), so it reads
+# ``$HOME/.config/code-intel``. Point HOME at an empty scratch dir so every
+# run resolves to the built-in defaults and never touches the real machine.
+_ISO_HOME = tempfile.mkdtemp(prefix="aci-cli-parser-")
 
 
 def run(argv, cwd="/work"):
     out, err = io.StringIO(), io.StringIO()
-    code = main(list(argv), {}, cwd, out, err)
+    code = main(list(argv), {"HOME": _ISO_HOME}, cwd, out, err)
     return code, out.getvalue(), err.getvalue()
 
 
@@ -165,25 +171,52 @@ class Options_(unittest.TestCase):
         self.assertEqual((o.workspace, o.workspace_explicit), ("my-ws", True))
 
 
+class ConfDir(unittest.TestCase):
+    """``${XDG_CONFIG_HOME:-$HOME/.config}/code-intel`` (ledger CFG-14)."""
+
+    def test_xdg_config_home_wins(self):
+        self.assertEqual(
+            _conf_dir({"HOME": "/h", "XDG_CONFIG_HOME": "/xdg"}),
+            "/xdg/code-intel",
+        )
+
+    def test_empty_xdg_falls_through_to_home(self):
+        self.assertEqual(
+            _conf_dir({"HOME": "/h", "XDG_CONFIG_HOME": ""}),
+            "/h/.config/code-intel",
+        )
+
+    def test_default_is_home_dot_config(self):
+        self.assertEqual(_conf_dir({"HOME": "/h"}), "/h/.config/code-intel")
+
+
 class Dispatch(unittest.TestCase):
-    """This slice converts parsing only; a resolved mode must not report
-    success (issue #48, decision 70)."""
+    """Config load and identity resolution are converted (issue #51); the
+    modes themselves are not, and a resolved mode must not report success
+    (issue #48, decision 70)."""
 
     def test_no_mode_is_faked_green(self):
+        scratch = tempfile.mkdtemp(prefix="aci-dispatch-")
         for argv, needle in (
-            ([], "init"),
-            (["--refresh"], "refresh"),
-            (["--status"], "status"),
-            (["--status", "--json"], "status-json"),
-            (["--remove"], "remove"),
-            (["--install"], "install"),
+            ([], "'init' mode"),
+            (["--status"], "'status' mode"),
+            (["--status", "--json"], "'status-json' mode"),
+            (["--remove"], "'remove' mode"),
+            (["--install"], "'install' mode"),
         ):
             with self.subTest(argv=argv):
-                code, out, err = run(argv)
+                code, out, err = run(argv, cwd=scratch)
                 self.assertEqual(code, 1)
                 self.assertEqual(out, "")
                 self.assertTrue(err.startswith("[ERROR: "))
                 self.assertIn(needle, err)
+
+    def test_refresh_outside_git_fails_before_the_mode(self):
+        # --refresh resolves the git root first; an empty dir is not one.
+        scratch = tempfile.mkdtemp(prefix="aci-dispatch-refresh-")
+        code, out, err = run(["--refresh"], cwd=scratch)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("not inside a git repository", err)
 
 
 if __name__ == "__main__":
