@@ -58,7 +58,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 DEFAULT_PORT = 7717
 
 # How stale a reading may be before the page stops claiming to know anything.
