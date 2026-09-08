@@ -372,7 +372,7 @@ if [[ "$MODE" == "install" ]]; then
   # ever touches this binary, so a dashboard sitting in ~/.local/bin needs a
   # manual, matching update.
   if [[ -e "$HOME/.local/bin/code-intel-dash" ]]; then
-    say "WARNING: ~/.local/bin/code-intel-dash also needs reinstalling to match --"
+    say "WARNING: ~/.local/bin/code-intel-dash also needs reinstalling to match:"
     say "         cp code-intel-dash ~/.local/bin/ && chmod +x ~/.local/bin/code-intel-dash"
   fi
   if [[ ! -f "$CONF_FILE" ]]; then
