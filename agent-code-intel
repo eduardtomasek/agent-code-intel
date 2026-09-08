@@ -280,6 +280,20 @@ case "$AGENT_TARGET" in
   both)   DO_CLAUDE=true; DO_CODEX=true ;;
 esac
 
+# --apply stopped generating refresh-intel.sh (issue #16), so this flag's
+# only two call sites are gone. Kept parseable rather than a hard error --
+# --force-script scripted into someone's CI would otherwise suddenly break --
+# but silently doing nothing would be worse than saying so. stderr, and
+# before the mode dispatch below: --status --json's stdout must stay pure
+# JSON regardless of what other flags came along for the ride. Full removal
+# is issue #17's job, alongside render_refresh() and the rest of what it drove.
+if [[ "$FORCE_SCRIPT" == true ]]; then
+  {
+    echo "WARNING: --force-script no longer does anything -- --apply does not"
+    echo "         generate refresh-intel.sh at all anymore (issue #16)."
+  } >&2
+fi
+
 # ---------------------------------------------------------- self-install ----
 
 # Allowlist `agent-code-intel --refresh` in Claude Code's USER settings, once
@@ -1615,7 +1629,7 @@ do_preview() {
     if [[ "$LEGACY_PRISTINE" == true ]]; then
       plan "MIGRATE" "delete refresh-intel.sh (working tree change; nothing gets committed)"
     else
-      plan "BLOCKED" "refresh-intel.sh is hand-modified or unstamped -- --apply will refuse to touch it"
+      plan "BLOCKED" "refresh-intel.sh is hand-modified or unstamped — --apply will refuse to touch it"
       plan ""        "fix: rm refresh-intel.sh && agent-code-intel --apply"
     fi
   fi
@@ -1668,7 +1682,7 @@ do_apply() {
   if [[ "$IDENT_STATUS" == "ABSENT" && -f "$REFRESH" ]]; then
     if ! legacy_refresh_script_is_pristine; then
       {
-        say "[ERROR: $REFRESH is hand-modified (or missing its version stamp) -- refusing to touch it]"
+        say "[ERROR: $REFRESH is hand-modified (or missing its version stamp) — refusing to touch it]"
         say ""
         say "Deleting someone's manual edits is the one irreversible mistake this tool"
         say "can make, so migration stops here instead of guessing. Nothing was changed."
@@ -2081,7 +2095,7 @@ status_one() {   # $1 = workspace (registry fallback, .code-intel wins if presen
   # an untouched legacy script sitting in an unmigrated repo is still worth
   # flagging -- it means the next --apply would migrate it away.
   if [[ "$ident_status" == "ABSENT" ]] && legacy_refresh_script_is_pristine; then
-    bad=1; row "" "  refresh-intel.sh present -- run --apply to migrate it to .code-intel"
+    bad=1; row "" "  refresh-intel.sh present — run --apply to migrate it to .code-intel"
   fi
   [[ -f "$p/.grepai/index.gob" ]] && row "" "  stale .grepai/index.gob present (rm it)"
 

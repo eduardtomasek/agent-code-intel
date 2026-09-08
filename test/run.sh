@@ -597,7 +597,7 @@ test_status_flags_pristine_legacy_script_as_drift() {
   write_pristine_refresh_script "$d" 'legacy-ws'
   run "$d" --status
   assert_status 2 || return
-  assert_contains "refresh-intel.sh present -- run --apply to migrate" || return
+  assert_contains "refresh-intel.sh present — run --apply to migrate" || return
 }
 
 # Unchanged pre-#16 behavior: a hand-modified script was never flagged by
@@ -607,7 +607,7 @@ test_status_does_not_flag_modified_legacy_script() {
   local d; d="$(new_repo 'hand-edited-project')"
   write_modified_refresh_script "$d" 'legacy-ws'
   run "$d" --status
-  assert_not_contains "refresh-intel.sh present -- run --apply" || return
+  assert_not_contains "refresh-intel.sh present — run --apply" || return
 }
 
 test_remove_deletes_code_intel() {
@@ -661,6 +661,30 @@ test_remove_dry_run_reports_modified_script_as_note_not_action() {
   assert_contains "hand-modified" || return
   assert_contains "left alone" || return
   [[ -e "$d/refresh-intel.sh" ]] || { fail "dry-run --remove smazal ručně upravený skript"; return; }
+}
+
+# --force-script's only two call sites (do_preview's and do_apply's
+# script_state case blocks) were deleted along with the generator -- it is
+# now parsed but does nothing. Confirms the warning fires, and specifically
+# that it lands on stderr: --status --json's stdout must stay pure JSON no
+# matter what other flags rode along, so run() (which merges 2>&1) cannot be
+# used here.
+test_force_script_warns_it_no_longer_does_anything() {
+  local d; d="$(new_repo 'force-script-warn-repo')"
+  local err
+  err="$(env -i HOME="$TEST_HOME" PATH="$BARE_PATH" TERM=dumb \
+        bash -c "cd '$d' && '$TOOL' --status --force-script 2>&1 1>/dev/null")"
+  [[ "$err" == *"--force-script no longer does anything"* ]] \
+    || { fail "chybí varování o mrtvém --force-script na stderr: $err"; return; }
+}
+
+test_force_script_does_not_corrupt_json_stdout() {
+  local d; d="$(new_repo 'force-script-json-repo')"
+  local out
+  out="$(env -i HOME="$TEST_HOME" PATH="$BARE_PATH" TERM=dumb \
+        bash -c "cd '$d' && '$TOOL' --status --json --force-script 2>/dev/null")"
+  printf '%s' "$out" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null \
+    || { fail "--force-script rozbil --status --json na stdout: $out"; return; }
 }
 
 # ------------------------------------------------------------------- runner --
