@@ -1147,13 +1147,22 @@ write_doc_block() {   # $1 = target file
     return
   fi
   if [[ "$st" == "present" ]]; then
-    python3 - "$target" <<'PY'
-import re, sys
+    # --force-docs: rewrite the block in place, at its existing position.
+    # Deleting it and appending the replacement at the file's end (the old
+    # behavior) shuffles whatever the project keeps after it -- e.g. a later
+    # "## Agent skills" section -- ahead of the new block instead of leaving
+    # it where it was.
+    NEW_DOC_BLOCK="$(DOC_BLOCK_TEXT)" python3 - "$target" <<'PY'
+import os, re, sys
 p = sys.argv[1]
 s = open(p).read()
-s = re.sub(r'\n*<!-- code-intel:start -->.*?<!-- code-intel:end -->\n*', '\n', s, flags=re.S)
+new = os.environ["NEW_DOC_BLOCK"]
+s = re.sub(r'<!-- code-intel:start -->.*?<!-- code-intel:end -->',
+           lambda _m: new, s, count=1, flags=re.S)
 open(p, 'w').write(s)
 PY
+    say "$(basename "$target"): code-intel block rewritten in place"
+    return
   fi
 
   [[ -f "$target" ]] || : > "$target"
