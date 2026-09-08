@@ -1152,11 +1152,10 @@ write_doc_block() {   # $1 = target file
     # behavior) shuffles whatever the project keeps after it -- e.g. a later
     # "## Agent skills" section -- ahead of the new block instead of leaving
     # it where it was.
-    NEW_DOC_BLOCK="$(DOC_BLOCK_TEXT)" python3 - "$target" <<'PY'
-import os, re, sys
-p = sys.argv[1]
+    python3 - "$target" "$(DOC_BLOCK_TEXT)" <<'PY'
+import re, sys
+p, new = sys.argv[1], sys.argv[2]
 s = open(p).read()
-new = os.environ["NEW_DOC_BLOCK"]
 s = re.sub(r'<!-- code-intel:start -->.*?<!-- code-intel:end -->',
            lambda _m: new, s, count=1, flags=re.S)
 open(p, 'w').write(s)
