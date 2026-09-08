@@ -39,16 +39,14 @@ class CommandExit(Exception):
 
 @dataclasses.dataclass(frozen=True)
 class CommandSpec:
-    """A subprocess to run. ``stream`` is ``"capture"`` (collect stdout/stderr)
-    or ``"inherit"`` (hand them straight to the user's terminal);
-    ``background`` maps to the reference's explicit ``nohup … &`` delegations
-    (issue #41 §8) — no general async, no timeouts, no PID management."""
+    """A subprocess to run: the argv, and the ``cwd`` / ``env`` it runs under,
+    both explicit (issue #41 §3 — no ambient state). Streaming, background
+    delegation and the polling windows land with the modes that need them
+    (issues #53–#56)."""
 
     argv: tuple[str, ...]
     cwd: str | None = None
     env: Mapping[str, str] | None = None
-    stream: str = "capture"
-    background: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -61,27 +59,14 @@ class CommandResult:
 
 class CommandRunner:
     """The single generic subprocess seam (issue #41 §3). A test double can
-    record the argv, env, stream mode and ordering of one command without
-    re-implementing the external stack."""
+    record one command's argv, env and ordering without re-implementing the
+    external stack; the caller owns the error policy."""
 
     def run(self, spec: CommandSpec) -> CommandResult:
-        env = dict(spec.env) if spec.env is not None else None
-        if spec.background:
-            subprocess.Popen(
-                list(spec.argv),
-                cwd=spec.cwd,
-                env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            return CommandResult(tuple(spec.argv), 0, "", "")
-        if spec.stream == "inherit":
-            completed = subprocess.run(list(spec.argv), cwd=spec.cwd, env=env)
-            return CommandResult(tuple(spec.argv), completed.returncode, "", "")
         completed = subprocess.run(
             list(spec.argv),
             cwd=spec.cwd,
-            env=env,
+            env=dict(spec.env) if spec.env is not None else None,
             capture_output=True,
             text=True,
         )
@@ -128,14 +113,3 @@ class ModeOutcome:
 
     exit_code: int
     findings: tuple[Finding, ...] = ()
-
-
-__all__ = [
-    "CommandExit",
-    "CommandSpec",
-    "CommandResult",
-    "CommandRunner",
-    "Reporter",
-    "Finding",
-    "ModeOutcome",
-]

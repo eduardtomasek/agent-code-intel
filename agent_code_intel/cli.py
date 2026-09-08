@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+from collections.abc import Mapping
 from typing import Sequence, TextIO
 
 from . import __version__, config, project
@@ -230,15 +231,15 @@ def parse_args(argv: Sequence[str], default_root: str) -> Options:
 
 def main(
     argv: Sequence[str],
-    env,
+    env: Mapping[str, str],
     cwd: str,
     stdout: TextIO,
     stderr: TextIO,
 ) -> int:
     """The single launcher entry point (issue #48, decision 35).
 
-    ``env`` is the process environment (a mapping); ``config.load`` reads the
-    XDG config location from it and hands every subprocess a
+    ``env`` is the process environment; ``config.load`` reads the XDG config
+    location from it and hands every subprocess a
     :class:`~agent_code_intel.config.ChildEnvironment` derived from it — the
     global ``os.environ`` is never mutated.
     """
@@ -249,7 +250,9 @@ def main(
         # Pipeline order (issue #41 §4): ENV/TOML conflict check + config load
         # run *before* argument parsing, so a config error kills --help and
         # --version exactly as the reference's `. "$CONF_FILE"` on :126 does.
-        loaded = config.load(_conf_dir(environ), environ, cwd, stderr)
+        # The Config / ChildEnvironment it returns are consumed once a mode is
+        # converted (#53+); here the load matters for its validation.
+        config.load(_conf_dir(environ), environ, cwd)
 
         opts = parse_args(argv, default_root=cwd)
 
@@ -291,11 +294,11 @@ def main(
         return exc.code
 
 
-def _home(environ: dict) -> str:
+def _home(environ: Mapping[str, str]) -> str:
     return environ.get("HOME") or os.path.expanduser("~")
 
 
-def _conf_dir(environ: dict) -> str:
+def _conf_dir(environ: Mapping[str, str]) -> str:
     """``${XDG_CONFIG_HOME:-$HOME/.config}/code-intel`` (``9406cce`` :121).
 
     An empty ``XDG_CONFIG_HOME`` falls through to the default, matching the

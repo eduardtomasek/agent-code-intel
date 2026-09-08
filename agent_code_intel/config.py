@@ -24,7 +24,7 @@ import subprocess
 import tempfile
 import tomllib
 from collections.abc import Mapping
-from typing import Sequence, TextIO
+from typing import Sequence
 
 
 class CliError(Exception):
@@ -212,7 +212,6 @@ def load(
     conf_dir: str,
     environ: Mapping[str, str],
     cwd: str,
-    stderr: TextIO,
 ) -> LoadedConfig:
     """Resolve configuration for a run.
 
@@ -221,12 +220,15 @@ def load(
     * both ``defaults.env`` and ``defaults.toml`` → hard error *before either
       is read* (issue #37 §8, issue #38 preamble);
     * only ``defaults.toml`` → parsed via :mod:`tomllib`;
-    * only ``defaults.env`` → executed as real bash in ``cwd``;
+    * only ``defaults.env`` → executed as real bash in ``cwd``, its stdout and
+      stderr inherited so anything the file prints reaches the tool's own
+      streams unchanged (issue #38 §2.10);
     * neither → built-in defaults.
 
     Raises :class:`CliError` on a conflict, a TOML error, missing ``bash``, or
-    an ``unset`` transferred name; writes bash's own stderr through and raises
-    ``CliError(wrap=False)`` when the sourced file dies (issue #38 §2.11).
+    an ``unset`` transferred name. When the sourced file dies under ``set -e``
+    bash's own stderr has already streamed through, so this raises a bare
+    ``CliError(wrap=False)`` that adds nothing (issue #38 §2.11).
     """
 
     env_path = os.path.join(conf_dir, "defaults.env")
@@ -248,7 +250,7 @@ def load(
         )
 
     if env_exists:
-        config, child_env, conf_paths = _load_env(env_path, environ, cwd, stderr)
+        config, child_env, conf_paths = _load_env(env_path, environ, cwd)
         return LoadedConfig(
             config=config,
             child_env=child_env,
@@ -347,23 +349,58 @@ def _load_toml(path: str) -> Config:
     return _config_from(scalars, extra_ignores, gitignore_entries)
 
 
-# The bash harvester (issue #38 §3). Presets all 16 declared names to the
-# built-in defaults — a defaults.env that references $QDRANT_HOST dies on
-# `set -u` without this (E7) — sources the user's file in their cwd, then
-# writes a NUL-delimited frame for the 16 names plus a NUL-delimited env dump
-# for the export delta. `set -e` is kept so a non-zero command in the sourced
-# file still kills the run silently, exactly as today (E2, §2.11). The frame
-# code is static per-name (no `eval`, no dynamic variable names): `${V+x}`
-# distinguishes an unset scalar, `declare -p` an unset array from an empty one
-# (E16/E17), and `"$V"` / `"${V[@]}"` give bash's own scalar-vs-array coercion
-# for a slot mismatch (E8).
+@dataclasses.dataclass(frozen=True)
+class _FrameCell:
+    """One name as the bash harvester reported it. ``kind`` is ``"unset"`` /
+    ``"scalar"`` / ``"array"``; ``scalar`` and ``items`` hold whichever applies.
+    ``scalar_value`` / ``array_value`` apply bash's own coercion for a slot that
+    got the other shape (E8)."""
+
+    kind: str
+    scalar: str = ""
+    items: tuple[str, ...] = ()
+
+    def scalar_value(self) -> str:
+        if self.kind == "scalar":
+            return self.scalar
+        return self.items[0] if self.items else ""
+
+    def array_value(self) -> tuple[str, ...]:
+        if self.kind == "array":
+            # Empty array = valid empty list (issue #35 DEV-14, issue #38 §2.6).
+            return self.items
+        return (self.scalar,)
+
+
 def _sh_quote(value: str) -> str:
     return "'" + value.replace("'", "'\\''") + "'"
 
 
+# The bash harvester (issue #38 §3). Presets all 16 declared names to the
+# built-in defaults — a defaults.env that references $QDRANT_HOST dies on
+# `set -u` without this (E7) — sources the user's file in their cwd with stdout
+# and stderr inherited (so the file's own output reaches the tool's streams,
+# §2.10), then writes a NUL-delimited frame for the 16 names and a NUL-delimited
+# env dump for the export delta.
+#
+# §3 describes this transfer as "a dedicated fd 3"; the port writes to two files
+# in a private, auto-cleaned temp dir instead. That keeps every property §3
+# actually requires — NUL is a safe separator (bash cannot hold one, E5), the
+# transfer never touches stdout so the user's `echo` is never mixed in, the
+# environment is never logged — while avoiding a pipe deadlock and a clash with
+# a defaults.env that itself does `exec 3>…`. `set -e` is kept so a non-zero
+# command in the sourced file still kills the run (E2, §2.11). The frame code is
+# static per-name (no `eval`, no dynamic variable names): `${V+x}` distinguishes
+# an unset scalar, `declare -p` an unset array from an empty one (E16/E17), and
+# `"$V"` / `"${V[@]}"` give bash's own scalar-vs-array coercion for a slot
+# mismatch (E8).
 def _harvest_script() -> str:
-    out: list[str] = ["set -euo pipefail", "", '_frame="$1"; _envdump="$2"; _conf="$3"', ""]
-
+    out: list[str] = [
+        "set -euo pipefail",
+        "",
+        '_frame="$1"; _envdump="$2"; _conf="$3"',
+        "",
+    ]
     for name, key in _ENV_SCALAR_NAMES.items():
         out.append("%s=%s" % (name, _sh_quote(_DEFAULT_SCALARS[key])))
     out.append(
@@ -383,7 +420,6 @@ def _harvest_script() -> str:
         "",
         "{",
     ]
-
     for name in list(_ENV_SCALAR_NAMES) + list(_ENV_PATH_NAMES):
         q = _sh_quote(name)
         out += [
@@ -393,7 +429,6 @@ def _harvest_script() -> str:
             "    printf '%%s\\0scalar\\0%%s\\0' %s \"$%s\"" % (q, name),
             "  fi",
         ]
-
     for name in _ENV_ARRAY_NAMES:
         q = _sh_quote(name)
         out += [
@@ -405,7 +440,6 @@ def _harvest_script() -> str:
             "    printf '%%s\\0unset\\0' %s" % q,
             "  fi",
         ]
-
     out += [
         '} > "$_frame"',
         'env -0 > "$_envdump" 2>/dev/null'
@@ -418,7 +452,6 @@ def _load_env(
     env_path: str,
     environ: Mapping[str, str],
     cwd: str,
-    stderr: TextIO,
 ) -> tuple[Config, ChildEnvironment, dict[str, str]]:
     # `bash` from PATH, matching the reference's `#!/usr/bin/env bash`, and only
     # when defaults.env exists (issue #38 §3, Q10).
@@ -433,34 +466,43 @@ def _load_env(
             [bash, "-c", _harvest_script(), "bash", frame_path, dump_path, env_path],
             cwd=cwd,
             env=dict(environ),
+            stdin=subprocess.DEVNULL,
             stdout=None,
-            stderr=subprocess.PIPE,
-            text=True,
+            stderr=None,
         )
-
         if proc.returncode != 0 or not os.path.isfile(frame_path):
-            # The sourced file died under `set -e` — pass bash's own stderr
-            # through untouched and add nothing (issue #38 §2.11).
-            raise CliError(proc.stderr, code=proc.returncode or 1, wrap=False)
-
-        with open(frame_path, "rb") as handle:
-            frame = _parse_frame(handle.read())
+            # The sourced file died under `set -e`; bash's own stderr has
+            # already streamed through, so add nothing (issue #38 §2.11).
+            raise CliError("", code=proc.returncode or 1, wrap=False)
+        frame = _parse_frame(_read_bytes(frame_path))
         child_env = _parse_env_dump(_read_bytes(dump_path), environ)
 
     scalars = dict(_DEFAULT_SCALARS)
     for name, key in _ENV_SCALAR_NAMES.items():
-        scalars[key] = _scalar_value(env_path, name, frame[name])
-
-    arrays: dict[str, tuple[str, ...]] = {}
-    for name, key in _ENV_ARRAY_NAMES.items():
-        arrays[key] = _array_value(env_path, name, frame[name])
+        scalars[key] = _require_set(env_path, name, frame[name]).scalar_value()
 
     conf_paths = {
-        name: _scalar_value(env_path, name, frame[name]) for name in _ENV_PATH_NAMES
+        name: _require_set(env_path, name, frame[name]).scalar_value()
+        for name in _ENV_PATH_NAMES
     }
 
-    config = _config_from(scalars, arrays["extra_ignores"], arrays["gitignore_entries"])
+    config = _config_from(
+        scalars,
+        _require_set(env_path, "EXTRA_IGNORES", frame["EXTRA_IGNORES"]).array_value(),
+        _require_set(
+            env_path, "GITIGNORE_ENTRIES", frame["GITIGNORE_ENTRIES"]
+        ).array_value(),
+    )
     return config, child_env, conf_paths
+
+
+def _require_set(env_path: str, name: str, cell: _FrameCell) -> _FrameCell:
+    """The shared ``unset`` guard (issue #38 §2.7, TXT-7)."""
+    if cell.kind == "unset":
+        raise CliError(
+            "%s: configuration name '%s' was unset" % (env_path, name)
+        )
+    return cell
 
 
 def _read_bytes(path: str) -> bytes:
@@ -471,9 +513,9 @@ def _read_bytes(path: str) -> bytes:
         return b""
 
 
-def _parse_frame(data: bytes) -> dict[str, tuple]:
+def _parse_frame(data: bytes) -> dict[str, _FrameCell]:
     parts = data.split(b"\0")
-    result: dict[str, tuple] = {}
+    result: dict[str, _FrameCell] = {}
     i = 0
     while i < len(parts):
         name = parts[i].decode("utf-8", "surrogateescape")
@@ -481,20 +523,25 @@ def _parse_frame(data: bytes) -> dict[str, tuple]:
             break
         kind = parts[i + 1].decode()
         if kind == "unset":
-            result[name] = ("unset",)
+            result[name] = _FrameCell("unset")
             i += 2
         elif kind == "scalar":
-            result[name] = ("scalar", parts[i + 2].decode("utf-8", "surrogateescape"))
+            result[name] = _FrameCell(
+                "scalar", scalar=parts[i + 2].decode("utf-8", "surrogateescape")
+            )
             i += 3
         elif kind == "array":
             count = int(parts[i + 2].decode())
-            items = [
-                parts[i + 3 + j].decode("utf-8", "surrogateescape") for j in range(count)
-            ]
-            result[name] = ("array", tuple(items))
+            items = tuple(
+                parts[i + 3 + j].decode("utf-8", "surrogateescape")
+                for j in range(count)
+            )
+            result[name] = _FrameCell("array", items=items)
             i += 3 + count
         else:  # pragma: no cover - the harvester only emits the three kinds
-            raise CliError("defaults.env harvester emitted an unknown frame kind %r" % kind)
+            raise CliError(
+                "defaults.env harvester emitted an unknown frame kind %r" % kind
+            )
     return result
 
 
@@ -507,29 +554,3 @@ def _parse_env_dump(data: bytes, environ: Mapping[str, str]) -> ChildEnvironment
         name, _, value = text.partition("=")
         merged[name] = value
     return ChildEnvironment(merged)
-
-
-def _scalar_value(env_path: str, name: str, cell: tuple) -> str:
-    kind = cell[0]
-    if kind == "unset":
-        raise CliError(
-            "%s: configuration name '%s' was unset" % (env_path, name)
-        )
-    if kind == "scalar":
-        return cell[1]
-    # An array in a scalar slot: bash's "$V" takes the first element (E8).
-    items = cell[1]
-    return items[0] if items else ""
-
-
-def _array_value(env_path: str, name: str, cell: tuple) -> tuple[str, ...]:
-    kind = cell[0]
-    if kind == "unset":
-        raise CliError(
-            "%s: configuration name '%s' was unset" % (env_path, name)
-        )
-    if kind == "array":
-        # Empty array = valid empty list (issue #35 DEV-14, issue #38 §2.6).
-        return cell[1]
-    # A scalar in an array slot: a single-element list (E8).
-    return (cell[1],)

@@ -6,9 +6,10 @@ Runs the real bash harvester in a subprocess — no stack, just ``bash`` on the
 isolated PATH. Each case builds its own ``$CONF_DIR`` under a temp tree.
 """
 
-import io
+import dataclasses
 import os
 import sys
+import tempfile
 import textwrap
 import unittest
 from pathlib import Path
@@ -21,8 +22,6 @@ from agent_code_intel.config import ChildEnvironment, CliError, Config
 
 class Base(unittest.TestCase):
     def setUp(self):
-        import tempfile
-
         self.tmp = tempfile.mkdtemp(prefix="aci-config-")
         self.conf_dir = os.path.join(self.tmp, ".config", "code-intel")
         os.makedirs(self.conf_dir)
@@ -41,7 +40,6 @@ class Base(unittest.TestCase):
             self.conf_dir,
             environ if environ is not None else {"HOME": self.tmp, "PATH": os.environ["PATH"]},
             self.cwd,
-            io.StringIO(),
         )
 
 
@@ -251,6 +249,33 @@ class Immutability(unittest.TestCase):
         with self.assertRaises(Exception):
             cfg.chunk_size = "9"  # type: ignore[misc]
         self.assertIsInstance(cfg, Config)
+
+
+class KeyTablesAgree(unittest.TestCase):
+    """The parallel key tables (`_SCALAR_KEYS`, `_INT_KEYS`, `_DEFAULT_SCALARS`,
+    `_ENV_SCALAR_NAMES`, `Config`'s fields) must stay in lockstep — adding a
+    scalar touches all of them."""
+
+    def test_scalar_tables_line_up(self):
+        self.assertEqual(set(config._SCALAR_KEYS), set(config._DEFAULT_SCALARS))
+        self.assertTrue(config._INT_KEYS <= set(config._SCALAR_KEYS))
+        self.assertEqual(set(config._ENV_SCALAR_NAMES.values()), set(config._SCALAR_KEYS))
+
+    def test_array_tables_line_up(self):
+        self.assertEqual(set(config._ENV_ARRAY_NAMES.values()), set(config._ARRAY_KEYS))
+
+    def test_config_fields_match_the_schema(self):
+        fields = {f.name for f in dataclasses.fields(Config)}
+        self.assertEqual(fields, set(config._SCALAR_KEYS) | set(config._ARRAY_KEYS))
+
+    def test_sixteen_transferred_names(self):
+        transferred = (
+            list(config._ENV_SCALAR_NAMES)
+            + list(config._ENV_ARRAY_NAMES)
+            + list(config._ENV_PATH_NAMES)
+        )
+        self.assertEqual(len(transferred), 16)
+        self.assertNotIn("VERSION", transferred)
 
 
 if __name__ == "__main__":
