@@ -117,6 +117,18 @@ test_help_exits_zero_and_lists_modes() {
   done
 }
 
+# (#18) 45řádkové vysvětlení "tohle je lokální vývojářský nástroj, selhaný
+# preflight je neškodný" se přestěhovalo z hlavičky generovaného
+# refresh-intel.sh (ten už podle #16 neexistuje) do --help -- jediné místo,
+# místo kopie v každém zadrátovaném repu.
+test_help_carries_the_local_dev_tool_explanation() {
+  run "$TEST_TMP" --help
+  assert_status 0 || return
+  assert_contains "LOCAL DEVELOPER TOOL" || return
+  assert_contains "EXPECTED AND HARMLESS" || return
+  assert_contains "do NOT add these services to a" || return
+}
+
 test_unknown_flag_is_rejected() {
   run "$TEST_TMP" --definitely-not-a-flag
   [[ "$STATUS" -ne 0 ]] || { fail "neznámý flag měl skončit nenulově"; return; }
