@@ -9,8 +9,9 @@ workspace; the top-level resolution here deliberately does *not* consult them,
 because the reference does not either — it resolves the basename slug and lets
 ``--apply`` override it (``9406cce`` :547–:569 vs :1350–:1367).
 
-The shared status probes and the ``Finding`` rule land with the status table
-(issue #53).
+The status table and JSON status (issue #53) also read the project registry
+here and the pure ``.grepai/config.yaml`` checks the status probes need; the
+external-tool probes live in :mod:`agent_code_intel.integrations`.
 
 Importing this module does no I/O (decision 43).
 """
@@ -65,6 +66,16 @@ _KNOWN_KEYS = ("SCHEMA", "WORKSPACE", "PROJECT")
 _SUPPORTED_SCHEMA = "1"
 _LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
 _STAMP_RE = re.compile(rb"^# code-intel-init: version=(\S+) body=([0-9a-f]{64})$")
+
+# `.grepai/config.yaml` shape checks — pure file reads, the exact regexes the
+# reference's `cfg_chunking_ok` / `cfg_ignores_ok` embedded (``9406cce``
+# :653–:675). Not a YAML parser (decision: "Nepřidávat vlastní obecný YAML
+# parser").
+_CHUNKING_RE = re.compile(
+    r"^chunking:\n[ \t]+size: (\d+)\n[ \t]+overlap: (\d+)$", re.M
+)
+_IGNORE_BLOCK_RE = re.compile(r"^ignore:\n((?:[ \t]+- .*\n?)*)", re.M)
+_IGNORE_ITEM_RE = re.compile(r"^[ \t]+- (.*?)[ \t]*$", re.M)
 
 
 def canon(path: str) -> str:
@@ -135,6 +146,65 @@ def read_code_intel(root: str) -> Identity:
         )
 
     return Identity("OK", workspace=values["WORKSPACE"], project=values["PROJECT"])
+
+
+def read_registry(path: str) -> list[tuple[str, str]]:
+    """The tool's own project registry: ``<workspace>\\t<path>`` per line
+    (``9406cce`` :123, :1952). A line with an empty workspace or path, or no
+    tab, is skipped — the reference's ``[[ -n "$w" && -n "$p" ]] || continue``.
+    A missing file is an empty registry, never an error.
+    """
+
+    try:
+        with open(path, encoding="utf-8", errors="surrogateescape") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return []
+    rows: list[tuple[str, str]] = []
+    for line in lines:
+        if "\t" not in line:
+            continue
+        workspace, project_path = line.split("\t", 1)
+        if not workspace or not project_path:
+            continue
+        rows.append((workspace, project_path))
+    return rows
+
+
+def grepai_config_chunking_ok(
+    config_path: str, chunk_size: str, chunk_overlap: str
+) -> bool:
+    """``.grepai/config.yaml`` declares exactly this chunk size and overlap
+    (``9406cce`` :653). A missing or unreadable file is ``False``."""
+
+    text = _read_text(config_path)
+    if text is None:
+        return False
+    match = _CHUNKING_RE.search(text)
+    return bool(match) and match.group(1) == chunk_size and match.group(2) == chunk_overlap
+
+
+def grepai_config_ignores_ok(config_path: str, extra_ignores: tuple[str, ...]) -> bool:
+    """Every configured ignore entry is present in ``.grepai/config.yaml``'s
+    ``ignore:`` block (``9406cce`` :664). A missing or unreadable file, or a
+    missing block, is ``False``."""
+
+    text = _read_text(config_path)
+    if text is None:
+        return False
+    block = _IGNORE_BLOCK_RE.search(text)
+    if not block:
+        return False
+    present = set(_IGNORE_ITEM_RE.findall(block.group(1)))
+    return all(entry in present for entry in extra_ignores)
+
+
+def _read_text(path: str) -> str | None:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            return handle.read()
+    except OSError:
+        return None
 
 
 def slug(name: str) -> str:

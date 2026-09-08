@@ -9,8 +9,9 @@ short-circuit everything to their right — then the early install branch, then
 project resolution, then mode dispatch.
 
 Parsing and early exit landed in issue #50; config load and project resolution
-in issue #51. Install (#52) and the modes (#53–#56) still raise
-:class:`CliError` — the port fakes no mode as working (issue #48, decision 70).
+in issue #51; install in #52; the status table and JSON status in #53. Refresh
+(#54) and remove (#56) still raise :class:`CliError` — the port fakes no mode as
+working (issue #48, decision 70).
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ import sys
 from collections.abc import Mapping
 from typing import Sequence, TextIO
 
-from . import __version__, config, install, project
+from . import __version__, commands, config, install, project
 from .commands import Reporter
 from .config import CliError
 
@@ -276,7 +277,7 @@ def main(
                 reporter=Reporter(stdout, stderr),
             )
 
-        project.resolve_project(
+        context = project.resolve_project(
             root=opts.root,
             root_explicit=opts.root_explicit,
             mode=opts.mode,
@@ -285,13 +286,28 @@ def main(
             status_all=opts.status_all,
         )
 
-        # Config load and identity resolution are converted; the modes
-        # themselves are not — say so plainly rather than exit 0 on a mode
-        # that does nothing (issue #48, decision 70).
-        label = "status-json" if opts.mode == "status" and opts.as_json else opts.mode
+        if opts.mode == "status":
+            # `have python3 || die` (``9406cce`` :2222) has no analogue: the
+            # port *is* Python, and status no longer shells out to a `python3 -`
+            # heredoc for anything. A conscious structural loss, like DEV-6.
+            return commands.run_status(
+                as_json=opts.as_json,
+                status_all=opts.status_all,
+                agent_target=opts.agent_target,
+                context=context,
+                loaded=loaded,
+                conf_dir=_conf_dir(environ),
+                version=__version__,
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+        # Config load and identity resolution are converted, and so is status
+        # (#53); refresh and remove are not — say so plainly rather than exit 0
+        # on a mode that does nothing (issue #48, decision 70).
         raise CliError(
             "the Python port does not implement the '%s' mode yet "
-            "(issues #53–#56)" % label
+            "(issues #54, #56)" % opts.mode
         )
     except CliError as exc:
         if exc.wrap:

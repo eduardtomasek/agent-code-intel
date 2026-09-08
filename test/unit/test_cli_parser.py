@@ -191,16 +191,15 @@ class ConfDir(unittest.TestCase):
 
 
 class Dispatch(unittest.TestCase):
-    """Config load, identity resolution and ``--install`` are converted
-    (issues #51, #52); the remaining modes are not, and a resolved mode must
-    not report success (issue #48, decision 70)."""
+    """Config load, identity resolution, ``--install`` and ``--status`` are
+    converted (issues #51, #52, #53); refresh and remove are not, and an
+    unconverted resolved mode must not report success (issue #48, decision
+    70)."""
 
     def test_no_mode_is_faked_green(self):
         scratch = tempfile.mkdtemp(prefix="aci-dispatch-")
         for argv, needle in (
             ([], "'init' mode"),
-            (["--status"], "'status' mode"),
-            (["--status", "--json"], "'status-json' mode"),
             (["--remove"], "'remove' mode"),
         ):
             with self.subTest(argv=argv):
