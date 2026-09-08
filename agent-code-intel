@@ -72,7 +72,7 @@
 #   ~/.grepai/workspace.yaml               workspace + project registry
 #   ~/.config/code-intel/projects          this script's own project registry
 #   ~/.claude/settings.json                one permissions.allow rule for
-#                                          ./refresh-intel.sh (--install, --no-perms)
+#                                          agent-code-intel --refresh (--install, --no-perms)
 #   ~/.claude.json                         user-scope gitnexus MCP entry
 #   ~/.codex/config.toml                   grepai-<ws> + gitnexus MCP entries
 #   <project>/.grepai/config.yaml          chunking + ignore list
@@ -280,20 +280,27 @@ esac
 
 # ---------------------------------------------------------- self-install ----
 
-# Allowlist ./refresh-intel.sh in Claude Code's USER settings, once per machine.
+# Allowlist `agent-code-intel --refresh` in Claude Code's USER settings, once
+# per machine, and remove the legacy ./refresh-intel.sh rules if present.
 #
-# The rule is relative to the project directory, so one user-level entry covers
-# every project this script ever wires and matches nothing anywhere else — far
-# better than a per-project .claude/settings.json, which would have to be
-# written into (and committed with) each repository.
+# Decided in issue #9: a single, exact rule, no wildcard. This has GLOBAL
+# scope, unlike the old ./refresh-intel.sh rule, which was relative to the
+# project directory and so matched nowhere else — one user-level entry now
+# allows the command in any directory on the machine. That is only safe
+# together with --refresh's own hard requirement (issue #4): it never founds
+# a project, so the one approved invocation either refreshes an
+# already-initialized repo or fails loudly, never anything in between. A
+# starred `Bash(agent-code-intel *)` is deliberately NOT used: it would
+# silently also approve `--remove --apply --purge-collection`.
 #
 # This writes into another tool's configuration, so it is careful about it: it
 # merges instead of replacing, never touches a file it cannot parse, writes
 # through a temporary file, and says exactly what it did. --no-perms skips it.
 install_claude_permission() {
-  python3 - "Bash(./refresh-intel.sh)" "Bash(./refresh-intel.sh *)" <<'PY'
+  python3 - "Bash(agent-code-intel --refresh)" <<'PY'
 import json, os, sys
-rules = sys.argv[1:]
+new_rules = sys.argv[1:]
+old_rules = ["Bash(./refresh-intel.sh)", "Bash(./refresh-intel.sh *)"]
 p = os.path.expanduser("~/.claude/settings.json")
 os.makedirs(os.path.dirname(p), exist_ok=True)
 cfg = {}
@@ -305,24 +312,34 @@ if os.path.exists(p) and os.path.getsize(p) > 0:
             raise ValueError("not an object")
     except Exception as e:
         print("claude: %s is not readable JSON (%s) — left untouched." % (p, e))
-        print("        Add these to permissions.allow by hand: %s" % ", ".join(rules))
+        print("        Add these to permissions.allow by hand: %s" % ", ".join(new_rules))
         sys.exit(0)
 allow = cfg.setdefault("permissions", {}).setdefault("allow", [])
 if not isinstance(allow, list):
     print("claude: permissions.allow in %s is not a list — left untouched." % p)
     sys.exit(0)
-added = [r for r in rules if r not in allow]
-if not added:
-    print("claude: ./refresh-intel.sh already allowed in %s" % p)
-    sys.exit(0)
+
+removed = [r for r in old_rules if r in allow]
+for r in removed:
+    allow.remove(r)
+added = [r for r in new_rules if r not in allow]
 allow.extend(added)
+
+if not added and not removed:
+    print("claude: agent-code-intel --refresh already allowed in %s" % p)
+    sys.exit(0)
+
 tmp = p + ".code-intel.tmp"
 with open(tmp, "w") as f:
     json.dump(cfg, f, indent=2)
     f.write("\n")
 os.replace(tmp, p)
-print("claude: allowed %s in %s" % (" and ".join(added), p))
-print("        (so Claude Code can run it after a task without asking every time)")
+
+if added:
+    print("claude: allowed %s in %s" % (" and ".join(added), p))
+    print("        (so Claude Code can run it after a task without asking every time)")
+if removed:
+    print("claude: removed legacy %s from %s" % (" and ".join(removed), p))
 PY
 }
 

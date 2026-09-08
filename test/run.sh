@@ -443,6 +443,84 @@ test_refresh_with_both_stacks_skipped_needs_no_stack() {
   assert_contains "Code intelligence is fresh." || return
 }
 
+# ------------------------------------------------ --install permission rule (#15) --
+#
+# --install writes into ~/.claude/settings.json, which lives under $HOME --
+# unlike the rest of the suite, these tests roll their own throwaway HOME
+# per test instead of the shared $TEST_HOME: test_suite_does_not_touch_real_home
+# asserts $TEST_HOME never gets a settings.json, and these deliberately give
+# one to a private, disposable directory instead.
+
+run_install() {  # $1 = HOME to install into, $2.. = extra args to --install
+  local home="$1"; shift
+  OUT="$(env -i HOME="$home" PATH="$BARE_PATH" TERM=dumb "$TOOL" --install "$@" 2>&1)"
+  STATUS=$?
+}
+
+allow_list() {  # $1 = HOME; echoes permissions.allow as one rule per line
+  python3 -c "
+import json
+print(chr(10).join(json.load(open('$1/.claude/settings.json'))['permissions']['allow']))
+" 2>/dev/null
+}
+
+test_install_writes_exact_refresh_rule() {
+  local home; home="$(mktemp -d)"
+  run_install "$home"
+  assert_status 0 || return
+  assert_contains "Bash(agent-code-intel --refresh)" || return
+  local allow; allow="$(allow_list "$home")"
+  [[ "$allow" == "Bash(agent-code-intel --refresh)" ]] \
+    || { fail "allow list není přesně jedno pravidlo bez hvězdičky: $allow"; return; }
+}
+
+test_install_removes_legacy_refresh_intel_rules() {
+  local home; home="$(mktemp -d)"
+  mkdir -p "$home/.claude"
+  cat > "$home/.claude/settings.json" <<'JSON'
+{"permissions": {"allow": ["Bash(./refresh-intel.sh)", "Bash(./refresh-intel.sh *)", "Bash(git status)"]}}
+JSON
+  run_install "$home"
+  assert_status 0 || return
+  assert_contains "removed legacy" || return
+  local allow; allow="$(allow_list "$home")"
+  [[ "$allow" == *"refresh-intel.sh"* ]] && { fail "legacy pravidlo přežilo: $allow"; return; }
+  [[ "$allow" == *"Bash(agent-code-intel --refresh)"* ]] || { fail "nové pravidlo chybí: $allow"; return; }
+  [[ "$allow" == *"Bash(git status)"* ]] || { fail "nesouvisející pravidlo bylo smazáno: $allow"; return; }
+}
+
+test_install_no_perms_skips_permission_file() {
+  local home; home="$(mktemp -d)"
+  run_install "$home" --no-perms
+  assert_status 0 || return
+  assert_contains "skipped the Claude Code permission rule" || return
+  [[ ! -e "$home/.claude/settings.json" ]] || { fail "--no-perms přesto zapsal settings.json"; return; }
+}
+
+test_install_is_idempotent() {
+  local home; home="$(mktemp -d)"
+  run_install "$home"
+  run_install "$home"
+  assert_status 0 || return
+  assert_contains "already allowed" || return
+  local allow; allow="$(allow_list "$home")"
+  [[ "$(printf '%s\n' "$allow" | wc -l | tr -d ' ')" == "1" ]] \
+    || { fail "opakovaný --install zdvojil pravidlo: $allow"; return; }
+}
+
+test_install_leaves_unreadable_settings_json_untouched() {
+  local home; home="$(mktemp -d)"
+  mkdir -p "$home/.claude"
+  printf 'not valid json{' > "$home/.claude/settings.json"
+  local before; before="$(cat "$home/.claude/settings.json")"
+  run_install "$home"
+  assert_status 0 || return
+  assert_contains "not readable JSON" || return
+  assert_contains "Add these to permissions.allow by hand" || return
+  local after; after="$(cat "$home/.claude/settings.json")"
+  [[ "$before" == "$after" ]] || { fail "nečitelný settings.json byl přesto přepsán"; return; }
+}
+
 # ------------------------------------------------------------------- runner --
 
 TEST_TMP="$(mktemp -d)"; TEST_HOME="$(mktemp -d)"
