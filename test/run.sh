@@ -37,7 +37,12 @@ HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TOOL="${TOOL:-$HERE/../agent-code-intel}"
 EXPECTED_NAME="${EXPECTED_NAME:-agent-code-intel}"
 
-BARE_PATH=/usr/bin:/bin
+# /usr/bin:/bin by default (no grepai/gitnexus/ollama/node/claude/codex — a
+# faithful model of a machine without the stack). The migration harness
+# (test/reference-suite.sh) overrides this via ACI_TEST_PATH to prepend a
+# python3 >= 3.11 symlink dir; nothing else about the suite changes. See
+# test/lib/isolated_path.sh and issue #43 §3.
+BARE_PATH="${ACI_TEST_PATH:-/usr/bin:/bin}"
 
 PASS=0; FAIL=0; FAILED_NAMES=()
 EXTRA_TMP=()   # dirs from mktemp_home(), cleaned up alongside TEST_TMP/TEST_HOME
@@ -65,41 +70,12 @@ write_code_intel() {  # $1 = adresář, $2.. = řádky souboru .code-intel
   printf '%s\n' "$@" > "$d/.code-intel"
 }
 
-# Legacy refresh-intel.sh se správným razítkem (sha256 těla sedí), přesně
-# jak by ho vygeneroval starý nástroj -- pro testování migrace (#16) bez
-# potřeby reálného grepai/gitnexus stacku (script_state() jen parsuje soubor,
-# nic nespouští).
-write_pristine_refresh_script() {  # $1 = adresář, $2 = WORKSPACE
-  local d="$1" ws="$2"
-  python3 - "$d/refresh-intel.sh" "$ws" <<'PY'
-import hashlib, sys
-path, ws = sys.argv[1], sys.argv[2]
-lines = [
-    "#!/usr/bin/env bash",
-    "__STAMP__",
-    "#",
-    "# refresh-intel.sh -- test fixture",
-    "",
-    'WORKSPACE="%s"' % ws,
-    'PROJECT="whatever"',
-    "",
-    "echo hi",
-]
-i = lines.index("__STAMP__")
-body = "\n".join(lines[:i] + lines[i + 1:])
-h = hashlib.sha256(body.encode()).hexdigest()
-lines[i] = "# code-intel-init: version=9.9.9 body=%s" % h
-open(path, "w").write("\n".join(lines))
-PY
-}
-
-# Stejný tvar, ale s razítkem, jehož sha256 neodpovídá tělu -- simuluje ruční
-# úpravu po vygenerování, tedy script_state() == modified.
-write_modified_refresh_script() {  # $1 = adresář, $2 = WORKSPACE
-  local d="$1" ws="$2"
-  write_pristine_refresh_script "$d" "$ws"
-  printf '\n# a hand-edited line\n' >> "$d/refresh-intel.sh"
-}
+# Legacy refresh-intel.sh fixtures (pristine + hand-modified) live in
+# test/lib/fixtures.sh -- one definition of the stamp format, shared with the
+# migration differential harness (issue #49).
+. "$HERE/lib/fixtures.sh"
+write_pristine_refresh_script() { aci_write_pristine_refresh_script "$@"; }
+write_modified_refresh_script()  { aci_write_modified_refresh_script "$@"; }
 
 fail() { FAIL=$((FAIL+1)); FAILED_NAMES+=("$CURRENT"); printf '  FAIL  %s\n        %s\n' "$CURRENT" "$1"; }
 
