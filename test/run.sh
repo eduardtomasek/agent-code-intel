@@ -341,6 +341,108 @@ assert cf.startswith(home), "config_file mimo izolovaný HOME: %s" % cf
 ' 2>/dev/null || { fail "nástroj nečte konfiguraci z izolovaného HOME"; return; }
 }
 
+# ------------------------------------------------------------------ --refresh --
+#
+# (#14) Unlike --apply/--preview, a `--refresh --no-grepai --no-gitnexus`
+# happy path needs no external stack at all -- both audits are skipped by the
+# same flags that skip the writes -- so it is the one full non-error path
+# through this mode that this hermetic harness CAN exercise end-to-end.
+#
+# Exit code 2 (ran, but found drift) is NOT covered here, for the same reason
+# noted above for --apply: reaching the audit at all requires refresh_preflight
+# to pass, which needs a real grepai+qdrant or gitnexus on PATH. Verified
+# manually instead against an already-`--apply`'d project.
+
+test_refresh_never_bootstraps_missing_code_intel() {
+  local d; d="$(new_repo 'refresh-no-code-intel')"
+  run "$d" --refresh
+  assert_status 1 || return
+  assert_contains "no .code-intel" || return
+  assert_contains "--apply" || return
+  local leftover
+  leftover="$(cd "$d" && ls -A | grep -v '^\.git$' | grep -v '^file.txt$' || true)"
+  [[ -z "$leftover" ]] || { fail "--refresh selhal, ale v repu přibylo: $leftover"; return; }
+}
+
+test_refresh_finds_git_root_from_subdirectory() {
+  local d; d="$(new_repo 'refresh-nested-root')"
+  write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=root-ws' 'PROJECT=refresh-nested-root'
+  mkdir -p "$d/sub/deeper"
+  run "$d/sub/deeper" --refresh --no-grepai --no-gitnexus
+  assert_status 0 || return
+  assert_contains "Workspace: root-ws" || return
+}
+
+# Vnořený git repo (např. submodule) musí najít VLASTNÍ .code-intel, ne
+# rodičovské -- hranicí hledání kořene je git root (rozhodnutí v #4).
+test_refresh_nested_repo_does_not_see_parent_code_intel() {
+  local parent; parent="$(new_repo 'refresh-parent-repo')"
+  write_code_intel "$parent" 'SCHEMA=1' 'WORKSPACE=parent-ws' 'PROJECT=refresh-parent-repo'
+  local child="$parent/child-repo"
+  mkdir -p "$child"
+  ( cd "$child" && git init -q . )
+  write_code_intel "$child" 'SCHEMA=1' 'WORKSPACE=child-ws' 'PROJECT=child-repo'
+  run "$child" --refresh --no-grepai --no-gitnexus
+  assert_status 0 || return
+  assert_contains "Workspace: child-ws" || return
+  assert_not_contains "parent-ws" || return
+}
+
+# --path je explicitní override: přeskakuje hledání kořene gitu úplně, takže
+# ukázaný adresář se bere doslovně, i když leží pod repem s vlastním .code-intel.
+test_refresh_path_flag_is_explicit_override() {
+  local d; d="$(new_repo 'refresh-path-override')"
+  write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=root-ws' 'PROJECT=refresh-path-override'
+  mkdir -p "$d/sub"
+  run "$TEST_TMP" --refresh --path "$d/sub"
+  assert_status 1 || return
+  assert_contains "no .code-intel" || return
+}
+
+test_refresh_dies_outside_a_git_repository() {
+  mkdir -p "$TEST_TMP/refresh-no-git/plain"
+  run "$TEST_TMP/refresh-no-git/plain" --refresh
+  assert_status 1 || return
+  assert_contains "not inside a git repository" || return
+}
+
+test_refresh_preflight_blocks_without_stack() {
+  local d; d="$(new_repo 'refresh-preflight-repo')"
+  write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=x' 'PROJECT=refresh-preflight-repo'
+  run "$d" --refresh
+  assert_status 1 || return
+  assert_contains "[ERROR: refresh preflight found" || return
+  assert_contains "nothing was refreshed" || return
+}
+
+test_refresh_no_grepai_skips_grepai_preflight() {
+  local d; d="$(new_repo 'refresh-no-grepai-repo')"
+  write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=x' 'PROJECT=refresh-no-grepai-repo'
+  run "$d" --refresh --no-grepai
+  assert_status 1 || return           # gitnexus is still missing from bare PATH
+  assert_not_contains "grepai not on PATH" || return
+  assert_contains "gitnexus not on PATH" || return
+}
+
+test_refresh_no_gitnexus_skips_gitnexus_preflight() {
+  local d; d="$(new_repo 'refresh-no-gitnexus-repo')"
+  write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=x' 'PROJECT=refresh-no-gitnexus-repo'
+  run "$d" --refresh --no-gitnexus
+  assert_status 1 || return           # grepai/qdrant is still missing from bare PATH
+  assert_not_contains "gitnexus not on PATH" || return
+  assert_contains "grepai not on PATH" || return
+}
+
+# Když jsou obě strany vypnuté, --refresh nepotřebuje vůbec žádný stack -- to
+# je jediná šťastná cesta touto novou funkcí, kterou lze ověřit hermeticky.
+test_refresh_with_both_stacks_skipped_needs_no_stack() {
+  local d; d="$(new_repo 'refresh-skip-both-repo')"
+  write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=skip-both-ws' 'PROJECT=refresh-skip-both-repo'
+  run "$d" --refresh --no-grepai --no-gitnexus
+  assert_status 0 || return
+  assert_contains "Code intelligence is fresh." || return
+}
+
 # ------------------------------------------------------------------- runner --
 
 TEST_TMP="$(mktemp -d)"; TEST_HOME="$(mktemp -d)"
