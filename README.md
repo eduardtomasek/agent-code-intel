@@ -609,10 +609,9 @@ cp code-intel-dash ~/.local/bin/ && chmod +x ~/.local/bin/code-intel-dash
 ```
 
 Pamatuj na tohle i při každé budoucí aktualizaci: `agent-code-intel --install`
-přepisuje jen sebe. Zapomenutý starý dashboard pak tiše přestane rozumět datům,
-která vrací `--status --all --json` (výstupní kontrakt se může měnit) — pokud
-`agent-code-intel --install` starší dashboard najde, upozorní tě, ale sám ho
-nepřeinstaluje.
+přepisuje jen sebe. Najde-li v `~/.local/bin/` starší `code-intel-dash`,
+upozorní tě, ale sám ho nepřeinstaluje — udělej to ručně stejným příkazem jako
+výše.
 
 Dashboard nemá vlastní kontroly — všechno o projektech si vytáhne z
 `agent-code-intel --status --all --json`. Kdyby měl kontroly vlastní, dřív nebo
