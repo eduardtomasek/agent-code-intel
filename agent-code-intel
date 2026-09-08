@@ -110,10 +110,11 @@ EXTRA_IGNORES=(package-lock.json npm-shrinkwrap.json yarn.lock pnpm-lock.yaml
                Gemfile.lock
                # The stack's own scaffolding. `gitnexus analyze` installs six
                # skill files under .claude/skills/; this script writes
-               # refresh-intel.sh and .mcp.json. Measured on a five-file
-               # project they were 73 of 96 vectors — pure dilution of the
-               # index these tools exist to keep useful.
-               .claude refresh-intel.sh .mcp.json)
+               # .mcp.json. Measured on a five-file project they were 73 of 96
+               # vectors — pure dilution of the index these tools exist to
+               # keep useful. refresh-intel.sh is no longer generated (issue
+               # #16), so it does not belong here either.
+               .claude .mcp.json)
 
 GITIGNORE_ENTRIES=(".grepai/" ".gitnexus/")
 
@@ -214,6 +215,7 @@ EOF
 ROOT="$PWD"
 ROOT_EXPLICIT=false
 WS=""
+WS_EXPLICIT=false
 AGENT_TARGET="both"
 MODE="init"
 APPLY=false
@@ -266,7 +268,7 @@ while [[ $# -gt 0 ]]; do
     -*)                 die "unknown flag: $1" ;;
     *)
       [[ -z "$WS" ]] || die "workspace name given twice ('$WS' and '$1')"
-      WS="$1"; shift ;;
+      WS="$1"; WS_EXPLICIT=true; shift ;;
   esac
 done
 
@@ -710,8 +712,10 @@ gn_fresh()  { case "$1" in *"up-to-date"*|*"up to date"*) return 0 ;; *) return 
 
 # refresh-intel.sh state: missing | current | outdated | modified
 # The stamp on line 2 carries the generator version and the sha256 of the rest
-# of the file, so an untouched but old script can be upgraded automatically
-# while a locally edited one is left alone.
+# of the file. --apply no longer generates or upgrades this script (issue
+# #16); "current" and "outdated" now both just mean "untouched since it was
+# generated" -- see legacy_refresh_script_is_pristine() below, which is what
+# migration actually asks.
 script_state() {
   [[ -f "$REFRESH" ]] || { echo missing; return; }
   python3 - "$REFRESH" "$VERSION" <<'PY'
@@ -730,6 +734,49 @@ if hashlib.sha256(body).hexdigest() != want: print("modified")
 elif ver != sys.argv[2]:                     print("outdated")
 else:                                        print("current")
 PY
+}
+
+# ---- transitional: legacy refresh-intel.sh migration (issue #16) ----------
+#
+# Once no legacy refresh-intel.sh remains anywhere, this whole block --
+# script_state() above included -- can go (issue #17 tracks the rest of that
+# cleanup). Migration only needs one yes/no question, not script_state()'s
+# four states: is this an untouched, tool-generated script (safe to delete),
+# or was it hand-edited or never stamped (must not be touched)? "outdated"
+# still means the body's sha256 matched the stamp -- only the VERSION
+# comparison is meaningless now that nothing regenerates the file.
+legacy_refresh_script_is_pristine() {
+  case "$(script_state)" in
+    current|outdated) return 0 ;;
+    *)                return 1 ;;
+  esac
+}
+
+# WORKSPACE= from a script already confirmed pristine. No side effects and no
+# hard-error handling -- do_preview uses this bare read just to show the
+# right plan; adopt_legacy_workspace below adds the conflict check apply needs.
+read_legacy_workspace() {
+  python3 - "$REFRESH" <<'PY'
+import re, sys
+s = open(sys.argv[1]).read()
+m = re.search(r'^WORKSPACE="([^"]*)"$', s, re.M)
+sys.stdout.write(m.group(1) if m else "")
+PY
+}
+
+# Adopts WORKSPACE from a pristine legacy refresh-intel.sh into $WS. It was a
+# real, in-production value -- more trustworthy than the basename guess the
+# ABSENT branch fell back to -- but an explicit CLI workspace argument still
+# wins outright, same as everywhere else identity is decided (map #2 decision
+# 7: a conflict between sources is a hard error, never resolved silently).
+adopt_legacy_workspace() {
+  local legacy_ws; legacy_ws="$(read_legacy_workspace)"
+  [[ -n "$legacy_ws" ]] \
+    || die "$REFRESH passed the pristine check but has no WORKSPACE= line -- internal error, please report"
+  if [[ "$WS_EXPLICIT" == true && "$WS" != "$legacy_ws" ]]; then
+    die "explicit workspace '$WS' conflicts with '$legacy_ws' read from $REFRESH"
+  fi
+  WS="$legacy_ws"
 }
 
 # docs block state: missing | present | orphaned  (orphaned = :start without
@@ -1469,6 +1516,26 @@ do_preview() {
     plan "skip" "git (--no-git)"
   fi
 
+  # --apply no longer generates refresh-intel.sh (issue #16): a legacy one
+  # gets migrated instead. Adopt its WORKSPACE here too, so the CREATE line
+  # right below (and everything after it) shows the value --apply will
+  # actually use, not a basename guess it is about to discard. Never dies on
+  # a conflict here -- like the embedder MISMATCH case further down, preview
+  # reports it as a plan row instead of a hard stop; do_apply's own
+  # adopt_legacy_workspace is what actually enforces it.
+  local LEGACY_PRISTINE=false
+  if [[ "$IDENT_STATUS" == "ABSENT" && -f "$REFRESH" ]] && legacy_refresh_script_is_pristine; then
+    LEGACY_PRISTINE=true
+    local legacy_ws; legacy_ws="$(read_legacy_workspace)"
+    if [[ -n "$legacy_ws" ]]; then
+      if [[ "$WS_EXPLICIT" != true ]]; then
+        WS="$legacy_ws"
+      elif [[ "$WS" != "$legacy_ws" ]]; then
+        plan "CONFLICT" "explicit workspace '$WS' vs. '$legacy_ws' read from refresh-intel.sh"
+      fi
+    fi
+  fi
+
   plan_probe keep ".code-intel present" CREATE \
              ".code-intel (WORKSPACE=$WS, PROJECT=$PROJ_NAME)" code_intel_present
 
@@ -1542,17 +1609,16 @@ do_preview() {
     plan "RUN" "gitnexus analyze in $ROOT"
   fi
 
-  case "$(script_state)" in
-    missing)  plan "WRITE"   "refresh-intel.sh" ;;
-    current)  plan "keep"    "refresh-intel.sh is current (v$VERSION)" ;;
-    outdated) plan "UPGRADE" "refresh-intel.sh is from an older generator" ;;
-    modified)
-      if [[ "$FORCE_SCRIPT" == true ]]; then
-        plan "OVERWRITE" "refresh-intel.sh is locally modified (--force-script)"
-      else
-        plan "keep" "refresh-intel.sh is locally modified, left alone"
-      fi ;;
-  esac
+  # Only relevant while .code-intel is still ABSENT -- once it exists, any
+  # leftover refresh-intel.sh is not this tool's business to touch.
+  if [[ "$IDENT_STATUS" == "ABSENT" && -f "$REFRESH" ]]; then
+    if [[ "$LEGACY_PRISTINE" == true ]]; then
+      plan "MIGRATE" "delete refresh-intel.sh (working tree change; nothing gets committed)"
+    else
+      plan "BLOCKED" "refresh-intel.sh is hand-modified or unstamped -- --apply will refuse to touch it"
+      plan ""        "fix: rm refresh-intel.sh && agent-code-intel --apply"
+    fi
+  fi
 
   if [[ "$WRITE_DOCS" == true ]]; then
     local doc
@@ -1594,6 +1660,59 @@ do_preview() {
 # ================================================================= apply =====
 
 do_apply() {
+  # Legacy migration (issue #16), before anything else: $WS must be right
+  # before step 0 writes .code-intel with it, and the least surprising
+  # behavior for a hand-modified script is to refuse before touching
+  # anything else in this run, not partway through. Only fires once, ever,
+  # per project -- once .code-intel exists this whole block is inert.
+  if [[ "$IDENT_STATUS" == "ABSENT" && -f "$REFRESH" ]]; then
+    if ! legacy_refresh_script_is_pristine; then
+      {
+        say "[ERROR: $REFRESH is hand-modified (or missing its version stamp) -- refusing to touch it]"
+        say ""
+        say "Deleting someone's manual edits is the one irreversible mistake this tool"
+        say "can make, so migration stops here instead of guessing. Nothing was changed."
+        say "To continue:"
+        say ""
+        say "  rm refresh-intel.sh && agent-code-intel --apply"
+      } >&2
+      exit 1
+    fi
+
+    adopt_legacy_workspace
+    hr "Legacy migration"
+    rm -f "$REFRESH"
+    say "deleted $REFRESH, adopted WORKSPACE=$WS from it"
+    say "This changed your working tree ($REFRESH was version-controlled) --"
+    say "nothing was committed. Review and commit it yourself."
+    say ""
+
+    if [[ -f "$GREPAI_CFG" ]]; then
+      local ig_before ig_after
+      ig_before="$(cksum < "$GREPAI_CFG")"
+      python3 - "$GREPAI_CFG" <<'PY'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+s2 = re.sub(r'^[ \t]+- refresh-intel\.sh[ \t]*\n', '', s, flags=re.M)
+if s2 != s:
+    open(p, 'w').write(s2)
+PY
+      ig_after="$(cksum < "$GREPAI_CFG")"
+      if [[ "$ig_after" != "$ig_before" ]]; then
+        say "removed the stale refresh-intel.sh entry from .grepai/config.yaml's ignore list"
+        # A running watcher holds this file in memory and would otherwise
+        # revert the edit above on its next index write.
+        if watcher_running "$(watch_status)"; then
+          grepai watch --workspace "$WS" --stop >/dev/null 2>&1 || true
+          grepai watch --workspace "$WS" --background >/dev/null 2>&1 || true
+          say "restarted the watcher so it reloads the config"
+        fi
+      fi
+    fi
+    say ""
+  fi
+
   hr "0. Repository"
   if [[ "$DO_GIT" == true ]]; then
     if git_is_repo; then
@@ -1821,7 +1940,7 @@ PY
     ANALYZE_RESULT="empty"
     say "no source files yet — nothing to index."
     say "The GrepAI watcher picks up files as you create them. Run"
-    say "./refresh-intel.sh once you have code, to build the GitNexus graph."
+    say "agent-code-intel --refresh once you have code, to build the GitNexus graph."
   elif (
       cd "$ROOT"
       if GN_OUT="$(gitnexus analyze --embeddings 2>&1)"; then
@@ -1847,31 +1966,17 @@ PY
       say "         22.15 / 23.5. You have $(node --version 2>/dev/null). Fix it with:"
       say "           brew upgrade node"
       say "           npm i -g gitnexus"
-      say "         Then run ./refresh-intel.sh here. Everything else is wired"
-      say "         and GrepAI search works already."
+      say "         Then run agent-code-intel --refresh here. Everything else is"
+      say "         wired and GrepAI search works already."
     else
       say "WARNING: gitnexus analyze failed. Setup continues — the knowledge graph"
-      say "         is simply empty until it succeeds. Re-run ./refresh-intel.sh"
-      say "         later, or ./refresh-intel.sh --no-gitnexus to skip it."
+      say "         is simply empty until it succeeds. Re-run agent-code-intel"
+      say "         --refresh later, or add --no-gitnexus to skip it."
     fi
   fi
   say ""
 
-  hr "7. refresh-intel.sh"
-  case "$(script_state)" in
-    missing)  render_refresh "$REFRESH"; say "wrote $REFRESH (v$VERSION)" ;;
-    current)  say "refresh-intel.sh is current (v$VERSION)" ;;
-    outdated) render_refresh "$REFRESH"; say "upgraded refresh-intel.sh to v$VERSION" ;;
-    modified)
-      if [[ "$FORCE_SCRIPT" == true ]]; then
-        render_refresh "$REFRESH"; say "overwrote locally modified refresh-intel.sh (--force-script)"
-      else
-        say "refresh-intel.sh is locally modified — left alone (--force-script overwrites)"
-      fi ;;
-  esac
-  say ""
-
-  hr "8. Agent instructions"
+  hr "7. Agent instructions"
   if [[ "$WRITE_DOCS" == true ]]; then
     [[ "$DO_CLAUDE" == true ]] && write_doc_block "$ROOT/CLAUDE.md"
     # Codex reads AGENTS.md, so create it when Codex is a target; otherwise
@@ -1885,7 +1990,7 @@ PY
   say ""
 
   if [[ "$START_WATCH" == true ]]; then
-    hr "9. GrepAI watcher"
+    hr "8. GrepAI watcher"
     if watcher_running "$(watch_status)"; then
       say "watcher already running for '$WS'"
     else
@@ -1907,15 +2012,15 @@ PY
     empty)
       say "- Both indexes are empty: there is no code here yet. The watcher indexes"
       say "  files into GrepAI as you save them; GitNexus only updates when you run"
-      say "  ./refresh-intel.sh, so run it once the first files exist."
+      say "  agent-code-intel --refresh, so run it once the first files exist."
       say "- Make an initial commit early: GitNexus derives staleness from git, and"
       say "  a repository with no commits cannot report an up-to-date index." ;;
     failed)
       say "- GitNexus indexing FAILED — the graph is empty. Everything else is wired." ;;
     skipped)
-      say "- GitNexus was not indexed (--no-analyze). Run ./refresh-intel.sh to do it." ;;
+      say "- GitNexus was not indexed (--no-analyze). Run agent-code-intel --refresh to do it." ;;
   esac
-  say "- Run ./refresh-intel.sh after each task that changes the codebase."
+  say "- Run agent-code-intel --refresh after each task that changes the codebase."
 }
 
 # ================================================================ status =====
@@ -1971,10 +2076,13 @@ status_one() {   # $1 = workspace (registry fallback, .code-intel wins if presen
   cfg_chunking_ok           || { bad=1; row "" "  chunking is not $CHUNK_SIZE/$CHUNK_OVERLAP"; }
   cfg_ignores_ok            || { bad=1; row "" "  lock files not in the ignore list"; }
   watcher_running "$(watch_status)" || { bad=1; row "" "  watcher not running"; }
-  case "$(script_state)" in
-    missing)  bad=1; row "" "  refresh-intel.sh missing" ;;
-    outdated) bad=1; row "" "  refresh-intel.sh is from an older generator" ;;
-  esac
+  # --apply no longer generates or upgrades refresh-intel.sh (issue #16), so
+  # "missing" is now the normal, permanent state for a modern project. Only
+  # an untouched legacy script sitting in an unmigrated repo is still worth
+  # flagging -- it means the next --apply would migrate it away.
+  if [[ "$ident_status" == "ABSENT" ]] && legacy_refresh_script_is_pristine; then
+    bad=1; row "" "  refresh-intel.sh present -- run --apply to migrate it to .code-intel"
+  fi
   [[ -f "$p/.grepai/index.gob" ]] && row "" "  stale .grepai/index.gob present (rm it)"
 
   if (( bad == 0 )); then row "ok" "$w  $p"; else row "DRIFT" "$w  $p"; STATUS_DRIFT=1; fi
@@ -2112,7 +2220,8 @@ status_json() {
         if watcher_running "$(watch_status)"; then printf 'project.%s.watcher\ttrue\n' "$i"
         else printf 'project.%s.watcher\tfalse\n' "$i"; bad=1; fi
         printf 'project.%s.script_state\t%s\n' "$i" "$(script_state)"
-        case "$(script_state)" in missing|outdated) bad=1 ;; esac
+        # See status_one's identical comment: "missing" is normal post-#16.
+        [[ "$ident_status" == "ABSENT" ]] && legacy_refresh_script_is_pristine && bad=1
         [[ -f "$ROOT/.grepai/index.gob" ]] \
           && printf 'project.%s.gob_leftover\ttrue\n' "$i" \
           || printf 'project.%s.gob_leftover\tfalse\n' "$i"
@@ -2339,7 +2448,14 @@ do_remove() {
     if [[ "$DO_CODEX" == true ]]; then
       codex_grepai_ok && { row "$verb" "codex mcp remove grepai-$WS"; acts=$((acts+1)); }
     fi
-    [[ -f "$REFRESH" ]]        && { row "$verb" "rm refresh-intel.sh"; acts=$((acts+1)); }
+    [[ -f "$ROOT/.code-intel" ]] && { row "$verb" "rm .code-intel"; acts=$((acts+1)); }
+    if [[ -f "$REFRESH" ]]; then
+      if legacy_refresh_script_is_pristine; then
+        row "$verb" "rm refresh-intel.sh"; acts=$((acts+1))
+      else
+        row "note" "refresh-intel.sh is hand-modified — left alone"
+      fi
+    fi
     [[ -d "$ROOT/.grepai" ]]   && { row "$verb" "rm -rf .grepai/"; acts=$((acts+1)); }
     [[ -d "$ROOT/.gitnexus" ]] && { row "$verb" "rm -rf .gitnexus/"; acts=$((acts+1)); }
     local d
@@ -2368,9 +2484,17 @@ do_remove() {
   if [[ "$DO_CODEX" == true ]] && codex_grepai_ok; then
     codex mcp remove "grepai-$WS" >/dev/null 2>&1 || true; say "codex: removed 'grepai-$WS'"
   fi
-  rm -f "$REFRESH"
+  rm -f "$ROOT/.code-intel"
   rm -rf "$ROOT/.grepai" "$ROOT/.gitnexus"
-  say "removed refresh-intel.sh, .grepai/ and .gitnexus/"
+  say "removed .code-intel, .grepai/ and .gitnexus/"
+  if [[ -f "$REFRESH" ]]; then
+    if legacy_refresh_script_is_pristine; then
+      rm -f "$REFRESH"
+      say "removed refresh-intel.sh"
+    else
+      say "refresh-intel.sh is hand-modified — left it alone; remove it yourself"
+    fi
+  fi
   local d
   for d in CLAUDE.md AGENTS.md; do
     if [[ "$(doc_state "$ROOT/$d")" == "present" ]]; then

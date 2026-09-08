@@ -49,6 +49,42 @@ write_code_intel() {  # $1 = adresář, $2.. = řádky souboru .code-intel
   printf '%s\n' "$@" > "$d/.code-intel"
 }
 
+# Legacy refresh-intel.sh se správným razítkem (sha256 těla sedí), přesně
+# jak by ho vygeneroval starý nástroj -- pro testování migrace (#16) bez
+# potřeby reálného grepai/gitnexus stacku (script_state() jen parsuje soubor,
+# nic nespouští).
+write_pristine_refresh_script() {  # $1 = adresář, $2 = WORKSPACE
+  local d="$1" ws="$2"
+  python3 - "$d/refresh-intel.sh" "$ws" <<'PY'
+import hashlib, sys
+path, ws = sys.argv[1], sys.argv[2]
+lines = [
+    "#!/usr/bin/env bash",
+    "__STAMP__",
+    "#",
+    "# refresh-intel.sh -- test fixture",
+    "",
+    'WORKSPACE="%s"' % ws,
+    'PROJECT="whatever"',
+    "",
+    "echo hi",
+]
+i = lines.index("__STAMP__")
+body = "\n".join(lines[:i] + lines[i + 1:])
+h = hashlib.sha256(body.encode()).hexdigest()
+lines[i] = "# code-intel-init: version=9.9.9 body=%s" % h
+open(path, "w").write("\n".join(lines))
+PY
+}
+
+# Stejný tvar, ale s razítkem, jehož sha256 neodpovídá tělu -- simuluje ruční
+# úpravu po vygenerování, tedy script_state() == modified.
+write_modified_refresh_script() {  # $1 = adresář, $2 = WORKSPACE
+  local d="$1" ws="$2"
+  write_pristine_refresh_script "$d" "$ws"
+  printf '\n# a hand-edited line\n' >> "$d/refresh-intel.sh"
+}
+
 fail() { FAIL=$((FAIL+1)); FAILED_NAMES+=("$CURRENT"); printf '  FAIL  %s\n        %s\n' "$CURRENT" "$1"; }
 
 assert_status() {
@@ -534,6 +570,97 @@ test_install_leaves_unreadable_settings_json_untouched() {
   assert_contains "Add these to permissions.allow by hand" || return
   local after; after="$(cat "$home/.claude/settings.json")"
   [[ "$before" == "$after" ]] || { fail "nečitelný settings.json byl přesto přepsán"; return; }
+}
+
+# --------------------------------------------------- legacy migration (#16) --
+#
+# The migration itself (do_apply's actual delete-and-write) is NOT covered
+# here: it lives entirely behind full preflight, the same known limitation
+# already noted above for --apply's happy path generally. What IS reachable
+# hermetically: --status's drift reporting around a legacy script (pure file
+# reads, no external tool), and --remove, which -- like --status -- runs
+# without preflight by design. Verified manually instead against a real,
+# in-production refresh-intel.sh: migration adopts its WORKSPACE, deletes it,
+# writes .code-intel, strips the stale ignore-list entry and restarts the
+# watcher; a hand-edited copy is correctly refused with the exact `rm
+# refresh-intel.sh && agent-code-intel --apply` fix command, unchanged.
+
+test_status_no_longer_flags_missing_refresh_script_as_drift() {
+  local d; d="$(new_repo 'modern-project')"
+  write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=modern-ws' 'PROJECT=modern-project'
+  run "$d" --status
+  assert_not_contains "refresh-intel.sh missing" || return
+}
+
+test_status_flags_pristine_legacy_script_as_drift() {
+  local d; d="$(new_repo 'legacy-project')"
+  write_pristine_refresh_script "$d" 'legacy-ws'
+  run "$d" --status
+  assert_status 2 || return
+  assert_contains "refresh-intel.sh present -- run --apply to migrate" || return
+}
+
+# Unchanged pre-#16 behavior: a hand-modified script was never flagged by
+# --status either (only migration itself refuses it) -- confirms the fix
+# above didn't accidentally start (or stop) flagging this case too.
+test_status_does_not_flag_modified_legacy_script() {
+  local d; d="$(new_repo 'hand-edited-project')"
+  write_modified_refresh_script "$d" 'legacy-ws'
+  run "$d" --status
+  assert_not_contains "refresh-intel.sh present -- run --apply" || return
+}
+
+test_remove_deletes_code_intel() {
+  local d; d="$(new_repo 'remove-code-intel-repo')"
+  write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=x' 'PROJECT=remove-code-intel-repo'
+  run "$d" --remove --apply
+  assert_status 0 || return
+  assert_contains "removed .code-intel" || return
+  [[ ! -e "$d/.code-intel" ]] || { fail ".code-intel přežil --remove --apply"; return; }
+}
+
+test_remove_deletes_pristine_legacy_script() {
+  local d; d="$(new_repo 'remove-pristine-repo')"
+  write_pristine_refresh_script "$d" 'legacy-ws'
+  run "$d" --remove --apply
+  assert_status 0 || return
+  assert_contains "removed refresh-intel.sh" || return
+  [[ ! -e "$d/refresh-intel.sh" ]] || { fail "nedotčený legacy skript přežil --remove --apply"; return; }
+}
+
+test_remove_leaves_modified_legacy_script_alone() {
+  local d; d="$(new_repo 'remove-modified-repo')"
+  write_modified_refresh_script "$d" 'legacy-ws'
+  run "$d" --remove --apply
+  assert_status 0 || return
+  assert_contains "hand-modified" || return
+  assert_contains "left it alone" || return
+  [[ -e "$d/refresh-intel.sh" ]] || { fail "--remove smazal ručně upravený skript"; return; }
+}
+
+test_remove_dry_run_changes_nothing() {
+  local d; d="$(new_repo 'remove-dry-run-repo')"
+  write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=x' 'PROJECT=remove-dry-run-repo'
+  write_pristine_refresh_script "$d" 'legacy-ws'
+  run "$d" --remove
+  assert_status 2 || return
+  assert_contains "rm .code-intel" || return
+  assert_contains "rm refresh-intel.sh" || return
+  [[ -e "$d/.code-intel" ]]      || { fail "dry-run --remove smazal .code-intel"; return; }
+  [[ -e "$d/refresh-intel.sh" ]] || { fail "dry-run --remove smazal refresh-intel.sh"; return; }
+}
+
+# A hand-modified script is a "note", not a plannable action, so with
+# nothing else to remove this is the "Nothing to remove" exit-0 path -- not
+# exit 2 like the pristine case above.
+test_remove_dry_run_reports_modified_script_as_note_not_action() {
+  local d; d="$(new_repo 'remove-dry-run-modified-repo')"
+  write_modified_refresh_script "$d" 'legacy-ws'
+  run "$d" --remove
+  assert_status 0 || return
+  assert_contains "hand-modified" || return
+  assert_contains "left alone" || return
+  [[ -e "$d/refresh-intel.sh" ]] || { fail "dry-run --remove smazal ručně upravený skript"; return; }
 }
 
 # ------------------------------------------------------------------- runner --
