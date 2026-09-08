@@ -181,7 +181,7 @@ Preview exit codes:   0 = everything matches, 2 = drift, 1 = error.
 Options:
   --apply           Actually make changes. Without it: preview only.
   --refresh         Re-index GitNexus, start the GrepAI watcher if it is not
-                    running, then audit -- like --status, plus those writes.
+                    running, then audit — like --status, plus those writes.
                     Never creates anything: fails if .code-intel is missing.
                     Root is the enclosing git repo (--path overrides this).
   --path DIR        Project directory (default: current directory). With
@@ -460,15 +460,15 @@ PY
 
 # ------------------------------------------------------- path resolution ----
 
-# --refresh has no ${BASH_SOURCE[0]} to derive a root from -- it is a global
-# command, not a generated per-project script -- so it finds the nearest git
+# --refresh has no ${BASH_SOURCE[0]} to derive a root from — it is a global
+# command, not a generated per-project script — so it finds the nearest git
 # root from $PWD instead. The git root IS the search boundary: a nested repo
 # (e.g. a submodule) must find its own .code-intel, never a parent's. --path
 # is an explicit override that skips this search entirely, same as every
 # other mode.
 if [[ "$MODE" == "refresh" && "$ROOT_EXPLICIT" != true ]]; then
   ROOT="$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" \
-    || die "not inside a git repository: $ROOT -- pass --path, or run --apply in a git repo first"
+    || die "not inside a git repository: $ROOT — pass --path, or run --apply in a git repo first"
 fi
 
 [[ -d "$ROOT" ]] || die "not a directory: $ROOT"
@@ -504,7 +504,7 @@ case "$IDENT_STATUS" in
     # falling back to a basename-derived guess here would let it silently
     # invent identity for a directory --apply was never run in.
     if [[ "$MODE" == "refresh" ]]; then
-      die "no .code-intel in $ROOT -- this project has not been set up; run: agent-code-intel --path $ROOT --apply"
+      die "no .code-intel in $ROOT — this project has not been set up; run: agent-code-intel --path $ROOT --apply"
     fi
     if [[ -z "$WS" ]]; then
       WS="$(basename "$ROOT" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g; s/--*/-/g; s/^-//; s/-$//')"
@@ -2166,19 +2166,25 @@ do_status() {
 # already died before this runs, so by this point .code-intel is known-good.
 
 RF_N=0
-rf_need() { RF_WHAT[$RF_N]="$1"; RF_FIX[$RF_N]="$2"; RF_N=$((RF_N + 1)); }
+rf_need() { RF_WHAT[$RF_N]="$1"; RF_FIX[$RF_N]="$2"; RF_N=$((RF_N + 1)); row "MISSING" "$1"; }
+rf_ok()   { row "ok" "$1"; }
 
 # Lighter than preflight(): --refresh only re-applies what --apply already
-# set up, so it checks just what this run will use -- gated the same way by
-# --no-grepai / --no-gitnexus -- and never claude/codex, which --refresh
+# set up, so it checks just what this run will use — gated the same way by
+# --no-grepai / --no-gitnexus — and never claude/codex, which --refresh
 # never touches.
 refresh_preflight() {
-  if [[ "$DO_GREPAI" == true ]]; then
-    have grepai || rf_need "grepai not on PATH" "install GrepAI, or re-run with --no-grepai"
+  hr "Preflight (--refresh)"
 
-    if qdrant_http_ok; then
-      qdrant_grpc_ok || rf_need "qdrant answers on $QDRANT_HTTP_PORT but gRPC $QDRANT_PORT is closed -- grepai reads and writes vectors there" \
-                                 "republish the container with both ports"
+  if [[ "$DO_GREPAI" == true ]]; then
+    if have grepai; then rf_ok "grepai on PATH"
+    else rf_need "grepai not on PATH" "install GrepAI, or re-run with --no-grepai"; fi
+
+    if qdrant_http_ok && qdrant_grpc_ok; then
+      rf_ok "qdrant healthy on $QDRANT_HTTP_PORT (HTTP) and $QDRANT_PORT (gRPC)"
+    elif qdrant_http_ok; then
+      rf_need "qdrant answers on $QDRANT_HTTP_PORT but gRPC $QDRANT_PORT is closed — grepai reads and writes vectors there" \
+              "republish the container with both ports"
     else
       rf_need "qdrant not healthy at $QDRANT_HTTP/healthz" \
               "start it, or run: agent-code-intel --path $ROOT --apply"
@@ -2190,6 +2196,8 @@ refresh_preflight() {
       rf_need "ollama server not responding at $OLLAMA_HTTP" "start it: ollama serve"
     elif ! ollama_has_model; then
       rf_need "embedding model $EMBED_MODEL not pulled" "ollama pull $EMBED_MODEL"
+    else
+      rf_ok "ollama responding, $EMBED_MODEL available"
     fi
   fi
 
@@ -2199,10 +2207,14 @@ refresh_preflight() {
     elif ! gitnexus --version >/dev/null 2>&1; then
       rf_need "gitnexus is on PATH but does not run" \
               "npm's global bin is an nvm-versioned shim that a node switch leaves broken: npm i -g gitnexus"
+    else
+      rf_ok "gitnexus $(gitnexus --version 2>/dev/null | head -1) runs"
     fi
-    have git || rf_need "git not on PATH" "install git — GitNexus derives staleness from it"
+    if have git; then rf_ok "git on PATH"
+    else rf_need "git not on PATH" "install git — GitNexus derives staleness from it"; fi
   fi
 
+  say ""
   if (( RF_N > 0 )); then
     {
       local w="dependencies" i=0
