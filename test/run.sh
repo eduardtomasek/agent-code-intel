@@ -572,6 +572,27 @@ test_install_leaves_unreadable_settings_json_untouched() {
   [[ "$before" == "$after" ]] || { fail "nečitelný settings.json byl přesto přepsán"; return; }
 }
 
+# --install only ever touches its own binary; a code-intel-dash sitting in
+# ~/.local/bin reads this tool's --status --all --json and silently breaks
+# once the two drift apart (issue #17 dropped project.N.script_state), so
+# --install must say so (issue #17's own AC).
+test_install_warns_to_reinstall_dashboard_when_present() {
+  mktemp_home; local home="$MKTEMP_HOME"
+  mkdir -p "$home/.local/bin"
+  printf '#!/bin/sh\n' > "$home/.local/bin/code-intel-dash"
+  chmod +x "$home/.local/bin/code-intel-dash"
+  run_install "$home"
+  assert_status 0 || return
+  assert_contains "code-intel-dash also needs reinstalling" || return
+}
+
+test_install_does_not_warn_when_dashboard_absent() {
+  mktemp_home; local home="$MKTEMP_HOME"
+  run_install "$home"
+  assert_status 0 || return
+  assert_not_contains "code-intel-dash" || return
+}
+
 # --------------------------------------------------- legacy migration (#16) --
 #
 # The migration itself (do_apply's actual delete-and-write) is NOT covered
@@ -663,28 +684,15 @@ test_remove_dry_run_reports_modified_script_as_note_not_action() {
   [[ -e "$d/refresh-intel.sh" ]] || { fail "dry-run --remove smazal ručně upravený skript"; return; }
 }
 
-# --force-script's only two call sites (do_preview's and do_apply's
-# script_state case blocks) were deleted along with the generator -- it is
-# now parsed but does nothing. Confirms the warning fires, and specifically
-# that it lands on stderr: --status --json's stdout must stay pure JSON no
-# matter what other flags rode along, so run() (which merges 2>&1) cannot be
-# used here.
-test_force_script_warns_it_no_longer_does_anything() {
-  local d; d="$(new_repo 'force-script-warn-repo')"
-  local err
-  err="$(env -i HOME="$TEST_HOME" PATH="$BARE_PATH" TERM=dumb \
-        bash -c "cd '$d' && '$TOOL' --status --force-script 2>&1 1>/dev/null")"
-  [[ "$err" == *"--force-script no longer does anything"* ]] \
-    || { fail "chybí varování o mrtvém --force-script na stderr: $err"; return; }
-}
-
-test_force_script_does_not_corrupt_json_stdout() {
-  local d; d="$(new_repo 'force-script-json-repo')"
-  local out
-  out="$(env -i HOME="$TEST_HOME" PATH="$BARE_PATH" TERM=dumb \
-        bash -c "cd '$d' && '$TOOL' --status --json --force-script 2>/dev/null")"
-  printf '%s' "$out" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null \
-    || { fail "--force-script rozbil --status --json na stdout: $out"; return; }
+# #16 left --force-script parseable-but-inert (its only two call sites were
+# gone) with a stderr warning, precisely so a --force-script baked into
+# someone's CI would not suddenly break; #17 finishes the removal, so it is
+# now a plain unknown flag like any other -- same contract as
+# test_unknown_flag_is_rejected above.
+test_force_script_is_fully_removed() {
+  run "$TEST_TMP" --status --force-script
+  [[ "$STATUS" -ne 0 ]] || { fail "--force-script měl skončit nenulově"; return; }
+  assert_contains "unknown flag" || return
 }
 
 # ------------------------------------------------------------------- runner --
