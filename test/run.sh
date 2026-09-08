@@ -12,6 +12,22 @@
 # ollama, node, claude ani codex — je to tedy věrný model stroje, kde stack
 # není nainstalovaný. Skutečný ~/.claude ani ~/.config se nikdy nedotkne.
 #
+# Známé, trvalé omezení (#20, rozhodnuto po #11-#18): --apply/--preview a
+# --refresh's exit kód 2 (audit našel drift) tahle sada happy-path netestuje.
+# Oba visí za preflight(), který potřebuje nejen grepai/gitnexus/ollama na
+# PATH, ale skutečně dostupný qdrant -- živý TCP/HTTP healthz, ne něco, co jde
+# předstírat binárkou. Věrné stuby všech tří nástrojů (workspace/mcp výstupy
+# grepai, obsah, který do CLAUDE.md/AGENTS.md píše `gitnexus analyze`, ...) by
+# ve skutečnosti znovu implementovaly jejich kontrakt uvnitř testovací sady --
+# riziko, že se stub rozejde od reality a testy dál svítí zeleně, i když se
+# integrace rozbila. Tenhle kompromis byl zvažován a zamítnut opakovaně, u
+# každého řezu od #12 do #18 (viz komentáře u jednotlivých testů níže) --
+# #20 tohle rozhodnutí jen sjednocuje na jedno místo a uzavírá ho natrvalo.
+# Ověřeno místo toho vždy ručně na živém stacku, zaznamenáno v popisu PR
+# daného řezu. Co JE hermeticky pokryté: preflight() samotné (chybové hlášky,
+# návratový kód 1) a všechno, co běží BEZ preflightu -- --status, --remove,
+# --refresh s --no-grepai --no-gitnexus.
+#
 # Spuštění:  ./test/run.sh
 # Jeden test: ./test/run.sh workspace_derived_from_basename
 
@@ -173,13 +189,11 @@ test_path_flag_overrides_cwd() {
 # --------------------------------------------------------- .code-intel (#12) --
 #
 # #13 (writing .code-intel in --apply) has no automated test here: --apply
-# and --preview both require preflight, which this hermetic harness cannot
-# pass without grepai/gitnexus/qdrant/ollama on PATH -- the same known
-# limitation #20 already notes for --apply's happy path generally, reserved
-# for #16's stub work. Verified manually instead: preview reports CREATE
-# without writing; --apply writes the header/SCHEMA=1/WORKSPACE/PROJECT
-# shape; a second --apply says "already present" and leaves it byte-for-byte
-# unchanged; --status --json afterward reads the workspace back from it.
+# and --preview both require preflight, the file-header known limitation
+# above. Verified manually instead: preview reports CREATE without writing;
+# --apply writes the header/SCHEMA=1/WORKSPACE/PROJECT shape; a second
+# --apply says "already present" and leaves it byte-for-byte unchanged;
+# --status --json afterward reads the workspace back from it.
 
 test_code_intel_overrides_basename() {
   local d; d="$(new_repo 'has-code-intel')"
@@ -705,6 +719,18 @@ test_force_script_is_fully_removed() {
   run "$TEST_TMP" --status --force-script
   [[ "$STATUS" -ne 0 ]] || { fail "--force-script měl skončit nenulově"; return; }
   assert_contains "unknown flag" || return
+}
+
+# #17 dropped project.N.script_state from --status --all --json's contract
+# (code-intel-dash's consumer of it was updated in the same change). Named
+# explicitly in #20's slice list and missing until now -- added retroactively.
+test_status_all_json_has_no_script_state_key() {
+  local d; d="$(new_repo 'no-script-state-repo')"
+  write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=no-script-state-ws' 'PROJECT=no-script-state-repo'
+  mkdir -p "$TEST_HOME/.config/code-intel"
+  printf 'no-script-state-ws\t%s\n' "$d" >> "$TEST_HOME/.config/code-intel/projects"
+  run "$TEST_TMP" --status --all --json
+  assert_not_contains "script_state" || return
 }
 
 # ------------------------------------------------------------------- runner --
