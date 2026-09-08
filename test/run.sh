@@ -117,10 +117,10 @@ test_help_exits_zero_and_lists_modes() {
   done
 }
 
-# (#18) The 45-line "this is a local dev tool, a failed preflight is
-# harmless" explanation moved out of the generated refresh-intel.sh header
-# (which no longer exists, per #16) and into --help, the one place it lives
-# instead of a copy in every wired-up repo.
+# (#18) 45řádkové vysvětlení "tohle je lokální vývojářský nástroj, selhaný
+# preflight je neškodný" se přestěhovalo z hlavičky generovaného
+# refresh-intel.sh (ten už podle #16 neexistuje) do --help -- jediné místo,
+# místo kopie v každém zadrátovaném repu.
 test_help_carries_the_local_dev_tool_explanation() {
   run "$TEST_TMP" --help
   assert_status 0 || return

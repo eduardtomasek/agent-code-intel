@@ -231,7 +231,7 @@ ABOUT THIS TOOL, AND WHY --refresh MIGHT FAIL
     If a CLAUDE.md / AGENTS.md here tells an agent to run `agent-code-intel
     --refresh` after every task that changes code: that instruction assumes
     this stack is installed. If it fails, skip it, say so plainly in the
-    summary, and get on with the real task -- these indexes are a
+    summary, and get on with the real task — these indexes are a
     navigation convenience, never a correctness gate.
 
     To remove it from a project entirely: `agent-code-intel --remove --apply`
