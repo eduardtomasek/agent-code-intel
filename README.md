@@ -8,7 +8,7 @@ Až budeš hotový, budeš zakládat nové projekty takhle:
 ```
 mkdir ~/projects/muj-projekt
 cd ~/projects/muj-projekt
-code-intel-init --agent claude --apply
+agent-code-intel --agent claude --apply
 ```
 
 A tvůj AI kódovací agent bude umět hledat v kódu podle významu, ne podle
@@ -30,7 +30,7 @@ klíčových slov, a bude vědět, co se rozbije, když něco změníš.
 7. [Node.js](#7-nodejs)
 8. [GrepAI](#8-grepai)
 9. [GitNexus](#9-gitnexus)
-10. [code-intel-init](#10-code-intel-init)
+10. [agent-code-intel](#10-agent-code-intel)
 11. [První projekt](#11-první-projekt)
 12. [Ověření, že to funguje](#12-ověření-že-to-funguje)
 13. [Každodenní používání](#13-každodenní-používání)
@@ -63,7 +63,7 @@ co ze samotného textu nevyčteš.
 
 Obojí běží **výhradně u tebe na počítači**. Žádný kód nikam neodchází.
 
-Jeden příkaz, `code-intel-init`, tohle všechno pro nový projekt nastaví najednou
+Jeden příkaz, `agent-code-intel`, tohle všechno pro nový projekt nastaví najednou
 a zároveň napíše tvému AI agentovi instrukce, kdy má co použít.
 
 ### Z čeho se to skládá
@@ -77,7 +77,7 @@ a zároveň napíše tvému AI agentovi instrukce, kdy má co použít.
 | **GitNexus** | Mapa vztahů v kódu | Odpovídá na „co se rozbije" |
 | **Node.js** | Běhové prostředí | GitNexus je v něm napsaný |
 | **Homebrew** | Správce balíčků | Instaluje většinu z výše uvedeného |
-| **code-intel-init** | Propojí to všechno | Aby to byl jeden příkaz, ne patnáct |
+| **agent-code-intel** | Propojí to všechno | Aby to byl jeden příkaz, ne patnáct |
 
 Připrav si zhruba **20 minut** a **5 GB místa na disku**. Většina času je čekání
 na stahování.
@@ -215,7 +215,7 @@ ollama list
 ```
 
 Vypíše tabulku, nejspíš prázdnou. Prázdná je v pořádku — hlavní je, že to
-nezahlásilo chybu. Model se stáhne až za chvíli, `code-intel-init` si ho
+nezahlásilo chybu. Model se stáhne až za chvíli, `agent-code-intel` si ho
 dotáhne sám.
 
 ---
@@ -351,16 +351,16 @@ Musí vypsat verzi.
 
 ---
 
-## 10. code-intel-init
+## 10. agent-code-intel
 
 Tohle je ten skript, který všechno výše uvedené propojí do jednoho příkazu.
 
-Ulož si soubor `code-intel-init` někam, kde ho najdeš — třeba do složky
+Ulož si soubor `agent-code-intel` někam, kde ho najdeš — třeba do složky
 Stažené. Pak v terminálu přejdi do té složky a nainstaluj:
 
 ```
 cd ~/Downloads
-bash ./code-intel-init --install
+bash ./agent-code-intel --install
 ```
 
 Pokud jsi ho uložil do podsložky, uprav cestu — například
@@ -369,8 +369,8 @@ Pokud jsi ho uložil do podsložky, uprav cestu — například
 Instalace udělá tři věci. Zkopíruje skript do `~/.local/bin/`, což je místo,
 odkud se dá spouštět odkudkoli. Vytvoří konfiguraci v
 `~/.config/code-intel/defaults.env`, kterou ti budoucí aktualizace nepřepíšou.
-A přidá do nastavení Claude Code pravidlo, díky kterému nebude Claude při každém
-spuštění udržovacího skriptu žádat o povolení.
+A přidá do nastavení Claude Code pravidlo, díky kterému nebude Claude muset žádat
+o povolení pokaždé, když spustí `agent-code-intel --refresh`.
 
 Jestli ti vypíše varování, že `~/.local/bin` není na PATH, spusť tohle:
 
@@ -382,7 +382,7 @@ source ~/.zshrc
 Kontrola:
 
 ```
-code-intel-init --version
+agent-code-intel --version
 ```
 
 Musí vypsat číslo verze.
@@ -406,7 +406,7 @@ cd ~/projects/test-intel
 Nejdřív si nech ukázat, co se stane, bez toho, aby se cokoli změnilo:
 
 ```
-code-intel-init
+agent-code-intel
 ```
 
 Skript nejdřív zkontroluje, jestli je všechno na svém místě, a přitom sám
@@ -419,7 +419,7 @@ Pak vypíše seznam toho, co by udělal. Všechny řádky preflightu by měly b�
 Když je vše zelené, spusť to naostro:
 
 ```
-code-intel-init --apply
+agent-code-intel --apply
 ```
 
 Projde devíti kroky a na konci vypíše shrnutí. Ve složce ti přibudou tyhle
@@ -427,19 +427,18 @@ soubory:
 
 | Soubor | K čemu je | Kdo ho vytvoří |
 |---|---|---|
-| `.git/` | Verzovací systém, založí se automaticky | code-intel-init |
-| `.gitignore` | Aby se indexy nedostaly do gitu | code-intel-init |
-| `.grepai/` | Nastavení indexování pro tenhle projekt | code-intel-init |
-| `.mcp.json` | Napojení vyhledávání na tvého AI agenta | code-intel-init |
+| `.git/` | Verzovací systém, založí se automaticky | agent-code-intel |
+| `.gitignore` | Aby se indexy nedostaly do gitu | agent-code-intel |
+| `.grepai/` | Nastavení indexování pro tenhle projekt | agent-code-intel |
+| `.mcp.json` | Napojení vyhledávání na tvého AI agenta | agent-code-intel |
 | `CLAUDE.md` | Instrukce pro agenta, kdy co použít | oba, každý svůj blok |
-| `refresh-intel.sh` | Údržbový skript, viz kapitola 13 | code-intel-init |
 | `.gitnexus/` | Grafový index a jeho databáze | gitnexus |
 | `AGENTS.md` | Instrukce pro agenta ve formátu, který čte Codex | gitnexus |
 | `.claude/skills/` | Šest dovedností pro Claude Code k práci s grafem | gitnexus |
 
-Poslední tři řádky nedělá `code-intel-init`, ale `gitnexus analyze`, který se
+Poslední tři řádky nedělá `agent-code-intel`, ale `gitnexus analyze`, který se
 uvnitř spouští. Proto ti `AGENTS.md` přibude, i když Codex vůbec nepoužíváš —
-`code-intel-init` do něj v tom případě jen nepíše vlastní instrukce.
+`agent-code-intel` do něj v tom případě jen nepíše vlastní instrukce.
 
 `.gitignore` pokrývá `.grepai/` a `.gitnexus/`, ale **ne `.claude/`**. Těch šest
 souborů se ti tedy dostane do commitu. Ve víc lidech to bývá to, co chceš —
@@ -484,7 +483,7 @@ Ulož ho. Pak zpátky v terminálu:
 ```
 git add -A
 git commit -m "prvni verze"
-./refresh-intel.sh
+agent-code-intel --refresh
 ```
 
 Commit dělej — je to dobrý zvyk a starší GitNexus ho pro vyhodnocení
@@ -492,7 +491,7 @@ aktuálnosti potřeboval. Od verze 1.6 už podmínka není: `gitnexus status` hl
 `up-to-date` i v repozitáři bez jediného commitu. Takže když na něj zapomeneš,
 nic se nerozbije.
 
-Skript musí skončit hláškou `Code intelligence is fresh.`
+Příkaz musí skončit hláškou `Code intelligence is fresh.`
 
 ### Tři kontroly
 
@@ -537,7 +536,7 @@ sáhne po nástroji `grepai_search`, je propojení kompletní.
 ```
 mkdir ~/projects/muj-projekt
 cd ~/projects/muj-projekt
-code-intel-init --agent claude --apply
+agent-code-intel --agent claude --apply
 ```
 
 To je celé. Nastavení, které jsi udělal jednou, platí pro všechny další
@@ -546,27 +545,27 @@ projekty.
 ### Po každé změně kódu
 
 ```
-./refresh-intel.sh
+agent-code-intel --refresh
 ```
 
-Tenhle skript by měl spouštět tvůj AI agent sám — instrukci k tomu má v
-`CLAUDE.md`, který mu `code-intel-init` napsal. Když to neudělá, spusť ho ručně.
+Tenhle příkaz by měl spouštět tvůj AI agent sám — instrukci k tomu má v
+`CLAUDE.md`, který mu `agent-code-intel` napsal. Když to neudělá, spusť ho ručně.
 
 Proč je vůbec potřeba: GrepAI se aktualizuje průběžně, protože na pozadí běží
 hlídač, který si všímá ukládaných souborů. GitNexus ne — jeho mapa se
-přepočítává jen na povel, a právě tenhle skript ten povel dává. Zároveň
+přepočítává jen na povel, a právě tenhle příkaz ten povel dává. Zároveň
 zkontroluje, že hlídač běží, a ohlásí, kdyby něco nesedělo.
 
 Rychlá kontrola bez přeindexování:
 
 ```
-./refresh-intel.sh --audit
+agent-code-intel --status
 ```
 
 ### Kontrola všech projektů najednou
 
 ```
-code-intel-init --status --all
+agent-code-intel --status --all
 ```
 
 Projde všechny projekty, které jsi kdy nastavil, a řekne, kde něco nesedí.
@@ -580,7 +579,7 @@ odpovídá ze zastaralých dat, což je horší než chyba. Pojistka je jednoduc
 v projektu spusť:
 
 ```
-./refresh-intel.sh
+agent-code-intel --refresh
 ```
 
 Hlídače nastartuje a všechno doindexuje.
@@ -589,7 +588,7 @@ Hlídače nastartuje a všechno doindexuje.
 
 ## 14. Dashboard — přehled o všem najednou
 
-`code-intel-init --status --all` ti řekne, jestli sedí *nastavení* projektů.
+`agent-code-intel --status --all` ti řekne, jestli sedí *nastavení* projektů.
 Neřekne ti ale, jestli běží služby pod nimi a jestli opravdu dělají, co mají —
 to je schválně, protože status musí fungovat i na stroji, kde je všechno
 vypnuté.
@@ -603,16 +602,22 @@ code-intel-dash --open
 Otevře se stránka na `http://127.0.0.1:7717`. Běží jen na tvém počítači, na
 loopbacku, bez hesla — nikam se nedostane. Ukončíš ho Ctrl+C.
 
-Aby šel spustit odkudkoli, zkopíruj si ho vedle `code-intel-init`:
+Aby šel spustit odkudkoli, zkopíruj si ho vedle `agent-code-intel`:
 
 ```
 cp code-intel-dash ~/.local/bin/ && chmod +x ~/.local/bin/code-intel-dash
 ```
 
+Pamatuj na tohle i při každé budoucí aktualizaci: `agent-code-intel --install`
+přepisuje jen sebe. Zapomenutý starý dashboard pak tiše přestane rozumět datům,
+která vrací `--status --all --json` (výstupní kontrakt se může měnit) — pokud
+`agent-code-intel --install` starší dashboard najde, upozorní tě, ale sám ho
+nepřeinstaluje.
+
 Dashboard nemá vlastní kontroly — všechno o projektech si vytáhne z
-`code-intel-init --status --all --json`. Kdyby měl kontroly vlastní, dřív nebo
+`agent-code-intel --status --all --json`. Kdyby měl kontroly vlastní, dřív nebo
 později by se s tím příkazem rozešly a **oba by přitom dál svítily zeleně**.
-Proto potřebuje `code-intel-init` na PATH; bez něj rovnou řekne, že neví nic.
+Proto potřebuje `agent-code-intel` na PATH; bez něj rovnou řekne, že neví nic.
 
 ### Co na něm uvidíš
 
@@ -694,7 +699,7 @@ code-intel-dash --port 8080
 ### `command not found`
 
 Program buď není nainstalovaný, nebo systém neví, kde ho hledat. Vrať se ke
-kroku, kde se instaloval, a zopakuj kontrolu. U `code-intel-init` bývá příčinou
+kroku, kde se instaloval, a zopakuj kontrolu. U `agent-code-intel` bývá příčinou
 chybějící PATH — viz konec kroku 10.
 
 ### `docker run failed` nebo `Cannot connect to the Docker daemon`
@@ -707,7 +712,7 @@ sleep 15
 docker info > /dev/null 2>&1 && echo "funguje" || echo "jeste ne"
 ```
 
-Pak `code-intel-init` spusť znovu.
+Pak `agent-code-intel` spusť znovu.
 
 ### `embedding model ... not pulled` hned po úspěšném stažení
 
@@ -745,7 +750,7 @@ npm i -g gitnexus
 Pak v projektu:
 
 ```
-./refresh-intel.sh
+agent-code-intel --refresh
 ```
 
 ### `workspace ... does not map this project`
@@ -796,7 +801,7 @@ Projdi to v tomhle pořadí:
 Tenhle soubor si hlídač drží v paměti a při každém indexování ho **celý
 přepíše**. Tvoje úprava zmizí — bez chyby, bez záznamu v logu, klidně až za pár
 hodin. Když potřebuješ něco změnit, uprav `~/.config/code-intel/defaults.env` a
-spusť `code-intel-init --apply` znovu.
+spusť `agent-code-intel --apply` znovu.
 
 ---
 
@@ -807,13 +812,13 @@ spusť `code-intel-init --apply` znovu.
 Ve složce projektu:
 
 ```
-code-intel-init --remove
+agent-code-intel --remove
 ```
 
 Ukáže, co by smazal. Když souhlasíš:
 
 ```
-code-intel-init --remove --apply
+agent-code-intel --remove --apply
 ```
 
 Odpojí projekt, zastaví hlídač, smaže vygenerované soubory a vyřízne instrukce z
@@ -823,7 +828,7 @@ přidej `--purge-collection`.
 ### Celý stack
 
 ```
-rm ~/.local/bin/code-intel-init
+rm ~/.local/bin/agent-code-intel
 rm ~/.local/bin/code-intel-dash
 rm -rf ~/.config/code-intel
 brew uninstall grepai
@@ -871,5 +876,5 @@ jeden workspace na projekt.
 najednou.
 
 **Idempotentní** — vlastnost příkazu, který můžeš spustit vícekrát a výsledek je
-stejný. `code-intel-init --apply` proto můžeš spouštět opakovaně; co je hotové,
+stejný. `agent-code-intel --apply` proto můžeš spouštět opakovaně; co je hotové,
 nechá být, co se rozpadlo, opraví.
