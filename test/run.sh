@@ -24,6 +24,7 @@ EXPECTED_NAME="${EXPECTED_NAME:-agent-code-intel}"
 BARE_PATH=/usr/bin:/bin
 
 PASS=0; FAIL=0; FAILED_NAMES=()
+EXTRA_TMP=()   # dirs from mktemp_home(), cleaned up alongside TEST_TMP/TEST_HOME
 
 # ------------------------------------------------------------------ helpers --
 
@@ -451,6 +452,19 @@ test_refresh_with_both_stacks_skipped_needs_no_stack() {
 # asserts $TEST_HOME never gets a settings.json, and these deliberately give
 # one to a private, disposable directory instead.
 
+# $TEST_TMP/$TEST_HOME are torn down together by the exit trap below; a home
+# made here needs the same guarantee, so it registers itself into EXTRA_TMP
+# instead of leaking one throwaway directory per test.
+#
+# Sets $MKTEMP_HOME rather than echoing the path: `home="$(mktemp_home)"`
+# would run this function in a subshell, and EXTRA_TMP+=() there would never
+# reach the parent shell's array -- the same reason `run()` below reports
+# through the globals $OUT/$STATUS instead of a return value.
+mktemp_home() {
+  MKTEMP_HOME="$(mktemp -d)"
+  EXTRA_TMP+=("$MKTEMP_HOME")
+}
+
 run_install() {  # $1 = HOME to install into, $2.. = extra args to --install
   local home="$1"; shift
   OUT="$(env -i HOME="$home" PATH="$BARE_PATH" TERM=dumb "$TOOL" --install "$@" 2>&1)"
@@ -458,14 +472,15 @@ run_install() {  # $1 = HOME to install into, $2.. = extra args to --install
 }
 
 allow_list() {  # $1 = HOME; echoes permissions.allow as one rule per line
-  python3 -c "
-import json
-print(chr(10).join(json.load(open('$1/.claude/settings.json'))['permissions']['allow']))
-" 2>/dev/null
+  INSTALL_HOME="$1" python3 -c '
+import json, os
+p = os.environ["INSTALL_HOME"] + "/.claude/settings.json"
+print(chr(10).join(json.load(open(p))["permissions"]["allow"]))
+' 2>/dev/null
 }
 
 test_install_writes_exact_refresh_rule() {
-  local home; home="$(mktemp -d)"
+  mktemp_home; local home="$MKTEMP_HOME"
   run_install "$home"
   assert_status 0 || return
   assert_contains "Bash(agent-code-intel --refresh)" || return
@@ -475,7 +490,7 @@ test_install_writes_exact_refresh_rule() {
 }
 
 test_install_removes_legacy_refresh_intel_rules() {
-  local home; home="$(mktemp -d)"
+  mktemp_home; local home="$MKTEMP_HOME"
   mkdir -p "$home/.claude"
   cat > "$home/.claude/settings.json" <<'JSON'
 {"permissions": {"allow": ["Bash(./refresh-intel.sh)", "Bash(./refresh-intel.sh *)", "Bash(git status)"]}}
@@ -490,7 +505,7 @@ JSON
 }
 
 test_install_no_perms_skips_permission_file() {
-  local home; home="$(mktemp -d)"
+  mktemp_home; local home="$MKTEMP_HOME"
   run_install "$home" --no-perms
   assert_status 0 || return
   assert_contains "skipped the Claude Code permission rule" || return
@@ -498,7 +513,7 @@ test_install_no_perms_skips_permission_file() {
 }
 
 test_install_is_idempotent() {
-  local home; home="$(mktemp -d)"
+  mktemp_home; local home="$MKTEMP_HOME"
   run_install "$home"
   run_install "$home"
   assert_status 0 || return
@@ -509,7 +524,7 @@ test_install_is_idempotent() {
 }
 
 test_install_leaves_unreadable_settings_json_untouched() {
-  local home; home="$(mktemp -d)"
+  mktemp_home; local home="$MKTEMP_HOME"
   mkdir -p "$home/.claude"
   printf 'not valid json{' > "$home/.claude/settings.json"
   local before; before="$(cat "$home/.claude/settings.json")"
@@ -524,7 +539,9 @@ test_install_leaves_unreadable_settings_json_untouched() {
 # ------------------------------------------------------------------- runner --
 
 TEST_TMP="$(mktemp -d)"; TEST_HOME="$(mktemp -d)"
-trap 'rm -rf "$TEST_TMP" "$TEST_HOME"' EXIT
+# Bash 3.2 (macOS): a bare "${EXTRA_TMP[@]}" on an empty array dies with
+# "unbound variable" under `set -u` -- guard on the count first.
+trap '(( ${#EXTRA_TMP[@]} == 0 )) || rm -rf "${EXTRA_TMP[@]}"; rm -rf "$TEST_TMP" "$TEST_HOME"' EXIT
 
 [[ -x "$TOOL" ]] || { echo "[ERROR: nástroj není spustitelný: $TOOL]" >&2; exit 1; }
 
