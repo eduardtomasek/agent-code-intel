@@ -29,9 +29,16 @@
 #
 # A scenario may declare an approved divergence (issue #35 §5) with
 # `scenario_expected_divergence` (echo the dimensions that are allowed — and
-# required — to differ: e.g. "exit stdout stderr"), and may run under a
-# non-default PATH with `scenario_path_override` (still hermetic — used only so
-# the runtime-gate scenario reaches the machine's sub-3.11 python3).
+# required — to differ: e.g. "exit stdout stderr"). It is called once per lane
+# with the lane name ("env" / "toml") as $1, so a divergence that exists in
+# only one lane can be declared for that lane alone — e.g. the port's
+# `--status --json` meta.config_file matches the reference byte-for-byte with a
+# defaults.env (env lane) but names defaults.toml under the toml lane (issue #37
+# §7). A scenario that ignores $1 keeps the old whole-scenario behaviour.
+#
+# A scenario may also run under a non-default PATH with `scenario_path_override`
+# (still hermetic — used only so the runtime-gate scenario reaches the machine's
+# sub-3.11 python3).
 #
 # `set -e` is deliberately NOT used: the harness tallies scenario failures and
 # reports them, it does not abort on the first one. A tool-under-test exiting
@@ -205,7 +212,7 @@ compare() {
   rfx="$(cat "$r/.fixture_root")"; rhm="$(cat "$r/.home_root")"; rtag="$(cat "$r/.tag")"
   cfx="$(cat "$c/.fixture_root")"; chm="$(cat "$c/.home_root")"; ctag="$(cat "$c/.tag")"
 
-  local expdiv=" $(scenario_expected_divergence) " seen_div=" "
+  local expdiv=" $(scenario_expected_divergence "$lane") " seen_div=" "
 
   for dim in exit stdout stderr manifest effects; do
     local rn="$c/.norm-r.$dim" cn="$c/.norm-c.$dim"
@@ -240,7 +247,7 @@ compare() {
   # Every dimension the scenario declared as an approved divergence must have
   # actually diverged — otherwise the scenario is asserting a divergence that
   # no longer exists.
-  for dim in $(scenario_expected_divergence); do
+  for dim in $(scenario_expected_divergence "$lane"); do
     [[ "$seen_div" == *" $dim "* ]] || {
       printf '    %s was declared an approved divergence but did not differ\n' "$dim"
       ok=1
@@ -270,8 +277,10 @@ run_scenario() {
 
   # A divergence scenario asserts the candidate differs from the reference in a
   # declared way; run reference-vs-reference it can only fail its own "did the
-  # divergence actually happen" guard, so it is skipped in the self-check.
-  if [[ -n "$(scenario_expected_divergence)" && "$CANDIDATE_IS_REFERENCE" == true ]]; then
+  # divergence actually happen" guard, so it is skipped in the self-check. A
+  # scenario whose divergence is toml-lane-only (env-lane clean) still self-
+  # checks fine in the env lane, so the gate asks about the env lane.
+  if [[ -n "$(scenario_expected_divergence env)" && "$CANDIDATE_IS_REFERENCE" == true ]]; then
     printf '  %-5s unimplemented — divergence scenario needs a real candidate\n' "all"
     UNIMPL=$((UNIMPL+1))
     return
