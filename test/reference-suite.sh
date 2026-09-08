@@ -22,12 +22,13 @@ HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-aci_acquire_reference "$WORK"
-ISOLATED_PATH="$(aci_isolated_path "$WORK")"
+aci_acquire_reference "$WORK" || exit 1
+ISOLATED_PATH="$(aci_isolated_path "$WORK")" || exit 1
+PYBIN="${ISOLATED_PATH%%:*}/python3"
 
 echo "reference:     $ACI_REFERENCE_COMMIT:agent-code-intel -> $ACI_REFERENCE"
 echo "isolated PATH: $ISOLATED_PATH"
-echo "python3:       $("${ISOLATED_PATH%%:*}/python3" --version 2>&1)"
+echo "python3:       $("$PYBIN" --version 2>&1)"
 echo
 
 TOOL="$ACI_REFERENCE" \

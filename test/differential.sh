@@ -3,20 +3,34 @@
 #
 # Runs one scenario against the frozen Bash reference (commit 9406cce) and a
 # candidate implementation, each over its OWN fixtures, then compares the whole
-# observable result: exit code, stdout, stderr, structural JSON, a file manifest
-# (type + mode + content hash), and any declared external effects.
+# observable result as SEPARATE dimensions (issue #43 §4):
+#   - exit code
+#   - stdout (raw, normalized — order and whitespace are NOT normalized)
+#   - stderr
+#   - structural JSON (types and conditional fields; meta.generated_at is
+#     format-checked then blanked) — an extra gate on top of the raw stdout diff
+#   - file manifest (relative path, type, octal mode, hash of root-normalized
+#     content; .git excluded)
+#   - declared external effects (scenario_observe_effects)
 #
-# Two lanes per scenario (issue #43 §4):
+# Two lanes per scenario:
 #   env  — candidate + defaults.env   vs  reference + the same defaults.env
 #   toml — candidate + defaults.toml   vs  reference + an equivalent defaults.env
 #
-# A mutating scenario therefore uses up to four independent fixtures; no
-# implementation ever runs over state another run already touched.
+# Each (lane, implementation) gets its own HOME, project, registry and workspace
+# name (the qdrant collection name follows from the workspace). A mutating
+# scenario therefore uses up to four independent fixtures; no implementation
+# ever runs over state another run touched.
 #
 # CANDIDATE defaults to the reference itself. A bare run is thus reference vs
 # reference and MUST produce zero diff — that is the harness proving itself.
 # Point ACI_CANDIDATE at the Python launcher once it exists (issue #50+); the
 # toml lane starts running for real at the same point.
+#
+# `set -e` is deliberately NOT used: the harness tallies scenario failures and
+# reports them, it does not abort on the first one. A tool-under-test exiting
+# non-zero is DATA (it is captured and compared), never a harness error. Genuine
+# infrastructure failures (a broken scenario_setup) are caught explicitly.
 #
 # Usage:
 #   test/differential.sh                      # every scenario, env lane
@@ -36,8 +50,9 @@ LANES="${ACI_LANES:-env}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-aci_acquire_reference "$WORK"
-ISOLATED_PATH="$(aci_isolated_path "$WORK")"
+aci_acquire_reference "$WORK" || exit 1
+ISOLATED_PATH="$(aci_isolated_path "$WORK")" || exit 1
+PYBIN="${ISOLATED_PATH%%:*}/python3"
 CANDIDATE="${ACI_CANDIDATE:-$ACI_REFERENCE}"
 [[ -x "$CANDIDATE" ]] || { echo "[ERROR: candidate is not executable: $CANDIDATE]" >&2; exit 1; }
 
@@ -48,44 +63,45 @@ PASS=0; FAIL=0; UNIMPL=0; FAILED=()
 
 # ------------------------------------------------------------------ helpers --
 
-# normalize <fixture-root> <home-root> — stdin to stdout, replacing the volatile
-# roots and the JSON timestamp with stable tokens (issue #43 §4: only
-# scenario-declared values may be normalized).
+# normalize <fixture-root> <home-root> <tag> — stdin to stdout, replacing the
+# scenario-declared volatile values with stable tokens (issue #43 §4: ONLY these
+# may be normalized — not order, not whitespace, not exit, not health class, not
+# the spelling of a registered path).
 normalize() {
-  local fx="$1" hm="$2"
-  sed -e "s#${fx}#{FIXTURE}#g" -e "s#${hm}#{HOME}#g"
+  local fx="$1" hm="$2" tag="$3"
+  sed -e "s#${fx}#{FIXTURE}#g" \
+      -e "s#${hm}#{HOME}#g" \
+      -e "s#${tag}#{TAG}#g" \
+      -e 's#"generated_at": "[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}T[0-9]\{2\}:[0-9]\{2\}:[0-9]\{2\}\(\.[0-9]*\)\{0,1\}Z"#"generated_at": "{GENERATED_AT}"#g'
 }
-# meta.generated_at is the one other declared-volatile value; it lives only in
-# JSON stdout and json_structural_equal validates its format and blanks it
-# there. No plain-text stream carries a timestamp.
 
-# manifest <root> <fixture-root> <home-root> — one sorted line per entry:
+# manifest <root> <fixture-root> <home-root> <tag> — one sorted line per entry:
 # "<relpath>|<type>|<octal-mode>|<sha-of-normalized-content|->". File contents
-# are normalized before hashing so two fixtures that differ only in their root
-# path hash identically; a real content difference still shows. .git is excluded
-# (two independent `git init`s differ in reflog/index mtimes, never in anything
-# a scenario asserts).
+# are normalized before hashing so two fixtures that differ only in root path or
+# workspace tag hash identically; a real content difference still shows.
 manifest() {
-  local root="$1" fx="$2" hm="$3" p rel type mode sha
+  local root="$1" fx="$2" hm="$3" tag="$4" p rel type mode sha
   ( cd "$root" 2>/dev/null || return 0
     find . -mindepth 1 \( -name .git -prune \) -o -print | LC_ALL=C sort | while IFS= read -r p; do
       rel="${p#./}"
-      if [[ -L "$p" ]]; then type=l; sha="-> $(readlink "$p" | normalize "$fx" "$hm")"
+      if [[ -L "$p" ]]; then type=l; sha="-> $(readlink "$p" | normalize "$fx" "$hm" "$tag")"
       elif [[ -d "$p" ]]; then type=d; sha="-"
-      elif [[ -f "$p" ]]; then type=f; sha="$(normalize "$fx" "$hm" < "$p" | shasum -a 256 | awk '{print $1}')"
+      elif [[ -f "$p" ]]; then type=f; sha="$(normalize "$fx" "$hm" "$tag" < "$p" | shasum -a 256 | awk '{print $1}')"
       else type=?; sha="-"; fi
       mode="$(stat -f '%Lp' "$p")"
       printf '%s|%s|%s|%s\n' "$rel" "$type" "$mode" "$sha"
     done )
 }
 
-# json_structural_equal <file-a> <file-b> — exit 0 if both are JSON and equal
-# after blanking meta.generated_at; exit 2 if either is not JSON; 1 if they differ.
+# json_structural_equal <norm-file-a> <norm-file-b> — 0 if both parse as JSON and
+# are structurally equal (types, conditional fields, key sets); 2 if either is
+# not JSON; 1 if they differ. Operates on the ROOT/TAG-normalized stdout, where a
+# well-formed meta.generated_at has already been gated and blanked to
+# {GENERATED_AT} by normalize(); a malformed one survives as itself and shows
+# here as a difference.
 json_structural_equal() {
-  "${ISOLATED_PATH%%:*}/python3" - "$1" "$2" <<'PY'
-import json, re, sys
-
-TS = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$')
+  "$PYBIN" - "$1" "$2" <<'PY'
+import json, sys
 
 def load(path):
     try:
@@ -97,85 +113,81 @@ def load(path):
 a, b = load(sys.argv[1]), load(sys.argv[2])
 if a is None or b is None:
     sys.exit(2)
-
-for d in (a, b):
-    meta = d.get("meta") if isinstance(d, dict) else None
-    if isinstance(meta, dict) and "generated_at" in meta:
-        if not (isinstance(meta["generated_at"], str) and TS.match(meta["generated_at"])):
-            print("meta.generated_at is not an ISO-8601 Z timestamp: %r" % meta["generated_at"])
-            sys.exit(1)
-        meta["generated_at"] = "{GENERATED_AT}"
-
 sys.exit(0 if a == b else 1)
 PY
 }
 
 # ------------------------------------------------------------ per-run driver --
 
-# run_one <lane> <impl> <tool> — populate $WORK/<lane>/<impl>/{exit,stdout,stderr,manifest,effects}
+# run_one <lane> <impl> <tool> — populate $WORK/<lane>/<impl>/{exit,stdout,stderr,
+# manifest,effects,.fixture_root,.home_root,.tag}. Returns non-zero only on a
+# genuine infrastructure failure (a broken scenario_setup), never because the
+# tool-under-test exited non-zero.
 run_one() {
   local lane="$1" impl="$2" tool="$3"
-  local base="$WORK/$lane/$impl"
-  mkdir -p "$base/project" "$base/home"
+  local base="$WORK/$lane/$impl" tag="$impl-$lane"
+  mkdir -p "$base/project" "$base/home" || return 1
 
   # Hand the scenario canonical roots (/bin/pwd -P, like the tool's own canon())
   # so anything it writes — a registry line, a .code-intel PROJECT — matches what
-  # the tool canonicalizes to, and normalization can substitute it cleanly.
+  # the tool canonicalizes to, and normalization can substitute it cleanly. The
+  # tag is a per-(impl,lane) suffix for workspace / collection names.
   local cfixture chome
-  cfixture="$(cd "$base/project" && /bin/pwd -P)"
-  chome="$(cd "$base/home" && /bin/pwd -P)"
+  cfixture="$(cd "$base/project" && /bin/pwd -P)" || return 1
+  chome="$(cd "$base/home" && /bin/pwd -P)" || return 1
+  printf '%s\n' "$cfixture" > "$base/.fixture_root"
+  printf '%s\n' "$chome"    > "$base/.home_root"
+  printf '%s\n' "$tag"      > "$base/.tag"
 
-  scenario_setup "$cfixture" "$chome"
+  ( set -e; scenario_setup "$cfixture" "$chome" "$tag" ) || return 1
 
-  local cfg; cfg="$(scenario_env_config)"
+  local cfg; cfg="$(scenario_env_config "$tag")"
   if [[ -n "$cfg" ]]; then
     mkdir -p "$chome/.config/code-intel"
     printf '%s\n' "$cfg" > "$chome/.config/code-intel/defaults.env"
   fi
 
-  printf '%s\n' "$cfixture" > "$base/.fixture_root"
-  printf '%s\n' "$chome"    > "$base/.home_root"
-
+  local rc=0
   env -i HOME="$chome" PATH="$ISOLATED_PATH" TERM=dumb \
     bash -c "cd '$cfixture' && '$tool' $(scenario_args)" \
-    > "$base/stdout" 2> "$base/stderr"
-  printf '%s\n' "$?" > "$base/exit"
+    > "$base/stdout" 2> "$base/stderr" || rc=$?
+  printf '%s\n' "$rc" > "$base/exit"
 
-  { manifest "$cfixture" "$cfixture" "$chome"
-    manifest "$chome" "$cfixture" "$chome" | sed 's#^#HOME/#'; } > "$base/manifest"
-  scenario_observe_effects "$cfixture" "$chome" > "$base/effects" 2>/dev/null || true
+  { manifest "$cfixture" "$cfixture" "$chome" "$tag"
+    manifest "$chome" "$cfixture" "$chome" "$tag" | sed 's#^#HOME/#'; } > "$base/manifest"
+  scenario_observe_effects "$cfixture" "$chome" "$tag" > "$base/effects" 2>/dev/null || true
+  return 0
 }
 
-# compare <lane> — diff reference vs candidate for one lane; returns 0/1.
+# compare <lane> — diff reference vs candidate for one lane. 0 = identical.
 compare() {
   local lane="$1" ok=0 dim
   local r="$WORK/$lane/reference" c="$WORK/$lane/candidate"
-  local rfx rhm cfx chm
-  rfx="$(cat "$r/.fixture_root")"; rhm="$(cat "$r/.home_root")"
-  cfx="$(cat "$c/.fixture_root")"; chm="$(cat "$c/.home_root")"
+  local rfx rhm rtag cfx chm ctag
+  rfx="$(cat "$r/.fixture_root")"; rhm="$(cat "$r/.home_root")"; rtag="$(cat "$r/.tag")"
+  cfx="$(cat "$c/.fixture_root")"; chm="$(cat "$c/.home_root")"; ctag="$(cat "$c/.tag")"
 
-  # manifest was already hashed over normalized content; exit/stderr/effects are
-  # plain text; stdout may be JSON.
   for dim in exit stdout stderr manifest effects; do
-    local rn="$c/.rn.$dim" cn="$c/.cn.$dim"
-    normalize "$rfx" "$rhm" < "$r/$dim" > "$rn"
-    normalize "$cfx" "$chm" < "$c/$dim" > "$cn"
-
-    if [[ "$dim" == stdout ]]; then
-      # $rn/$cn have normalized roots but intact timestamps; the comparator
-      # validates meta.generated_at's format and blanks it structurally.
-      json_structural_equal "$rn" "$cn"
-      case $? in
-        0) continue ;;
-        1) printf '    stdout (structural JSON) differs:\n'; diff "$rn" "$cn" | sed 's/^/      /'; ok=1; continue ;;
-        *) : ;;  # not JSON — fall through to text compare
-      esac
-    fi
+    local rn="$c/.norm-r.$dim" cn="$c/.norm-c.$dim"
+    normalize "$rfx" "$rhm" "$rtag" < "$r/$dim" > "$rn"
+    normalize "$cfx" "$chm" "$ctag" < "$c/$dim" > "$cn"
 
     if ! diff -q "$rn" "$cn" >/dev/null; then
       printf '    %s differs:\n' "$dim"
       diff "$rn" "$cn" | sed 's/^/      /'
       ok=1
+    fi
+
+    # stdout is also checked structurally when it is JSON — a distinct dimension
+    # (issue #43 §4 lists "stdout" and "JSON strukturálně" separately): catches a
+    # type or conditional-field difference and is order-insensitive where the
+    # text diff above is not.
+    if [[ "$dim" == stdout ]]; then
+      json_structural_equal "$rn" "$cn"
+      case $? in
+        0|2) : ;;                                 # structurally equal, or not JSON
+        *) printf '    stdout (structural JSON) differs\n'; ok=1 ;;
+      esac
     fi
   done
   return $ok
@@ -183,39 +195,39 @@ compare() {
 
 # ------------------------------------------------------------------- runner --
 
+# run_scenario <scenario-file> — run every lane, update the tallies. Prints one
+# line per lane: ok / FAIL / unimplemented / ERROR.
 run_scenario() {
-  local file="$1" name
-  ( set -e
-    unset -f scenario_setup scenario_env_config scenario_observe_effects 2>/dev/null || true
-    # defaults — a scenario overrides only what it needs
-    scenario_setup() { :; }
-    scenario_env_config() { :; }
-    scenario_observe_effects() { :; }
-    . "$file"
+  local file="$1" name lane
 
-    name="$(scenario_name)"
-    printf '\n%s  [%s]\n' "$name" "$(scenario_invariants)"
+  scenario_setup() { :; }
+  scenario_env_config() { :; }
+  scenario_observe_effects() { :; }
+  # shellcheck disable=SC1090
+  . "$file" || { printf '\n%s\n  ERROR — cannot load scenario\n' "$(basename "${file%.sh}")"; FAIL=$((FAIL+1)); FAILED+=("$(basename "${file%.sh}")"); return; }
 
-    for lane in $LANES; do
-      if [[ "$lane" == toml && "$CANDIDATE_IS_REFERENCE" == true ]]; then
-        printf '  %-5s unimplemented — no TOML-consuming candidate yet (issue #50+)\n' "$lane"
-        exit 3
-      fi
-      run_one "$lane" reference "$ACI_REFERENCE"
-      run_one "$lane" candidate "$CANDIDATE"
-      if compare "$lane"; then
-        printf '  %-5s ok\n' "$lane"
-      else
-        printf '  %-5s FAIL\n' "$lane"
-        exit 1
-      fi
-    done )
-  local rc=$?
-  case $rc in
-    0) PASS=$((PASS+1)) ;;
-    3) UNIMPL=$((UNIMPL+1)); PASS=$((PASS+1)) ;;  # unimplemented lane is reported, not counted as failure
-    *) FAIL=$((FAIL+1)); FAILED+=("$(basename "${1%.sh}")") ;;
-  esac
+  name="$(scenario_name)"
+  printf '\n%s  [%s]\n' "$name" "$(scenario_invariants)"
+
+  for lane in $LANES; do
+    if [[ "$lane" == toml && "$CANDIDATE_IS_REFERENCE" == true ]]; then
+      printf '  %-5s unimplemented — no TOML-consuming candidate yet (issue #50+)\n' "$lane"
+      UNIMPL=$((UNIMPL+1))
+      continue
+    fi
+    if ! run_one "$lane" reference "$ACI_REFERENCE" || ! run_one "$lane" candidate "$CANDIDATE"; then
+      printf '  %-5s ERROR — scenario_setup failed\n' "$lane"
+      FAIL=$((FAIL+1)); FAILED+=("$name/$lane")
+      continue
+    fi
+    if compare "$lane"; then
+      printf '  %-5s ok\n' "$lane"
+      PASS=$((PASS+1))
+    else
+      printf '  %-5s FAIL\n' "$lane"
+      FAIL=$((FAIL+1)); FAILED+=("$name/$lane")
+    fi
+  done
 }
 
 SELECTED=()
@@ -228,14 +240,12 @@ fi
 echo "reference: $ACI_REFERENCE_COMMIT:agent-code-intel"
 echo "candidate: $CANDIDATE$([[ "$CANDIDATE_IS_REFERENCE" == true ]] && echo '  (= reference; harness self-check)')"
 echo "lanes:     $LANES"
-echo "python3:   $("${ISOLATED_PATH%%:*}/python3" --version 2>&1)"
+echo "python3:   $("$PYBIN" --version 2>&1)"
 
 for f in "${SELECTED[@]}"; do
-  [[ -f "$f" ]] || { echo "[ERROR: no such scenario: $f]" >&2; FAIL=$((FAIL+1)); continue; }
+  [[ -f "$f" ]] || { echo "[ERROR: no such scenario: $f]" >&2; FAIL=$((FAIL+1)); FAILED+=("$(basename "${f%.sh}")"); continue; }
   run_scenario "$f"
 done
 
-printf '\n%d passed, %d failed' "$PASS" "$FAIL"
-[[ $UNIMPL -gt 0 ]] && printf ' (%d lane(s) unimplemented)' "$UNIMPL"
-printf '\n'
+printf '\n%d passed, %d failed, %d unimplemented\n' "$PASS" "$FAIL" "$UNIMPL"
 if (( FAIL > 0 )); then printf 'failed: %s\n' "${FAILED[*]}"; exit 1; fi

@@ -19,16 +19,16 @@ ACI_REFERENCE_COMMIT="${ACI_REFERENCE_COMMIT:-9406cce}"
 # and exports its path as $ACI_REFERENCE.
 aci_acquire_reference() {
   local work="$1" repo dest
-  [[ -n "$work" && -d "$work" ]] || { echo "[ERROR: aci_acquire_reference needs an existing work directory]" >&2; exit 1; }
+  [[ -n "$work" && -d "$work" ]] || { echo "[ERROR: aci_acquire_reference needs an existing work directory]" >&2; return 1; }
 
   repo="$(git -C "$(dirname -- "${BASH_SOURCE[0]}")" rev-parse --show-toplevel 2>/dev/null)" \
-    || { echo "[ERROR: reference acquisition must run inside the agent-code-intel git checkout]" >&2; exit 1; }
+    || { echo "[ERROR: reference acquisition must run inside the agent-code-intel git checkout]" >&2; return 1; }
 
   dest="$work/reference/agent-code-intel"
   mkdir -p "$work/reference"
   git -C "$repo" show "$ACI_REFERENCE_COMMIT:agent-code-intel" > "$dest" \
-    || { echo "[ERROR: cannot read agent-code-intel from commit $ACI_REFERENCE_COMMIT]" >&2; exit 1; }
-  [[ -s "$dest" ]] || { echo "[ERROR: reference from $ACI_REFERENCE_COMMIT is empty]" >&2; exit 1; }
+    || { echo "[ERROR: cannot read agent-code-intel from commit $ACI_REFERENCE_COMMIT]" >&2; return 1; }
+  [[ -s "$dest" ]] || { echo "[ERROR: reference from $ACI_REFERENCE_COMMIT is empty]" >&2; return 1; }
   chmod +x "$dest"
 
   ACI_REFERENCE="$dest"
