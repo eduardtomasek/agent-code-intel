@@ -15,6 +15,7 @@
 # MODES
 #   agent-code-intel [ws] [--path DIR]            preview (exit 2 if drift)
 #   agent-code-intel [ws] [--path DIR] --apply    do it
+#   agent-code-intel --refresh [--path DIR]       re-index + audit, no --apply
 #   agent-code-intel --status [--all]             health of one / all projects
 #   agent-code-intel --remove [--apply]           tear a project back out
 #   agent-code-intel --install                    copy self to ~/.local/bin
@@ -166,16 +167,26 @@ usage() {
 Usage:
   agent-code-intel [workspace] [--path DIR] [options]        preview
   agent-code-intel [workspace] [--path DIR] --apply          set up / repair
+  agent-code-intel --refresh [--path DIR]                    re-index + audit
   agent-code-intel --status [--all]                          health check
   agent-code-intel --status --all --json                     machine-readable
   agent-code-intel --remove [--apply] [--path DIR]           tear out
   agent-code-intel --install                                 self-install
 
-Preview exit codes:  0 = everything matches, 2 = drift, 1 = error.
+Preview exit codes:   0 = everything matches, 2 = drift, 1 = error.
+--refresh exit codes: 0 = ok, 1 = could not run (missing deps, or this
+                      project has no .code-intel yet -- run --apply first),
+                      2 = ran, but found drift or a stale index.
 
 Options:
   --apply           Actually make changes. Without it: preview only.
-  --path DIR        Project directory (default: current directory)
+  --refresh         Re-index GitNexus, start the GrepAI watcher if it is not
+                    running, then audit -- like --status, plus those writes.
+                    Never creates anything: fails if .code-intel is missing.
+                    Root is the enclosing git repo (--path overrides this).
+  --path DIR        Project directory (default: current directory). With
+                    --refresh: an explicit override that skips the git-root
+                    search below.
   --agent WHO       claude | codex | both        (default: both)
   --no-bootstrap    Do not start qdrant / ollama; only check them
   --no-git          Do not run `git init` or touch .gitignore
@@ -184,6 +195,8 @@ Options:
   --no-docs         Do not touch CLAUDE.md / AGENTS.md
   --force-docs      Rewrite the code-intel block even if one is present
   --force-script    Overwrite refresh-intel.sh even if locally modified
+  --no-grepai       With --refresh: skip the GrepAI watcher check/start
+  --no-gitnexus     With --refresh: skip the GitNexus re-index
   --all             With --status: every project in the registry
   --json            With --status: emit JSON instead of a table. Reports the
                     services too (container runtime, qdrant, ollama, node) and
@@ -199,6 +212,7 @@ EOF
 }
 
 ROOT="$PWD"
+ROOT_EXPLICIT=false
 WS=""
 AGENT_TARGET="both"
 MODE="init"
@@ -214,12 +228,14 @@ STATUS_ALL=false
 AS_JSON=false
 PURGE_COLLECTION=false
 WRITE_PERMS=true
+DO_GREPAI=true
+DO_GITNEXUS=true
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --path)
       [[ $# -ge 2 ]] || die "--path requires a directory argument"
-      ROOT="$2"; shift 2 ;;
+      ROOT="$2"; ROOT_EXPLICIT=true; shift 2 ;;
     --agent)
       [[ $# -ge 2 ]] || die "--agent requires: claude, codex or both"
       case "$2" in
@@ -228,6 +244,7 @@ while [[ $# -gt 0 ]]; do
       esac
       shift 2 ;;
     --apply)            APPLY=true; shift ;;
+    --refresh)          MODE="refresh"; shift ;;
     --status)           MODE="status"; shift ;;
     --remove)           MODE="remove"; shift ;;
     --install)          MODE="install"; shift ;;
@@ -240,6 +257,8 @@ while [[ $# -gt 0 ]]; do
     --no-docs)          WRITE_DOCS=false; shift ;;
     --force-docs)       FORCE_DOCS=true; shift ;;
     --force-script)     FORCE_SCRIPT=true; shift ;;
+    --no-grepai)        DO_GREPAI=false; shift ;;
+    --no-gitnexus)      DO_GITNEXUS=false; shift ;;
     --purge-collection) PURGE_COLLECTION=true; shift ;;
     --no-perms)         WRITE_PERMS=false; shift ;;
     --version)          say "agent-code-intel $VERSION"; exit 0 ;;
@@ -441,6 +460,17 @@ PY
 
 # ------------------------------------------------------- path resolution ----
 
+# --refresh has no ${BASH_SOURCE[0]} to derive a root from -- it is a global
+# command, not a generated per-project script -- so it finds the nearest git
+# root from $PWD instead. The git root IS the search boundary: a nested repo
+# (e.g. a submodule) must find its own .code-intel, never a parent's. --path
+# is an explicit override that skips this search entirely, same as every
+# other mode.
+if [[ "$MODE" == "refresh" && "$ROOT_EXPLICIT" != true ]]; then
+  ROOT="$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" \
+    || die "not inside a git repository: $ROOT -- pass --path, or run --apply in a git repo first"
+fi
+
 [[ -d "$ROOT" ]] || die "not a directory: $ROOT"
 ROOT="$(canon "$ROOT")"       # canonical case and symlinks resolved, so the
                               # path stored in grepai is the same string
@@ -469,6 +499,13 @@ case "$IDENT_STATUS" in
     [[ -n "$WS" ]] || WS="$IDENT_A"
     PROJ_NAME="$IDENT_B" ;;
   ABSENT)
+    # --refresh never bootstraps (map #2 decision 1): a project this tool has
+    # never touched has no workspace, no watcher, nothing to refresh, so
+    # falling back to a basename-derived guess here would let it silently
+    # invent identity for a directory --apply was never run in.
+    if [[ "$MODE" == "refresh" ]]; then
+      die "no .code-intel in $ROOT -- this project has not been set up; run: agent-code-intel --path $ROOT --apply"
+    fi
     if [[ -z "$WS" ]]; then
       WS="$(basename "$ROOT" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g; s/--*/-/g; s/^-//; s/-$//')"
     fi
@@ -2121,6 +2158,142 @@ do_status() {
   exit 2
 }
 
+# =============================================================== refresh =====
+#
+# What refresh-intel.sh did as a per-project generated script (re-index, start
+# the watcher if needed, audit), now as a mode of the global command instead.
+# It never founds a project (map #2 decision 1): the ABSENT branch above
+# already died before this runs, so by this point .code-intel is known-good.
+
+RF_N=0
+rf_need() { RF_WHAT[$RF_N]="$1"; RF_FIX[$RF_N]="$2"; RF_N=$((RF_N + 1)); }
+
+# Lighter than preflight(): --refresh only re-applies what --apply already
+# set up, so it checks just what this run will use -- gated the same way by
+# --no-grepai / --no-gitnexus -- and never claude/codex, which --refresh
+# never touches.
+refresh_preflight() {
+  if [[ "$DO_GREPAI" == true ]]; then
+    have grepai || rf_need "grepai not on PATH" "install GrepAI, or re-run with --no-grepai"
+
+    if qdrant_http_ok; then
+      qdrant_grpc_ok || rf_need "qdrant answers on $QDRANT_HTTP_PORT but gRPC $QDRANT_PORT is closed -- grepai reads and writes vectors there" \
+                                 "republish the container with both ports"
+    else
+      rf_need "qdrant not healthy at $QDRANT_HTTP/healthz" \
+              "start it, or run: agent-code-intel --path $ROOT --apply"
+    fi
+
+    if ! have ollama; then
+      rf_need "ollama not on PATH" "install ollama — the watcher embeds every change through it"
+    elif ! ollama_up; then
+      rf_need "ollama server not responding at $OLLAMA_HTTP" "start it: ollama serve"
+    elif ! ollama_has_model; then
+      rf_need "embedding model $EMBED_MODEL not pulled" "ollama pull $EMBED_MODEL"
+    fi
+  fi
+
+  if [[ "$DO_GITNEXUS" == true ]]; then
+    if ! have gitnexus; then
+      rf_need "gitnexus not on PATH" "npm i -g gitnexus, or re-run with --no-gitnexus"
+    elif ! gitnexus --version >/dev/null 2>&1; then
+      rf_need "gitnexus is on PATH but does not run" \
+              "npm's global bin is an nvm-versioned shim that a node switch leaves broken: npm i -g gitnexus"
+    fi
+    have git || rf_need "git not on PATH" "install git — GitNexus derives staleness from it"
+  fi
+
+  if (( RF_N > 0 )); then
+    {
+      local w="dependencies" i=0
+      (( RF_N == 1 )) && w="dependency"
+      say "[ERROR: refresh preflight found $RF_N unmet $w — nothing was refreshed]"
+      say ""
+      while (( i < RF_N )); do
+        say "  - ${RF_WHAT[$i]}"
+        say "    fix: ${RF_FIX[$i]}"
+        i=$((i + 1))
+      done
+    } >&2
+    exit 1
+  fi
+}
+
+do_refresh() {
+  hr "code-intel refresh — $ROOT"
+  local bad=0
+  STATUS_DRIFT=0
+
+  if [[ "$DO_GREPAI" == true ]]; then
+    say ""
+    hr "GrepAI watcher"
+    if watcher_running "$(watch_status)"; then
+      say "already running for workspace $WS"
+    else
+      say "starting watcher for workspace $WS..."
+      grepai watch --workspace "$WS" --background
+    fi
+  fi
+
+  if [[ "$DO_GITNEXUS" == true ]]; then
+    say ""
+    hr "GitNexus re-index"
+    # A failed re-index must not abort the whole command: the audit below
+    # still has useful things to report, and the exit code already carries
+    # the failure. Ported from refresh-intel.sh's own retry: GitNexus
+    # sometimes completes analysis but persists no embeddings, in which case
+    # a structural-only retry recovers instead of leaving the index empty.
+    if ! (
+      cd "$ROOT"
+      if GN_OUT="$(gitnexus analyze --embeddings 2>&1)"; then
+        printf '%s\n' "$GN_OUT"
+      else
+        GN_CODE=$?
+        printf '%s\n' "$GN_OUT" >&2
+        if [[ "$GN_OUT" == *"Embedding generation completed without persisted embeddings"* ]]; then
+          echo "No GitNexus embeddings were persisted; retrying with structural indexing."
+          gitnexus analyze --force
+        else
+          exit "$GN_CODE"
+        fi
+      fi
+    ); then
+      bad=1
+      say "gitnexus analyze failed"
+      if have node && ! node_has_register_hooks; then
+        say "  node $(node --version 2>/dev/null) is too old for 'gitnexus analyze'"
+        say "  fix: brew upgrade node && npm i -g gitnexus"
+      fi
+    fi
+  fi
+
+  say ""
+  if [[ "$DO_GREPAI" == true ]]; then
+    hr "GrepAI audit"
+    status_one "$WS" "$ROOT"
+    say ""
+  fi
+
+  if [[ "$DO_GITNEXUS" == true ]]; then
+    hr "GitNexus audit"
+    local gnout; gnout="$(gn_status)"
+    say "$gnout"
+    if gn_fresh "$gnout"; then
+      row "ok" "index up to date"
+    else
+      row "DRIFT" "index not up to date"
+      STATUS_DRIFT=1
+    fi
+    say ""
+  fi
+
+  if (( bad != 0 || STATUS_DRIFT != 0 )); then
+    say "Code intelligence has drift or errors above."
+    exit 2
+  fi
+  say "Code intelligence is fresh."
+}
+
 # ================================================================ remove =====
 
 do_remove() {
@@ -2215,6 +2388,10 @@ case "$MODE" in
     if [[ "$AS_JSON" == true ]]; then status_json; exit 0; fi
     do_status ;;
   remove) have python3 || die "python3 is required"; do_remove ;;
+  refresh)
+    have python3 || die "python3 is required"
+    refresh_preflight
+    do_refresh ;;
   init)
     preflight
     if [[ "$APPLY" == true ]]; then do_apply; else do_preview; fi ;;
