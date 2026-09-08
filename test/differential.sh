@@ -61,6 +61,9 @@ ISOLATED_PATH="$(aci_isolated_path "$WORK")" || exit 1
 PYBIN="${ISOLATED_PATH%%:*}/python3"
 CANDIDATE="${ACI_CANDIDATE:-$ACI_REFERENCE}"
 [[ -x "$CANDIDATE" ]] || { echo "[ERROR: candidate is not executable: $CANDIDATE]" >&2; exit 1; }
+# Each scenario runs the tool after `cd`-ing into its fixture, so a relative
+# candidate path (ACI_CANDIDATE=./agent-code-intel.py) must be made absolute.
+CANDIDATE="$(cd "$(dirname "$CANDIDATE")" && pwd)/$(basename "$CANDIDATE")"
 
 CANDIDATE_IS_REFERENCE=false
 [[ "$CANDIDATE" == "$ACI_REFERENCE" ]] && CANDIDATE_IS_REFERENCE=true
@@ -132,6 +135,10 @@ PY
 run_one() {
   local lane="$1" impl="$2" tool="$3"
   local base="$WORK/$lane/$impl" tag="$impl-$lane"
+  # A fresh tree per scenario: selecting several scenarios in one run reuses
+  # $WORK, so config / registry files one scenario writes must not leak into
+  # the next.
+  rm -rf "$base" || return 1
   mkdir -p "$base/project" "$base/home" || return 1
 
   # Hand the scenario canonical roots (/bin/pwd -P, like the tool's own canon())
@@ -147,10 +154,20 @@ run_one() {
 
   ( set -e; scenario_setup "$cfixture" "$chome" "$tag" ) || return 1
 
-  local cfg; cfg="$(scenario_env_config "$tag")"
+  # env lane: both implementations get scenario_env_config as defaults.env.
+  # toml lane: the reference still gets defaults.env (it has no TOML reader),
+  # the candidate gets scenario_toml_config as defaults.toml — "candidate +
+  # defaults.toml vs reference + an equivalent defaults.env" (issue #43 §4).
+  local cfg cfg_file="defaults.env"
+  if [[ "$lane" == toml && "$impl" == candidate ]]; then
+    cfg="$(scenario_toml_config "$tag")"
+    cfg_file="defaults.toml"
+  else
+    cfg="$(scenario_env_config "$tag")"
+  fi
   if [[ -n "$cfg" ]]; then
     mkdir -p "$chome/.config/code-intel"
-    printf '%s\n' "$cfg" > "$chome/.config/code-intel/defaults.env"
+    printf '%s\n' "$cfg" > "$chome/.config/code-intel/$cfg_file"
   fi
 
   # A scenario may run under a different PATH than the default 3.11 isolate —
@@ -241,6 +258,7 @@ run_scenario() {
 
   scenario_setup() { :; }
   scenario_env_config() { :; }
+  scenario_toml_config() { :; }
   scenario_observe_effects() { :; }
   scenario_path_override() { :; }
   scenario_expected_divergence() { :; }
@@ -261,7 +279,7 @@ run_scenario() {
 
   for lane in $LANES; do
     if [[ "$lane" == toml && "$CANDIDATE_IS_REFERENCE" == true ]]; then
-      printf '  %-5s unimplemented — no TOML-consuming candidate yet (issue #50+)\n' "$lane"
+      printf '  %-5s unimplemented — self-check: the reference has no TOML reader\n' "$lane"
       UNIMPL=$((UNIMPL+1))
       continue
     fi

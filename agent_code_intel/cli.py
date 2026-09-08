@@ -1,29 +1,26 @@
 """cli — argv parsing, immediate --help/--version, and mode dispatch.
 
-This is the one entry point both launchers call: :func:`main`. It reproduces
-the Bash reference's hand-rolled argument loop (``9406cce`` lines 242–297)
-exactly — left to right, last mode-switch wins, no mutual-exclusivity check,
-``--help`` / ``--version`` short-circuit everything to their right, and every
-parse error is ``[ERROR: …]`` on stderr with exit 1 (never argparse's exit 2).
+This is the one entry point both launchers call: :func:`main`. It runs the
+reference's fixed pipeline order (issue #41 §4): the interpreter gate (in the
+launcher), then the ENV/TOML conflict check and config load, then the
+hand-rolled argument loop (``9406cce`` lines 242–297) — left to right, last
+mode-switch wins, no mutual-exclusivity check, ``--help`` / ``--version``
+short-circuit everything to their right — then the early install branch, then
+project resolution, then mode dispatch.
 
-Only parsing and early exit are converted in this slice (issue #50). Once argv
-resolves to a real mode, dispatch raises :class:`CliError` — the port fakes no
-mode as working (issue #48, decision 70).
+Parsing and early exit landed in issue #50; config load and project resolution
+in issue #51. Install (#52) and the modes (#53–#56) still raise
+:class:`CliError` — the port fakes no mode as working (issue #48, decision 70).
 """
 
 from __future__ import annotations
 
 import dataclasses
+import os
 from typing import Sequence, TextIO
 
-from . import __version__
-
-
-class CliError(Exception):
-    """A deliberate, user-facing failure — rendered as ``[ERROR: <msg>]`` on
-    stderr with exit 1 (the reference's ``die``). One of exactly three error
-    paths (issue #48, decision 41); :func:`main` catches this and nothing
-    broader (decision 42)."""
+from . import __version__, config, project
+from .config import CliError
 
 
 @dataclasses.dataclass(frozen=True)
@@ -233,18 +230,27 @@ def parse_args(argv: Sequence[str], default_root: str) -> Options:
 
 def main(
     argv: Sequence[str],
-    env: object,
+    env,
     cwd: str,
     stdout: TextIO,
     stderr: TextIO,
 ) -> int:
     """The single launcher entry point (issue #48, decision 35).
 
-    ``env`` is accepted now for signature stability; config loading and mode
-    dispatch land in later slices.
+    ``env`` is the process environment (a mapping); ``config.load`` reads the
+    XDG config location from it and hands every subprocess a
+    :class:`~agent_code_intel.config.ChildEnvironment` derived from it — the
+    global ``os.environ`` is never mutated.
     """
 
     try:
+        environ = dict(env)
+
+        # Pipeline order (issue #41 §4): ENV/TOML conflict check + config load
+        # run *before* argument parsing, so a config error kills --help and
+        # --version exactly as the reference's `. "$CONF_FILE"` on :126 does.
+        loaded = config.load(_conf_dir(environ), environ, cwd, stderr)
+
         opts = parse_args(argv, default_root=cwd)
 
         if opts.action == "version":
@@ -254,14 +260,48 @@ def main(
             stdout.write(USAGE)
             return 0
 
-        # Parsing is all this slice converts. Anything past it is a later
-        # slice — say so plainly rather than exit 0 on a mode that does
-        # nothing (issue #48, decision 70).
+        if opts.mode == "install":
+            raise CliError(
+                "the Python port does not implement the 'install' mode yet "
+                "(issue #52)"
+            )
+
+        project.resolve_project(
+            root=opts.root,
+            root_explicit=opts.root_explicit,
+            mode=opts.mode,
+            workspace=opts.workspace,
+            home=_home(environ),
+            status_all=opts.status_all,
+        )
+
+        # Config load and identity resolution are converted; the modes
+        # themselves are not — say so plainly rather than exit 0 on a mode
+        # that does nothing (issue #48, decision 70).
+        label = "status-json" if opts.mode == "status" and opts.as_json else opts.mode
         raise CliError(
             "the Python port does not implement the '%s' mode yet "
-            "(issue #50 converts the runtime gate and the parser only)"
-            % ("status-json" if opts.mode == "status" and opts.as_json else opts.mode)
+            "(issues #53–#56)" % label
         )
     except CliError as exc:
-        stderr.write("[ERROR: %s]\n" % exc)
-        return 1
+        if exc.wrap:
+            stderr.write("[ERROR: %s]\n" % exc)
+        else:
+            stderr.write(str(exc))
+        return exc.code
+
+
+def _home(environ: dict) -> str:
+    return environ.get("HOME") or os.path.expanduser("~")
+
+
+def _conf_dir(environ: dict) -> str:
+    """``${XDG_CONFIG_HOME:-$HOME/.config}/code-intel`` (``9406cce`` :121).
+
+    An empty ``XDG_CONFIG_HOME`` falls through to the default, matching the
+    shell's ``:-`` form.
+    """
+
+    xdg = environ.get("XDG_CONFIG_HOME")
+    base = xdg if xdg else os.path.join(_home(environ), ".config")
+    return os.path.join(base, "code-intel")
