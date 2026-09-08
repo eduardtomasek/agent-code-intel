@@ -1,3 +1,5 @@
 .grepai/
 .gitnexus/
 .serena/
+__pycache__/
+*.pyc

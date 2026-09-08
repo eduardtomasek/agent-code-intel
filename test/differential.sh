@@ -27,6 +27,12 @@
 # Point ACI_CANDIDATE at the Python launcher once it exists (issue #50+); the
 # toml lane starts running for real at the same point.
 #
+# A scenario may declare an approved divergence (issue #35 §5) with
+# `scenario_expected_divergence` (echo the dimensions that are allowed — and
+# required — to differ: e.g. "exit stdout stderr"), and may run under a
+# non-default PATH with `scenario_path_override` (still hermetic — used only so
+# the runtime-gate scenario reaches the machine's sub-3.11 python3).
+#
 # `set -e` is deliberately NOT used: the harness tallies scenario failures and
 # reports them, it does not abort on the first one. A tool-under-test exiting
 # non-zero is DATA (it is captured and compared), never a harness error. Genuine
@@ -147,8 +153,19 @@ run_one() {
     printf '%s\n' "$cfg" > "$chome/.config/code-intel/defaults.env"
   fi
 
+  # A scenario may run under a different PATH than the default 3.11 isolate —
+  # the runtime-gate scenario needs the machine's sub-3.11 /usr/bin/python3 to
+  # make the candidate's gate fire (issue #35, DEV-1). Everything else stays
+  # hermetic: still no grepai / gitnexus / ollama / node / claude / codex.
+  local run_path; run_path="$(scenario_path_override)"
+  [[ -n "$run_path" ]] || run_path="$ISOLATED_PATH"
+
+  # PYTHONDONTWRITEBYTECODE: a Python candidate must not leave interpreter
+  # bytecode caches (~/Library/Caches or a source __pycache__) in the manifest
+  # — that is noise, not one of the tool's own writes. Harmless for the Bash
+  # reference.
   local rc=0
-  env -i HOME="$chome" PATH="$ISOLATED_PATH" TERM=dumb \
+  env -i HOME="$chome" PATH="$run_path" TERM=dumb PYTHONDONTWRITEBYTECODE=1 \
     bash -c "cd '$cfixture' && '$tool' $(scenario_args)" \
     > "$base/stdout" 2> "$base/stderr" || rc=$?
   printf '%s\n' "$rc" > "$base/exit"
@@ -159,7 +176,11 @@ run_one() {
   return 0
 }
 
-# compare <lane> — diff reference vs candidate for one lane. 0 = identical.
+# compare <lane> — diff reference vs candidate for one lane. 0 = identical,
+# OR every dimension that differs is one the scenario declared as an approved
+# divergence (issue #35 §5: a known divergence is a positive scenario with an
+# exact local diff, never a global ignore list) AND every declared divergence
+# dimension actually did differ (a stale "expected" divergence is a failure).
 compare() {
   local lane="$1" ok=0 dim
   local r="$WORK/$lane/reference" c="$WORK/$lane/candidate"
@@ -167,12 +188,20 @@ compare() {
   rfx="$(cat "$r/.fixture_root")"; rhm="$(cat "$r/.home_root")"; rtag="$(cat "$r/.tag")"
   cfx="$(cat "$c/.fixture_root")"; chm="$(cat "$c/.home_root")"; ctag="$(cat "$c/.tag")"
 
+  local expdiv=" $(scenario_expected_divergence) " seen_div=" "
+
   for dim in exit stdout stderr manifest effects; do
     local rn="$c/.norm-r.$dim" cn="$c/.norm-c.$dim"
     normalize "$rfx" "$rhm" "$rtag" < "$r/$dim" > "$rn"
     normalize "$cfx" "$chm" "$ctag" < "$c/$dim" > "$cn"
 
     if ! diff -q "$rn" "$cn" >/dev/null; then
+      if [[ "$expdiv" == *" $dim "* ]]; then
+        printf '    %s differs — approved divergence:\n' "$dim"
+        diff "$rn" "$cn" | sed 's/^/      /'
+        seen_div="$seen_div$dim "
+        continue
+      fi
       printf '    %s differs:\n' "$dim"
       diff "$rn" "$cn" | sed 's/^/      /'
       ok=1
@@ -182,13 +211,23 @@ compare() {
     # (issue #43 §4 lists "stdout" and "JSON strukturálně" separately): catches a
     # type or conditional-field difference and is order-insensitive where the
     # text diff above is not.
-    if [[ "$dim" == stdout ]]; then
+    if [[ "$dim" == stdout && "$expdiv" != *" stdout "* ]]; then
       json_structural_equal "$rn" "$cn"
       case $? in
         0|2) : ;;                                 # structurally equal, or not JSON
         *) printf '    stdout (structural JSON) differs\n'; ok=1 ;;
       esac
     fi
+  done
+
+  # Every dimension the scenario declared as an approved divergence must have
+  # actually diverged — otherwise the scenario is asserting a divergence that
+  # no longer exists.
+  for dim in $(scenario_expected_divergence); do
+    [[ "$seen_div" == *" $dim "* ]] || {
+      printf '    %s was declared an approved divergence but did not differ\n' "$dim"
+      ok=1
+    }
   done
   return $ok
 }
@@ -203,11 +242,22 @@ run_scenario() {
   scenario_setup() { :; }
   scenario_env_config() { :; }
   scenario_observe_effects() { :; }
+  scenario_path_override() { :; }
+  scenario_expected_divergence() { :; }
   # shellcheck disable=SC1090
   . "$file" || { printf '\n%s\n  ERROR — cannot load scenario\n' "$(basename "${file%.sh}")"; FAIL=$((FAIL+1)); FAILED+=("$(basename "${file%.sh}")"); return; }
 
   name="$(scenario_name)"
   printf '\n%s  [%s]\n' "$name" "$(scenario_invariants)"
+
+  # A divergence scenario asserts the candidate differs from the reference in a
+  # declared way; run reference-vs-reference it can only fail its own "did the
+  # divergence actually happen" guard, so it is skipped in the self-check.
+  if [[ -n "$(scenario_expected_divergence)" && "$CANDIDATE_IS_REFERENCE" == true ]]; then
+    printf '  %-5s unimplemented — divergence scenario needs a real candidate\n' "all"
+    UNIMPL=$((UNIMPL+1))
+    return
+  fi
 
   for lane in $LANES; do
     if [[ "$lane" == toml && "$CANDIDATE_IS_REFERENCE" == true ]]; then
