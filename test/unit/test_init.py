@@ -132,6 +132,14 @@ class FailingRestartStack(FakeStack):
         return integrations.Exec(1, "", "watcher restart failed")
 
 
+class FailingOllamaStack(FakeStack):
+    def ollama_up(self):
+        return False
+
+    def ollama_serve_background(self):
+        return integrations.Exec(1, "", "ollama spawn failed")
+
+
 def make_context(root):
     return ProjectContext(
         root=root,
@@ -266,6 +274,16 @@ class Init(unittest.TestCase):
             handle.write("foreign: keep\n")
         with self.assertRaises(ValueError):
             project.update_grepai_config(path, "256", "25", ("*.lock",))
+
+    def test_ollama_spawn_failure_does_not_wait_for_a_server(self):
+        self.assertFalse(
+            commands._ensure_ollama(
+                commands.Reporter(io.StringIO(), io.StringIO()),
+                True,
+                default_config(),
+                FailingOllamaStack(),
+            )
+        )
 
 
 if __name__ == "__main__":

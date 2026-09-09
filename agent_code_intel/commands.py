@@ -196,9 +196,13 @@ log. Re-run `agent-code-intel --apply` instead.
 ### After every task that changes the codebase
 
 Run `agent-code-intel --refresh` from the project root once the task is done
-and before committing code changes. It re-indexes GitNexus, starts the GrepAI watcher if it isn't running, and audits both; it exits non-zero if either index is stale or misconfigured.
+and before committing code changes. It re-indexes GitNexus, starts the GrepAI watcher if it isn't running, and audits both; it exits non-zero if either index is stale or
+misconfigured.
 
-`command not found`, or a preflight error from it? The code-intel stack is not installed on this machine — not a problem with this project. Skip it, say so, and carry on; `agent-code-intel --help` explains why.
+`command not found`, or a preflight error from it? The code-intel stack is not
+installed on this machine — not a problem with this project. Skip it, say so,
+and carry on; `agent-code-intel --help` explains why. Docs-only changes do not
+need a refresh.
 <!-- code-intel:end -->"""
 
 
@@ -419,7 +423,8 @@ def _ensure_ollama(reporter, bootstrap, config, stack) -> bool:
     if not bootstrap:
         return False
     reporter.say("  starting ollama server...")
-    stack.ollama_serve_background()
+    if stack.ollama_serve_background().returncode != 0:
+        return False
     for _ in range(30):
         if stack.ollama_up():
             reporter.row("ok", "ollama responding at %s" % config.ollama_http)
