@@ -462,39 +462,44 @@ rg --version
 
 ## 10. agent-code-intel
 
-Tento skript propojí vše uvedené výše do jednoho příkazu.
+Nástroj propojí vše uvedené výše do jednoho příkazu. Instalace vyžaduje celý
+checkout repozitáře; samotný soubor `agent-code-intel` nestačí, protože načítá
+balík `agent_code_intel/` a dashboard ze stejného checkoutu.
 
-Soubor `agent-code-intel` uložte na dostupné místo, například do složky
-Stažené. Poté v terminálu přejděte do dané složky a spusťte instalaci:
+Pokud nebyl použit postup z rychlého startu, naklonujte repozitář a instalaci
+spusťte z jeho kořene:
 
 ```
-cd ~/Downloads
+git clone https://github.com/eduardtomasek/agent-code-intel.git ~/src/agent-code-intel
+cd ~/src/agent-code-intel
 python3 ./agent-code-intel --install
 ```
 
-Pokud je soubor uložený v podsložce, upravte cestu — například
-`cd ~/Downloads/inteltest`.
+Instalace uloží launcher do `~/.local/bin/agent-code-intel`, importovatelný
+balík do `~/.local/lib/agent-code-intel/` a dashboard do
+`~/.local/bin/code-intel-dash`. Pokud neexistuje žádná konfigurace, vytvoří
+komentovanou šablonu `~/.config/code-intel/defaults.toml`; existující
+`defaults.env` nebo `defaults.toml` zachová beze změny.
 
-Instalace udělá tři věci. Zkopíruje skript do `~/.local/bin/`, což je místo,
-odkud se dá spouštět odkudkoli. Vytvoří konfiguraci v
-`~/.config/code-intel/defaults.env`, kterou ti budoucí aktualizace nepřepíšou.
-A přidá do nastavení Claude Code pravidlo, díky kterému nebude Claude muset žádat
-o povolení pokaždé, když spustí `agent-code-intel --refresh`.
+Ve výchozím režimu také přidá do `~/.claude/settings.json` přesné oprávnění
+`Bash(agent-code-intel --refresh)`. Přepínač `--no-perms` tento krok vynechá;
+nečitelný soubor nastavení se nemění a potřebné oprávnění je pak nutné přidat
+ručně.
 
-Jestli ti vypíše varování, že `~/.local/bin` není na PATH, spusť tohle:
+Pokud instalace vypíše varování, že `~/.local/bin` není na PATH, spusťte:
 
 ```
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-Kontrola:
+Kontrola instalace:
 
 ```
 agent-code-intel --version
 ```
 
-Musí vypsat číslo verze.
+Příkaz musí vypsat číslo verze.
 
 ### Verze 4.1.0 a Python 3.11+
 
@@ -974,8 +979,9 @@ Projdi to v tomhle pořadí:
 
 Tenhle soubor si hlídač drží v paměti a při každém indexování ho **celý
 přepíše**. Tvoje úprava zmizí — bez chyby, bez záznamu v logu, klidně až za pár
-hodin. Když potřebuješ něco změnit, uprav `~/.config/code-intel/defaults.env` a
-spusť `agent-code-intel --apply` znovu.
+hodin. Změny konfigurace patří do `~/.config/code-intel/defaults.toml`, nebo do
+existujícího `~/.config/code-intel/defaults.env`; poté znovu spusť
+`agent-code-intel --apply`.
 
 ---
 
