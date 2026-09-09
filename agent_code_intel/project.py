@@ -266,13 +266,17 @@ def doc_state(path: str) -> str:
     return "present" if starts == 1 and ends == 1 else "orphaned"
 
 
-def agents_md_project_owned(path: str) -> bool:
-    """Whether AGENTS.md has project content outside GitNexus's block."""
+def managed_doc_current(path: str, block: str) -> bool:
+    """Whether the one balanced managed block already has canonical bytes."""
+    if doc_state(path) != "present":
+        return False
     text = _read_text(path)
     if text is None:
         return False
-    text = re.sub(r"<!-- gitnexus:start -->.*?<!-- gitnexus:end -->", "", text, flags=re.S)
-    return bool(text.strip())
+    match = re.search(
+        r"<!-- code-intel:start -->.*?<!-- code-intel:end -->", text, flags=re.S
+    )
+    return match is not None and match.group(0) == block
 
 
 def project_has_sources(root: str) -> bool:
@@ -372,7 +376,7 @@ def write_managed_doc(path: str, block: str, force: bool) -> tuple[str, bool]:
     state = doc_state(path)
     if state == "orphaned":
         return "unbalanced code-intel markers — fix them by hand, left untouched", False
-    if state == "present" and not force:
+    if state == "present" and managed_doc_current(path, block):
         return "code-intel block already present", False
     try:
         with open(path, encoding="utf-8", errors="replace") as handle:

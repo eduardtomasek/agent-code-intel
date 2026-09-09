@@ -11,7 +11,7 @@
 #   aci_acquire_reference "$WORK"      # sets $ACI_REFERENCE
 #
 # Override the commit with ACI_REFERENCE_COMMIT (differential proofs after the
-# 4.0.0 release may want a different pin).
+# 4.1.0 release may want a different pin).
 
 ACI_REFERENCE_COMMIT="${ACI_REFERENCE_COMMIT:-9406cce}"
 

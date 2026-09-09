@@ -105,6 +105,26 @@ class Slug(unittest.TestCase):
         self.assertEqual(project.slug("--a..b--"), "a-b")
 
 
+class ManagedDocs(unittest.TestCase):
+    def test_current_block_is_noop_and_stale_block_converges(self):
+        root = tempfile.mkdtemp(prefix="aci-doc-")
+        path = os.path.join(root, "AGENTS.md")
+        old = "<!-- code-intel:start -->old<!-- code-intel:end -->"
+        current = "<!-- code-intel:start -->current<!-- code-intel:end -->"
+        Path(path).write_text("before\n" + old + "\nafter\n")
+
+        message, changed = project.write_managed_doc(path, current, False)
+        self.assertEqual(
+            (message, changed), ("code-intel block rewritten in place", True)
+        )
+        self.assertEqual(Path(path).read_text(), "before\n" + current + "\nafter\n")
+
+        before = os.stat(path).st_mtime_ns
+        message, changed = project.write_managed_doc(path, current, False)
+        self.assertEqual((message, changed), ("code-intel block already present", False))
+        self.assertEqual(os.stat(path).st_mtime_ns, before)
+
+
 class ResolveProject(unittest.TestCase):
     def _resolve(self, **kw):
         defaults = dict(root_explicit=False, mode="init", workspace=None,

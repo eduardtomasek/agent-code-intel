@@ -5,10 +5,37 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-09-09
+
+Vydání spravovaného routing skillu pro GrepAI, GitNexus a volitelný ripgrep,
+včetně bezpečné distribuce pro Claude a Codex.
+
+### Přidáno
+
+- `agent-code-intel-routing`: byte-identický spravovaný skill v
+  `.claude/skills/` pro Claude a `.agents/skills/` pro Codex; `--agent
+  claude|codex|both` určuje, které kopie se při `--apply` vytvoří.
+- Kontrola skillu ve `--status`, `--status --json` a `--refresh`; `--remove`
+  odstraňuje pouze nástrojem vlastněné kopie a `.agents` se neindexuje GrepAI.
+- README s rychlým startem od závislostí po `--apply`, návodem na aktualizaci a
+  volitelným `ripgrep` (`rg`) pro přesné hledání a ověření.
+
 ### Změněno
 
 - `--install` nově instaluje i `code-intel-dash`; jeho vlastní `VERSION` řídí
   aktualizaci dashboardu nezávisle na verzi `agent-code-intel`.
+- Běžný `--apply` je pro spravovaný skill idempotentní: byte-identický soubor
+  nemění a drift nástrojem vlastněného souboru opraví atomicky.
+
+### Odstraněno
+
+- Serena z instrukcí nového routing skillu; rozhodování nyní používá GrepAI
+  pro význam, GitNexus pro vztahy a `rg` pro přesné dotazy a ověření.
+
+### Testy
+
+- 260 unit testů a 53 hermetických black-box scénářů pokrývá lifecycle skillu,
+  volbu agenta, idempotenci, drift, instalaci, status, refresh a remove.
 
 ## [4.0.0] - 2026-09-09
 
@@ -118,6 +145,7 @@ dopočítat: nástroj sem přišel v téhle verzi z externího zdroje (viz `git
 log`, merge `Hessevalentino/audit-fixes-dashboard-v2.4.1`), ne z vlastního
 vývoje v tomhle repu.
 
-[Unreleased]: https://github.com/eduardtomasek/agent-code-intel/compare/52232ad1b202d520474278ca8044e24d7af398d2...HEAD
+[Unreleased]: https://github.com/eduardtomasek/agent-code-intel/compare/v4.1.0...HEAD
+[4.1.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v3.0.0...52232ad1b202d520474278ca8044e24d7af398d2
 [3.0.0]: https://github.com/eduardtomasek/agent-code-intel/releases/tag/v3.0.0

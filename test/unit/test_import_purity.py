@@ -13,7 +13,15 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-MODULES = ("cli", "config", "project", "integrations", "commands", "install")
+MODULES = (
+    "agent_skills",
+    "cli",
+    "config",
+    "project",
+    "integrations",
+    "commands",
+    "install",
+)
 
 _PROBE = (
     "import sys; sys.path.insert(0, %r)\n"

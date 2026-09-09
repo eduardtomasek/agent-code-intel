@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from agent_code_intel import commands, integrations, project
+from agent_code_intel import agent_skills, commands, integrations, project
 from agent_code_intel.config import (
     ChildEnvironment,
     CliError,
@@ -122,6 +122,7 @@ def _mkrepo(name="proj"):
     root = os.path.join(tempfile.mkdtemp(prefix="aci-refresh-"), name)
     os.makedirs(root)
     subprocess.run(["git", "init", "-q", root], check=True)
+    agent_skills.install_targets(root, "both", False)
     return project.canon(root)
 
 
@@ -401,6 +402,20 @@ class Shape(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("Code intelligence is fresh.", out)
         self.assertEqual(stack.calls, [])
+
+    def test_missing_selected_routing_skill_is_refresh_drift(self):
+        root = _mkrepo("routing-drift")
+        codex_skill = agent_skills.target_paths(root, "codex")[0][1]
+        os.unlink(codex_skill)
+        code, out, _ = _run(
+            stack=_Stack(present=()),
+            context=_context(root),
+            do_grepai=False,
+            do_gitnexus=False,
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("codex routing skill is missing", out)
+        self.assertIn("Code intelligence has drift or errors above.", out)
 
     def test_only_gitnexus_side_runs_when_grepai_is_off(self):
         stack = _Stack()

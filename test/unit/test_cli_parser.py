@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from agent_code_intel import __version__
+from agent_code_intel import __version__, agent_skills
 from agent_code_intel.cli import Options, USAGE, _conf_dir, main, parse_args
 
 # main() now loads config before parsing (issue #41 §4), so it reads
@@ -226,6 +226,7 @@ class Dispatch(unittest.TestCase):
             handle.write(
                 "SCHEMA=1\nWORKSPACE=skip-ws\nPROJECT=%s\n" % os.path.basename(scratch)
             )
+        agent_skills.install_targets(scratch, "both", False)
         code, out, err = run(["--refresh", "--no-grepai", "--no-gitnexus"], cwd=scratch)
         self.assertEqual((code, err), (0, ""))
         self.assertIn("Workspace: skip-ws", out)

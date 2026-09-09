@@ -101,6 +101,7 @@ _DEFAULT_EXTRA_IGNORES: tuple[str, ...] = (
     "uv.lock",
     "Gemfile.lock",
     ".claude",
+    ".agents",
     ".mcp.json",
 )
 _DEFAULT_GITIGNORE_ENTRIES: tuple[str, ...] = (".grepai/", ".gitnexus/")

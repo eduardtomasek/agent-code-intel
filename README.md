@@ -19,8 +19,96 @@ klíčových slov, a bude vědět, co se rozbije, když něco změníš.
 
 ---
 
+## Rychlý start
+
+Tohle je nejkratší cesta pro nový Mac. Příkazy spouštěj **po jednom** a na
+další přejdi až po návratu řádku s `%`. Když Homebrew po své instalaci vypíše
+další příkazy pro nastavení PATH, spusť nejdřív právě tyto jeho pokyny.
+
+Nejdřív ověř Git:
+
+```
+git --version
+```
+
+Pokud příkaz selže, macOS nabídne instalaci vývojářských nástrojů. Dokonči ji,
+pak Git zkontroluj znovu:
+
+```
+xcode-select --install
+git --version
+```
+
+Pak nainstaluj Homebrew, Python, kontejnery, lokální embeddingy, Node.js a
+vyhledávací nástroje:
+
+```
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+brew install python@3.11
+brew install --cask orbstack
+open -a OrbStack
+brew install ollama
+brew services start ollama
+brew install node
+npm i -g gitnexus
+brew install yoanbernabeu/tap/grepai
+brew install ripgrep
+```
+
+`ripgrep` poskytuje příkaz `rg`. Je volitelný, ale routing skill ho použije pro
+přesné hledání a závěrečné ověření; bez něj zůstávají GrepAI a GitNexus
+funkční. Po prvním otevření OrbStacku vyčkej, až dokončí nastavení, a ověř ho:
+
+```
+docker info
+```
+
+Nakonec stáhni tento projekt, nainstaluj jeho lokální kopii a zapni inteligenci
+v prvním projektu:
+
+```
+git clone https://github.com/eduardtomasek/agent-code-intel.git ~/src/agent-code-intel
+cd ~/src/agent-code-intel
+python3.11 ./agent-code-intel --install
+mkdir -p ~/projects/muj-projekt
+cd ~/projects/muj-projekt
+agent-code-intel --agent both --apply
+```
+
+Místo posledního příkazu použij `--agent claude`, pokud má projekt obsluhovat
+jen Claude, nebo `--agent codex`, pokud jen Codex. `both` nastaví oba.
+
+## Aktualizace na 4.1.0
+
+Aktualizace vždy začíná checkoutem, ze kterého jsi nástroj instaloval. Stáhni
+nový zdroj, znovu nainstaluj **lokální soubor** a pak v každém projektu obnov
+spravované artefakty:
+
+```
+cd ~/src/agent-code-intel
+git pull --ff-only
+python3.11 ./agent-code-intel --install
+cd /cesta/k/projektu
+agent-code-intel --agent both --apply
+```
+
+Používáš-li jen jeden agent, poslední řádek nahraď jednou z variant:
+
+```
+agent-code-intel --agent claude --apply
+agent-code-intel --agent codex --apply
+```
+
+`--install` bezpečně aktualizuje vlastní instalovanou kopii a zachová tvoji
+konfiguraci. `--apply` je idempotentní: identický routing skill nechá beze
+změny a jinak aktualizuje pouze artefakty vybraného agenta.
+
+---
+
 ## Obsah
 
+0. [Rychlý start](#rychlý-start)
+0. [Aktualizace na 4.1.0](#aktualizace-na-410)
 1. [Co to vlastně dělá](#1-co-to-vlastně-dělá)
 2. [Co budeš potřebovat](#2-co-budeš-potřebovat)
 3. [Terminál — základ](#3-terminál--základ)
@@ -76,6 +164,7 @@ a zároveň napíše tvému AI agentovi instrukce, kdy má co použít.
 | **GrepAI** | Sémantické vyhledávání | Řídí indexování a hledání |
 | **GitNexus** | Mapa vztahů v kódu | Odpovídá na „co se rozbije" |
 | **Node.js** | Běhové prostředí | GitNexus je v něm napsaný |
+| **ripgrep (`rg`)** | Přesné hledání a ověření | Volitelný nástroj pro routing skill |
 | **Homebrew** | Správce balíčků | Instaluje většinu z výše uvedeného |
 | **agent-code-intel** | Propojí to všechno | Aby to byl jeden příkaz, ne patnáct |
 
@@ -87,7 +176,7 @@ na stahování.
 ## 2. Co budeš potřebovat
 
 - Mac s macOS — návod je psaný pro Apple Silicon i Intel
-- Pro verzi 4.0.0 Python 3.11 nebo novější; Python 3.9 a starší skončí
+- Pro verzi 4.1.0 Python 3.11 nebo novější; Python 3.9 a starší skončí
   srozumitelnou chybou bez tracebacku
 - Připojení k internetu
 - Heslo ke svému účtu na Macu, jednou při instalaci Homebrew
@@ -351,6 +440,17 @@ Musí vypsat verzi.
 > to sám upozorní, protože GitNexus nekontroluje jen tím, že existuje, ale tím,
 > že se opravdu spustí.
 
+### Volitelný ripgrep (`rg`)
+
+`rg` je rychlé přesné hledání textu. Routing skill ho volí tehdy, když už znáš
+přesný identifikátor, konfigurační klíč, proměnnou prostředí nebo když chce po
+úpravě ověřit výsledek. Pro samotné GrepAI a GitNexus není povinný.
+
+```
+brew install ripgrep
+rg --version
+```
+
 ---
 
 ## 10. agent-code-intel
@@ -389,7 +489,7 @@ agent-code-intel --version
 
 Musí vypsat číslo verze.
 
-### Verze 4.0.0 a Python 3.11+
+### Verze 4.1.0 a Python 3.11+
 
 Verze 4 používá aktivní zdrojový launcher `agent-code-intel` a balík
 `agent_code_intel/`. Vyžaduje Python 3.11 nebo novější — launcher si sám
@@ -405,7 +505,7 @@ do `~/.local/bin/code-intel-dash` a celý importovatelný balík do
 `~/.local/lib/agent-code-intel/`. Instalace zkopíruje všechny Pythonové
 moduly i dashboard, nepřenáší `__pycache__` a upgrade nahradí vlastní balík
 jako celek. Verze dashboardu se čte z jeho vlastního `VERSION`; verze CLI
-`4.0.0` ji nepřebíjí.
+`4.1.0` ji nepřebíjí.
 
 ### Konfigurace: `defaults.env` a `defaults.toml`
 
@@ -484,19 +584,32 @@ soubory:
 | `.gitignore` | Aby se indexy nedostaly do gitu | agent-code-intel |
 | `.grepai/` | Nastavení indexování pro tenhle projekt | agent-code-intel |
 | `.mcp.json` | Napojení vyhledávání na tvého AI agenta | agent-code-intel |
-| `CLAUDE.md` | Instrukce pro agenta, kdy co použít | oba, každý svůj blok |
+| `CLAUDE.md` | Odkaz na routing skill pro Claude | agent-code-intel pro `claude`/`both` |
+| `.claude/skills/agent-code-intel-routing/` | Rozhoduje, kdy použít GrepAI, GitNexus nebo ripgrep | agent-code-intel pro `claude`/`both` |
+| `AGENTS.md` | Odkaz na routing skill pro Codex a ostatní agenty | agent-code-intel pro `codex`/`both` |
+| `.agents/skills/agent-code-intel-routing/` | Stejný routing skill ve formátu, který objevuje Codex | agent-code-intel pro `codex`/`both` |
 | `.gitnexus/` | Grafový index a jeho databáze | gitnexus |
-| `AGENTS.md` | Instrukce pro agenta ve formátu, který čte Codex | gitnexus |
-| `.claude/skills/` | Šest dovedností pro Claude Code k práci s grafem | gitnexus |
+| `AGENTS.md`, `CLAUDE.md` | Vlastní oddělený blok s pravidly grafu | gitnexus |
+| `.claude/skills/gitnexus/` | Dovednosti pro Claude Code k práci s grafem | gitnexus |
 
-Poslední tři řádky nedělá `agent-code-intel`, ale `gitnexus analyze`, který se
-uvnitř spouští. Proto ti `AGENTS.md` přibude, i když Codex vůbec nepoužíváš —
-`agent-code-intel` do něj v tom případě jen nepíše vlastní instrukce.
+`--agent claude`, `--agent codex` a výchozí `--agent both` řídí současně MCP
+registraci, dokument s instrukcemi i umístění routing skillu. GitNexus si při
+`analyze` může navíc vytvořit vlastní bloky a Claude skilly bez ohledu na tuto
+volbu; ty nejsou vlastnictvím `agent-code-intel`.
 
-`.gitignore` pokrývá `.grepai/` a `.gitnexus/`, ale **ne `.claude/`**. Těch šest
-souborů se ti tedy dostane do commitu. Ve víc lidech to bývá to, co chceš —
-tým pak má stejné dovednosti. Pokud ne, přidej si `.claude/` do `.gitignore`
-sám.
+Umístění odpovídají oficiální dokumentaci pro
+[Claude Code](https://code.claude.com/docs/en/skills) a
+[Codex](https://learn.chatgpt.com/docs/build-skills).
+
+Routing skill je záměrně verzovatelný: `.gitignore` pokrývá `.grepai/` a
+`.gitnexus/`, ale ne `.claude/` ani `.agents/`. Tým tak dostane stejné
+rozhodování nástrojů. Výchozí GrepAI konfigurace obě agentní složky při
+indexování ignoruje.
+
+Opakovaný `--apply` identický skill vůbec nepřepíše. Změněnou managed kopii
+opraví automaticky; cizí skill stejného jména bezpečně odmítne. Pokud jej chceš
+výslovně převzít pod správu nástroje, použij `--force-docs`. Přepínač
+`--no-docs` přeskočí dokumenty i routing skilly.
 
 ---
 
@@ -602,12 +715,15 @@ agent-code-intel --refresh
 ```
 
 Tenhle příkaz by měl spouštět tvůj AI agent sám — instrukci k tomu má v
-`CLAUDE.md`, který mu `agent-code-intel` napsal. Když to neudělá, spusť ho ručně.
+`CLAUDE.md` nebo `AGENTS.md`, který mu `agent-code-intel` napsal. Když to
+neudělá, spusť ho ručně.
 
 Proč je vůbec potřeba: GrepAI se aktualizuje průběžně, protože na pozadí běží
 hlídač, který si všímá ukládaných souborů. GitNexus ne — jeho mapa se
 přepočítává jen na povel, a právě tenhle příkaz ten povel dává. Zároveň
-zkontroluje, že hlídač běží, a ohlásí, kdyby něco nesedělo.
+zkontroluje, že hlídač běží, a ohlásí, kdyby něco nesedělo. Kontroluje také
+routing skill pro agenty vybrané přes `--agent`; jeho chybějící nebo změněná
+kopie je drift a opraví ji další `--apply`.
 
 Rychlá kontrola bez přeindexování:
 
@@ -871,9 +987,10 @@ Ukáže, co by smazal. Když souhlasíš:
 agent-code-intel --remove --apply
 ```
 
-Odpojí projekt, zastaví hlídač, smaže vygenerované soubory a vyřízne instrukce z
-`CLAUDE.md`. Tvůj kód ani git se nedotkne. Chceš-li smazat i vektory z databáze,
-přidej `--purge-collection`.
+Odpojí projekt, zastaví hlídač, smaže vygenerované soubory, vyřízne managed
+instrukce z `CLAUDE.md` a `AGENTS.md` a odstraní obě managed kopie routing
+skillu. Cizí skill stejného jména zachová. Tvého kódu ani gitu se nedotkne.
+Chceš-li smazat i vektory z databáze, přidej `--purge-collection`.
 
 ### CLI bez smazání konfigurace
 

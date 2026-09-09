@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from agent_code_intel import commands, project
+from agent_code_intel import agent_skills, commands, project
 from agent_code_intel.config import ChildEnvironment, LoadedConfig, default_config
 from agent_code_intel.project import ProjectContext
 
@@ -210,6 +210,7 @@ class TextTable(unittest.TestCase):
         root = _mkrepo("widget")
         _code_intel(root, "team", "widget")
         _grepai_config(root)
+        agent_skills.install_targets(root, "both", False)
         alias = os.path.join(tempfile.mkdtemp(prefix="aci-status-alias-"), "alias")
         os.symlink(root, alias)
         reg = os.path.join(tempfile.mkdtemp(prefix="aci-reg-"), "projects")
@@ -409,6 +410,7 @@ class JsonDocument(unittest.TestCase):
         root = _mkrepo("widget")
         _code_intel(root, "team", "widget")
         _grepai_config(root)
+        agent_skills.install_targets(root, "both", False)
         reg = os.path.join(tempfile.mkdtemp(prefix="aci-reg-"), "projects")
         with open(reg, "w") as handle:
             handle.write("team\t%s\n" % root)
@@ -428,7 +430,7 @@ class JsonDocument(unittest.TestCase):
         self.assertEqual(list(entry), [
             "workspace", "path", "name", "exists", "workspace_exists", "mapped",
             "mapped_path", "embedder", "chunking_ok", "ignores_ok", "watcher",
-            "gob_leftover", "collection", "ok",
+            "routing_skills", "gob_leftover", "collection", "ok",
         ])
         self.assertIs(entry["ok"], True)
         self.assertIs(entry["gob_leftover"], False)
@@ -436,6 +438,47 @@ class JsonDocument(unittest.TestCase):
         self.assertEqual(entry["collection"], "workspace_team")  # a string
         self.assertEqual(entry["embedder"], "match")  # a string, not coerced
         self.assertEqual(entry["mapped_path"], root)  # canonical, string
+        self.assertEqual(
+            entry["routing_skills"],
+            {
+                "claude": {
+                    "path": ".claude/skills/agent-code-intel-routing/SKILL.md",
+                    "state": "current",
+                    "ok": True,
+                },
+                "codex": {
+                    "path": ".agents/skills/agent-code-intel-routing/SKILL.md",
+                    "state": "current",
+                    "ok": True,
+                },
+            },
+        )
+
+    def test_missing_selected_routing_skill_marks_project_unhealthy(self):
+        root = _mkrepo("routing-drift")
+        _code_intel(root, "team", "routing-drift")
+        _grepai_config(root)
+        agent_skills.install_targets(root, "claude", False)
+        reg = os.path.join(tempfile.mkdtemp(prefix="aci-reg-"), "projects")
+        with open(reg, "w") as handle:
+            handle.write("team\t%s\n" % root)
+
+        _, out, _ = _run(
+            as_json=True,
+            status_all=True,
+            context=_context(root),
+            registry=reg,
+            stack=_Stack(
+                ws_exists=True,
+                show="  - routing-drift: %s\n  model nomic-embed-text-v2-moe\n"
+                % root,
+                watch="running",
+            ),
+        )
+        entry = json.loads(out)["projects"][0]
+        self.assertIs(entry["routing_skills"]["claude"]["ok"], True)
+        self.assertEqual(entry["routing_skills"]["codex"]["state"], "missing")
+        self.assertIs(entry["ok"], False)
 
     def test_broken_project_entry_is_the_short_shape(self):  # JSON-6
         bad = _mkrepo("bad")
@@ -446,8 +489,12 @@ class JsonDocument(unittest.TestCase):
             handle.write("bws\t%s\n" % bad)
         doc, _ = self._doc(registry=reg, context=_context(bad))
         entry = doc["projects"][0]
-        self.assertEqual(list(entry), ["workspace", "path", "code_intel_error", "ok"])
+        self.assertEqual(
+            list(entry),
+            ["workspace", "path", "code_intel_error", "routing_skills", "ok"],
+        )
         self.assertIs(entry["ok"], False)
+        self.assertEqual(set(entry["routing_skills"]), {"claude", "codex"})
         self.assertIn("unknown key 'BOGUS'", entry["code_intel_error"])
 
     def test_gone_project_entry_stops_at_exists_false(self):
@@ -456,8 +503,14 @@ class JsonDocument(unittest.TestCase):
             handle.write("gws\t/no/such/dir/at/all\n")
         doc, _ = self._doc(registry=reg)
         entry = doc["projects"][0]
-        self.assertEqual(list(entry), ["workspace", "path", "name", "exists", "ok"])
+        self.assertEqual(
+            list(entry),
+            ["workspace", "path", "name", "exists", "routing_skills", "ok"],
+        )
         self.assertIs(entry["exists"], False)
+        self.assertEqual(
+            entry["routing_skills"]["codex"]["state"], "missing"
+        )
         self.assertIs(entry["ok"], False)
 
     def test_no_script_state_key_anywhere(self):  # issue #17 contract

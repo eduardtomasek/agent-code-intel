@@ -59,6 +59,21 @@ class LibStep(Base):
             p.name for p in Path(install._source_package()).glob("*.py")
         )
         self.assertEqual(installed, source)
+        self.assertEqual(
+            Path(
+                self.lib,
+                "agent_code_intel",
+                "assets",
+                "agent-code-intel-routing",
+                "SKILL.md",
+            ).read_bytes(),
+            Path(
+                install._source_package(),
+                "assets",
+                "agent-code-intel-routing",
+                "SKILL.md",
+            ).read_bytes(),
+        )
 
     def test_clean_install_bundles_the_dashboard(self):
         self.assertIs(install._install_lib(self.lib), True)

@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from agent_code_intel import commands, integrations, project
+from agent_code_intel import agent_skills, commands, integrations, project
 from agent_code_intel.config import ChildEnvironment, LoadedConfig, default_config
 from agent_code_intel.project import ProjectContext
 
@@ -174,6 +174,68 @@ def loaded():
 
 
 class Init(unittest.TestCase):
+    def test_apply_routes_documents_and_skills_to_selected_agents(self):
+        for target, expected in (
+            ("claude", {"claude"}),
+            ("codex", {"codex"}),
+            ("both", {"claude", "codex"}),
+        ):
+            with self.subTest(target=target):
+                root = tempfile.mkdtemp(prefix="aci-init-agents-")
+                code = commands.run_init(
+                    apply=True,
+                    bootstrap=False,
+                    do_git=False,
+                    start_watch=False,
+                    run_analyze=False,
+                    write_docs=True,
+                    force_docs=False,
+                    agent_target=target,
+                    context=make_context(root),
+                    loaded=loaded(),
+                    conf_dir=os.path.join(root, "config"),
+                    stdout=io.StringIO(),
+                    stderr=io.StringIO(),
+                    stack=FakeStack(),
+                )
+
+                self.assertEqual(code, 0)
+                for agent, doc in (("claude", "CLAUDE.md"), ("codex", "AGENTS.md")):
+                    skill = agent_skills.target_paths(root, agent)[0][1]
+                    self.assertEqual(os.path.isfile(skill), agent in expected)
+                    self.assertEqual(
+                        os.path.isfile(os.path.join(root, doc)), agent in expected
+                    )
+
+    def test_foreign_routing_skill_blocks_apply_before_project_mutation(self):
+        root = tempfile.mkdtemp(prefix="aci-init-foreign-skill-")
+        skill = agent_skills.target_paths(root, "codex")[0][1]
+        os.makedirs(os.path.dirname(skill))
+        Path(skill).write_text("foreign\n")
+        stack = FakeStack()
+
+        with self.assertRaises(commands.CliError):
+            commands.run_init(
+                apply=True,
+                bootstrap=False,
+                do_git=False,
+                start_watch=False,
+                run_analyze=False,
+                write_docs=True,
+                force_docs=False,
+                agent_target="codex",
+                context=make_context(root),
+                loaded=loaded(),
+                conf_dir=os.path.join(root, "config"),
+                stdout=io.StringIO(),
+                stderr=io.StringIO(),
+                stack=stack,
+            )
+
+        self.assertEqual(Path(skill).read_text(), "foreign\n")
+        self.assertFalse(os.path.exists(os.path.join(root, ".code-intel")))
+        self.assertNotIn("workspace_create", [call[0] for call in stack.calls])
+
     def test_old_node_is_a_warning_not_a_missing_dependency(self):  # TOL-8
         root = tempfile.mkdtemp(prefix="aci-init-old-node-")
         out, err = io.StringIO(), io.StringIO()
@@ -247,6 +309,10 @@ class Init(unittest.TestCase):
         self.assertLess(names.index("workspace_create"), names.index("workspace_add"))
         self.assertLess(names.index("workspace_add"), names.index("grepai_init"))
         self.assertIn("skipped git (--no-git)", out.getvalue())
+        self.assertFalse(os.path.exists(os.path.join(root, "CLAUDE.md")))
+        self.assertFalse(os.path.exists(os.path.join(root, "AGENTS.md")))
+        self.assertEqual(agent_skills.status(root, "both")["claude"]["state"], "missing")
+        self.assertEqual(agent_skills.status(root, "both")["codex"]["state"], "missing")
         self.assertEqual(err.getvalue(), "")
 
     def test_apply_fails_if_watcher_start_fails(self):

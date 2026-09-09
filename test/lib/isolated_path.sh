@@ -1,7 +1,7 @@
 # test/lib/isolated_path.sh — build the isolated PATH the migration tests use.
 #
 # The reference suite (test/run.sh) runs hermetically under PATH=/usr/bin:/bin.
-# On this machine /usr/bin/python3 is 3.9.6, but the 4.0.0 launcher's runtime
+# On this machine /usr/bin/python3 is 3.9.6, but the 4.1.0 launcher's runtime
 # gate rejects anything below 3.11 (issue #35, deviation 1). Running the suite
 # against the Python launcher under the bare PATH would fail every test on the
 # version banner instead of on behaviour.

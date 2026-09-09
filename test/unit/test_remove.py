@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from agent_code_intel import commands, project
+from agent_code_intel import agent_skills, commands, project
 from agent_code_intel.config import ChildEnvironment, LoadedConfig, default_config
 from agent_code_intel.integrations import Exec
 from agent_code_intel.project import ProjectContext
@@ -117,6 +117,7 @@ def _seed_project(root, workspace="remove-ws"):
         handle.write("owned\n")
     with open(os.path.join(root, ".mcp.json"), "w") as handle:
         handle.write('{"mcpServers":{"grepai":{"args":["--workspace","%s"]}}}' % workspace)
+    agent_skills.install_targets(root, "both", False)
 
 
 class RemoveMode(unittest.TestCase):
@@ -198,6 +199,28 @@ class RemoveMode(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(root, ".grepai")))
         self.assertFalse(os.path.exists(os.path.join(root, ".gitnexus")))
         self.assertFalse(os.path.exists(os.path.join(root, "refresh-intel.sh")))
+        self.assertFalse(
+            os.path.exists(
+                os.path.join(
+                    root,
+                    ".claude",
+                    "skills",
+                    "agent-code-intel-routing",
+                    "SKILL.md",
+                )
+            )
+        )
+        self.assertFalse(
+            os.path.exists(
+                os.path.join(
+                    root,
+                    ".agents",
+                    "skills",
+                    "agent-code-intel-routing",
+                    "SKILL.md",
+                )
+            )
+        )
         self.assertEqual(Path(os.path.join(root, "CLAUDE.md")).read_text(), "before\nafter\n")
         self.assertFalse(os.path.exists(os.path.join(root, "AGENTS.md")))
         self.assertEqual(project.read_registry(registry), [("other", "/keep")])

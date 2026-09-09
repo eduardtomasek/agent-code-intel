@@ -77,6 +77,16 @@ write_code_intel() {  # $1 = adresář, $2.. = řádky souboru .code-intel
 write_pristine_refresh_script() { aci_write_pristine_refresh_script "$@"; }
 write_modified_refresh_script()  { aci_write_modified_refresh_script "$@"; }
 
+write_routing_skills() {
+  local root="$1" source
+  source="$HERE/../agent_code_intel/assets/agent-code-intel-routing/SKILL.md"
+  mkdir -p \
+    "$root/.claude/skills/agent-code-intel-routing" \
+    "$root/.agents/skills/agent-code-intel-routing"
+  cp "$source" "$root/.claude/skills/agent-code-intel-routing/SKILL.md"
+  cp "$source" "$root/.agents/skills/agent-code-intel-routing/SKILL.md"
+}
+
 fail() { FAIL=$((FAIL+1)); FAILED_NAMES+=("$CURRENT"); printf '  FAIL  %s\n        %s\n' "$CURRENT" "$1"; }
 
 assert_status() {
@@ -406,6 +416,7 @@ test_refresh_never_bootstraps_missing_code_intel() {
 test_refresh_finds_git_root_from_subdirectory() {
   local d; d="$(new_repo 'refresh-nested-root')"
   write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=root-ws' 'PROJECT=refresh-nested-root'
+  write_routing_skills "$d"
   mkdir -p "$d/sub/deeper"
   run "$d/sub/deeper" --refresh --no-grepai --no-gitnexus
   assert_status 0 || return
@@ -421,6 +432,7 @@ test_refresh_nested_repo_does_not_see_parent_code_intel() {
   mkdir -p "$child"
   ( cd "$child" && git init -q . )
   write_code_intel "$child" 'SCHEMA=1' 'WORKSPACE=child-ws' 'PROJECT=child-repo'
+  write_routing_skills "$child"
   run "$child" --refresh --no-grepai --no-gitnexus
   assert_status 0 || return
   assert_contains "Workspace: child-ws" || return
@@ -477,6 +489,7 @@ test_refresh_no_gitnexus_skips_gitnexus_preflight() {
 test_refresh_with_both_stacks_skipped_needs_no_stack() {
   local d; d="$(new_repo 'refresh-skip-both-repo')"
   write_code_intel "$d" 'SCHEMA=1' 'WORKSPACE=skip-both-ws' 'PROJECT=refresh-skip-both-repo'
+  write_routing_skills "$d"
   run "$d" --refresh --no-grepai --no-gitnexus
   assert_status 0 || return
   assert_contains "Code intelligence is fresh." || return

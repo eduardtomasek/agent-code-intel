@@ -1,6 +1,6 @@
 # scenario: --version prints the product name + version and exits 0.
 # Read-only. The reference remains pinned to 3.0.0 while the switched
-# candidate reports 4.0.0, so stdout is the one approved release divergence.
+# candidate reports 4.1.0, so stdout is the one approved release divergence.
 # This still exercises the exit / stdout / stderr dimensions and the parser's
 # in-loop early exit.
 #

@@ -90,8 +90,8 @@ Options:
   --no-git          Do not run `git init` or touch .gitignore
   --no-watch        Do not start the GrepAI watcher
   --no-analyze      Skip the initial GitNexus analyze (slow on big repos)
-  --no-docs         Do not touch CLAUDE.md / AGENTS.md
-  --force-docs      Rewrite the code-intel block even if one is present
+  --no-docs         Do not touch agent documents or routing skills
+  --force-docs      Rewrite managed docs and adopt a foreign routing skill
   --no-grepai       With --refresh: skip the GrepAI watcher check/start
   --no-gitnexus     With --refresh: skip the GitNexus re-index
   --all             With --status: every project in the registry
