@@ -2,7 +2,7 @@
 its one ``--force`` retry, and the audit that still runs after a failed
 re-index. Driven with a fake stack — no real external tool installed.
 
-Ledger: REF-1, REF-3, REF-4, REF-5, TOL-2 (``gn_status``), TOL-3, TOL-4,
+Ledger: REF-1, REF-3, REF-4, REF-5, REF-7, TOL-2 (``gn_status``), TOL-3, TOL-4,
 DEV-8 (header suppressed by ``--json``), FMT-5 (the preflight error block).
 """
 
@@ -266,6 +266,20 @@ class Reindex(unittest.TestCase):
         self.assertIn("analyzed 10 files", out)
         self.assertIn("  ok        index up to date", out)
         self.assertIn("Code intelligence is fresh.", out)
+
+    def test_full_analyze_output_is_replayed_without_truncation(self):  # REF-7
+        root = _mkrepo("verbose")
+        analyze_output = "\n".join("gitnexus line %02d" % i for i in range(25))
+        stack = _Stack(
+            **_healthy_project(root),
+            analyze=integrations.Exec(0, analyze_output, ""),
+        )
+        code, out, err = _run(stack=stack, context=_context(root))
+        self.assertEqual(code, 0)
+        self.assertEqual(err, "")
+        self.assertIn("gitnexus line 00", out)
+        self.assertIn("gitnexus line 24", out)
+        self.assertLess(out.index("gitnexus line 00"), out.index("gitnexus line 24"))
 
     def test_starts_the_watcher_when_it_is_down(self):
         stack = _Stack(watch="watcher not running")

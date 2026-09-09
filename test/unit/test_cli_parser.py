@@ -1,7 +1,7 @@
 """Parser and early-exit unit tests — the reference's argument loop
 (``9406cce`` lines 242–297), reproduced by ``agent_code_intel.cli``.
 
-Covers ledger rows RT-2 (flag matrix), RT-3 (last mode-switch wins), RT-4
+Covers ledger rows RT-1 (pipeline order), RT-2 (flag matrix), RT-3 (last mode-switch wins), RT-4
 (``--help`` / ``--version`` first-wins, short-circuit right), RT-6 (unknown
 flag), RT-7 (workspace twice), RT-8 (``--agent`` enum), RT-10 (``--path``
 needs an argument; root defaults to cwd), RT-12 (parse error exits 1),
@@ -15,12 +15,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from agent_code_intel import __version__
-from agent_code_intel.cli import USAGE, _conf_dir, main, parse_args
+from agent_code_intel.cli import Options, USAGE, _conf_dir, main, parse_args
 
 # main() now loads config before parsing (issue #41 §4), so it reads
 # ``$HOME/.config/code-intel``. Point HOME at an empty scratch dir so every
@@ -229,6 +230,61 @@ class Dispatch(unittest.TestCase):
         self.assertEqual((code, err), (0, ""))
         self.assertIn("Workspace: skip-ws", out)
         self.assertIn("Code intelligence is fresh.", out)
+
+
+class Pipeline(unittest.TestCase):
+    def test_config_parse_and_install_are_ordered_before_project_dispatch(self):  # RT-1
+        events = []
+
+        def load(*args, **kwargs):
+            events.append("config")
+            return mock.Mock(source="defaults")
+
+        def parse(*args, **kwargs):
+            events.append("parse")
+            return Options(mode="install")
+
+        def install_run(**kwargs):
+            events.append("install")
+            return 0
+
+        with mock.patch("agent_code_intel.cli.config.load", side_effect=load), \
+             mock.patch("agent_code_intel.cli.parse_args", side_effect=parse), \
+             mock.patch("agent_code_intel.cli.install.run", side_effect=install_run), \
+             mock.patch("agent_code_intel.cli.project.resolve_project") as resolve:
+            code = main(["--install"], {"HOME": _ISO_HOME}, "/work", io.StringIO(), io.StringIO())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(events, ["config", "parse", "install"])
+        resolve.assert_not_called()
+
+    def test_project_resolution_follows_argument_parsing_for_normal_modes(self):  # RT-1
+        events = []
+
+        def load(*args, **kwargs):
+            events.append("config")
+            return mock.Mock(source="defaults")
+
+        def parse(*args, **kwargs):
+            events.append("parse")
+            return Options(mode="status")
+
+        def resolve(*args, **kwargs):
+            events.append("resolve")
+            return object()
+
+        def status(**kwargs):
+            events.append("status")
+            return 0
+
+        with mock.patch("agent_code_intel.cli.config.load", side_effect=load), \
+             mock.patch("agent_code_intel.cli.parse_args", side_effect=parse), \
+             mock.patch("agent_code_intel.cli.project.resolve_project", side_effect=resolve), \
+             mock.patch("agent_code_intel.cli.commands.run_status", side_effect=status):
+            code = main(["--status"], {"HOME": _ISO_HOME}, "/work", io.StringIO(), io.StringIO())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(events, ["config", "parse", "resolve", "status"])
 
 
 if __name__ == "__main__":
