@@ -87,6 +87,8 @@ na stahování.
 ## 2. Co budeš potřebovat
 
 - Mac s macOS — návod je psaný pro Apple Silicon i Intel
+- Pro verzi 4.0.0 Python 3.11 nebo novější; Python 3.9 a starší skončí
+  srozumitelnou chybou bez tracebacku
 - Připojení k internetu
 - Heslo ke svému účtu na Macu, jednou při instalaci Homebrew
 - Claude Code, VS Code nebo jiný agent, který umí MCP
@@ -386,6 +388,57 @@ agent-code-intel --version
 ```
 
 Musí vypsat číslo verze.
+
+### Verze 4.0.0 a Python 3.11+
+
+Verze 4 používá zdrojový launcher `agent-code-intel.py` a balík
+`agent_code_intel/`. Vyžaduje Python 3.11 nebo novější — launcher si sám
+nevybírá jiný Python a při starém interpretu skončí přesnou diagnostikou.
+Při instalaci z checkoutu proto použij:
+
+```
+python3.11 ./agent-code-intel.py --install
+```
+
+Instalátor uloží tenký launcher do `~/.local/bin/agent-code-intel` a celý
+importovatelný balík do `~/.local/lib/agent-code-intel/`. Instalace zkopíruje
+všechny Pythonové moduly, nepřenáší `__pycache__` ani soubory z checkoutu a
+upgrade nahradí vlastní balík jako celek. Konfiguraci, registr projektů a
+dashboard nemaže.
+
+### Konfigurace: `defaults.env` a `defaults.toml`
+
+Podporovány jsou dva formáty, ale v jednom běhu smí existovat právě jeden:
+
+- `~/.config/code-intel/defaults.env` se vykoná skutečným Bashem. Zachovává
+  expanze, odkazy na dříve nastavené hodnoty, pole, exporty i výstup na oba
+  streamy; podporovaná konfigurace se předá podprocesům v neměnném prostředí.
+- `~/.config/code-intel/defaults.toml` je typovaný soubor s deklarovanými
+  klíči. Neprovádí shell ani expanzi proměnných. Neznámý klíč, chybný typ nebo
+  neparsovatelný TOML je chyba.
+
+Když neexistuje ani jeden soubor, instalace nabídne komentovanou TOML šablonu.
+Existující ENV se automaticky nepřevádí do TOML a existující konfigurace se
+nepřepisuje. Pokud existují oba soubory, nástroj skončí a vyžádá si ponechání
+jednoho z nich.
+
+### Ruční přechod z Bashe na Python
+
+Aktivní Bashový vstup zůstává funkční až do samostatného přepínacího kroku.
+Při ručním ověření kandidáta postupuj z checkoutu takto:
+
+```
+python3.11 ./agent-code-intel.py --version
+python3.11 ./agent-code-intel.py --install
+hash -r
+command -v agent-code-intel
+agent-code-intel --version
+agent-code-intel --status --json
+```
+
+Nejdřív zkontroluj, že `command -v` ukazuje do `~/.local/bin`, a teprve potom
+starý checkoutový Bash odlož. Konfigurace ENV zůstane platná; převod do TOML
+je vždy ruční a volitelný.
 
 ---
 
@@ -823,6 +876,33 @@ agent-code-intel --remove --apply
 Odpojí projekt, zastaví hlídač, smaže vygenerované soubory a vyřízne instrukce z
 `CLAUDE.md`. Tvůj kód ani git se nedotkne. Chceš-li smazat i vektory z databáze,
 přidej `--purge-collection`.
+
+### CLI bez smazání konfigurace
+
+Nejdřív si případně zazálohuj nastavení. Odstranění CLI je oddělené od projektů,
+registru a sdíleného stacku:
+
+```
+rm -f ~/.local/bin/agent-code-intel
+rm -rf ~/.local/lib/agent-code-intel
+```
+
+`~/.config/code-intel` nemaž, pokud chceš zachovat konfiguraci a registr pro
+pozdější instalaci. Soubor `~/.claude/settings.json` také nemaž celý: pokud
+chceš odstranit automatické povolení, odeber pouze přesné pravidlo
+`Bash(agent-code-intel --refresh)` a zachovej ostatní oprávnění.
+
+### Volitelné odstranění konfigurace a registru
+
+Po kontrole obsahu můžeš odstranit pouze data tohoto nástroje:
+
+```
+rm -rf ~/.config/code-intel
+```
+
+Tohle nemaže žádný projektový zdroj ani Qdrant data. Projekty je nutné nejdřív
+odpojit příkazem `agent-code-intel --remove --apply`; kolekci smaž jen při
+samostatném, výslovném použití `--purge-collection`.
 
 ### Celý stack
 

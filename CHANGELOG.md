@@ -5,6 +5,52 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
 
 ## [Unreleased]
 
+## [4.0.0] - Unreleased
+
+Obsah kandidáta pro Pythonový přepis. Datum vydání záměrně není uvedené;
+doplní se až po přepnutí aktivního vstupu, ověření kandidátního SHA a
+dogfoodingu.
+
+### Breaking
+
+- CLI v4 vyžaduje Python 3.11 nebo novější a při starším interpretu vrací
+  schválenou runtime diagnostiku bez tracebacku.
+- Produktová verze má jediný zdroj v `agent_code_intel.__version__`; aktivní
+  Bashový vstup zůstává beze změny až do samostatného přepínacího kroku.
+
+### Přidáno
+
+- Pythonový balík a samostatný launcher pro preview/apply, status, JSON status,
+  refresh, remove a instalaci/upgrade.
+- Typovaný `defaults.toml` vedle zachované kompatibility s vykonávaným
+  `defaults.env`; instalace vytváří TOML šablonu jen při chybějící konfiguraci.
+- Bezpečný `--remove` s dry-run plánem, vlastnickými kontrolami a volitelným
+  `--purge-collection`.
+- Akceptační report s diferenciálními ENV/TOML lanes a versionovaný historický
+  audit v `docs/acceptance/`.
+
+### Změněno
+
+- Instalace kopíruje celý vlastní Pythonový balík, zachovává existující
+  konfiguraci a podporuje upgrade z v2, v3 i předchozí v4 instalace.
+- `--status --json` zachovává smluvené schema; `--refresh` a `--remove`
+  zachovávají exit kódy, pořadí účinků a tolerované vzdálené chyby reference.
+- README popisuje oba konfigurační formáty, Python 3.11+, ruční přechod a
+  oddělené odstranění CLI, konfigurace, projektů a stacku.
+
+### Odstraněno
+
+- Nic nového se neodstraňuje automaticky mimo vlastněné instalační artefakty,
+  pristine legacy skript a spravované bloky, které explicitně patří nástroji.
+
+### Testy
+
+- Pre-cutover gate v `docs/acceptance/4.0.0.md` pokrývá jednotkové testy,
+  nezměněnou black-box sadu, oba hermetické lanes a izolované instalační a
+  upgrade scénáře.
+- Živý stack, přepnutí aktivního vstupu, verze 4.0.0 a dogfooding zůstávají
+  navazujícím krokem issue #58; tento záznam nepředstírá jejich dokončení.
+
 ## [3.0.0] - 2026-09-08
 
 Sloučení `refresh-intel.sh` do `agent-code-intel --refresh` — celá wayfinder
@@ -69,4 +115,5 @@ log`, merge `Hessevalentino/audit-fixes-dashboard-v2.4.1`), ne z vlastního
 vývoje v tomhle repu.
 
 [Unreleased]: https://github.com/eduardtomasek/agent-code-intel/compare/v3.0.0...HEAD
+[4.0.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v3.0.0...HEAD
 [3.0.0]: https://github.com/eduardtomasek/agent-code-intel/releases/tag/v3.0.0

@@ -206,6 +206,45 @@ class TextTable(unittest.TestCase):
         self.assertFalse(drifted)
         self.assertIn("  ok        team  %s\n" % root, out.getvalue())
 
+    def test_symlinked_alias_has_the_same_health_in_text_and_json(self):  # PATHS-2
+        root = _mkrepo("widget")
+        _code_intel(root, "team", "widget")
+        _grepai_config(root)
+        alias = os.path.join(tempfile.mkdtemp(prefix="aci-status-alias-"), "alias")
+        os.symlink(root, alias)
+        reg = os.path.join(tempfile.mkdtemp(prefix="aci-reg-"), "projects")
+        with open(reg, "w") as handle:
+            handle.write("team\t%s\n" % alias)
+        stack = _Stack(
+            ws_exists=True,
+            show="  - widget: %s\n  model nomic-embed-text-v2-moe\n" % root,
+            watch="running",
+        )
+
+        text_code, text, _ = _run(
+            as_json=False,
+            status_all=True,
+            context=_context(root),
+            stack=stack,
+            registry=reg,
+        )
+        json_code, json_text, _ = _run(
+            as_json=True,
+            status_all=True,
+            context=_context(root),
+            stack=stack,
+            registry=reg,
+        )
+
+        self.assertEqual((text_code, json_code), (0, 0))
+        self.assertIn("  ok        team  %s\n" % alias, text)
+        entry = json.loads(json_text)["projects"][0]
+        self.assertIs(entry["ok"], True)
+        self.assertIs(entry["mapped"], True)
+        self.assertIs(entry["watcher"], True)
+        self.assertEqual(entry["path"], root)
+        self.assertEqual(entry["mapped_path"], root)
+
     def test_all_empty_registry_is_exit_0(self):
         root = _mkrepo()
         empty = os.path.join(tempfile.mkdtemp(prefix="aci-reg-"), "projects")

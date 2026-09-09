@@ -140,6 +140,16 @@ class FailingOllamaStack(FakeStack):
         return integrations.Exec(1, "", "ollama spawn failed")
 
 
+class OldNodeStack(FakeStack):
+    def node_has_register_hooks(self):
+        return False
+
+    def first_line(self, *argv):
+        if argv == ("node", "--version"):
+            return "v20.0.0"
+        return super().first_line(*argv)
+
+
 def make_context(root):
     return ProjectContext(
         root=root,
@@ -164,6 +174,26 @@ def loaded():
 
 
 class Init(unittest.TestCase):
+    def test_old_node_is_a_warning_not_a_missing_dependency(self):  # TOL-8
+        root = tempfile.mkdtemp(prefix="aci-init-old-node-")
+        out, err = io.StringIO(), io.StringIO()
+        stack = OldNodeStack(
+            present=("grepai", "gitnexus", "curl", "git", "node", "claude", "codex", "ollama")
+        )
+
+        commands._init_preflight(
+            commands.Reporter(out, err),
+            bootstrap=False,
+            agent_target="both",
+            context=make_context(root),
+            config=default_config(),
+            stack=stack,
+        )
+
+        self.assertIn("  warn      node v20.0.0 is too old for 'gitnexus analyze'", out.getvalue())
+        self.assertNotIn("MISSING   node", out.getvalue())
+        self.assertEqual(err.getvalue(), "")
+
     def test_preview_runs_preflight_and_writes_no_project_files(self):
         root = tempfile.mkdtemp(prefix="aci-init-preview-")
         subprocess.run(["git", "init", "-q", root], check=True)
