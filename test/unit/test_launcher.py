@@ -2,7 +2,7 @@
 acceptance criterion 1 ("source and installed launcher carry the same inline
 gate").
 
-``agent-code-intel.py`` is generated from
+The active ``agent-code-intel`` launcher is generated from
 ``agent_code_intel.install.render_launcher``; regenerating it here and diffing
 keeps the two from drifting, and pins that the installed launcher (which #52
 renders from the same function with an absolute shebang) shares the gate
@@ -21,10 +21,10 @@ from agent_code_intel.install import RUNTIME_GATE, SOURCE_LAUNCHER, render_launc
 
 class Launcher(unittest.TestCase):
     def test_checked_in_source_launcher_is_up_to_date(self):
-        on_disk = (REPO / "agent-code-intel.py").read_text()
+        on_disk = (REPO / "agent-code-intel").read_text()
         self.assertEqual(
             on_disk, SOURCE_LAUNCHER,
-            "agent-code-intel.py is stale — regenerate it from "
+            "agent-code-intel is stale — regenerate it from "
             "agent_code_intel.install.SOURCE_LAUNCHER",
         )
 

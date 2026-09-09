@@ -24,8 +24,8 @@
 #
 # CANDIDATE defaults to the reference itself. A bare run is thus reference vs
 # reference and MUST produce zero diff — that is the harness proving itself.
-# Point ACI_CANDIDATE at the Python launcher once it exists (issue #50+); the
-# toml lane starts running for real at the same point.
+# Point ACI_CANDIDATE at the active Python launcher once it exists (issue #50+);
+# the toml lane starts running for real at the same point.
 #
 # A scenario may declare an approved divergence (issue #35 §5) with
 # `scenario_expected_divergence` (echo the dimensions that are allowed — and
@@ -69,7 +69,7 @@ PYBIN="${ISOLATED_PATH%%:*}/python3"
 CANDIDATE="${ACI_CANDIDATE:-$ACI_REFERENCE}"
 [[ -x "$CANDIDATE" ]] || { echo "[ERROR: candidate is not executable: $CANDIDATE]" >&2; exit 1; }
 # Each scenario runs the tool after `cd`-ing into its fixture, so a relative
-# candidate path (ACI_CANDIDATE=./agent-code-intel.py) must be made absolute.
+# candidate path (ACI_CANDIDATE=./agent-code-intel) must be made absolute.
 CANDIDATE="$(cd "$(dirname "$CANDIDATE")" && pwd)/$(basename "$CANDIDATE")"
 
 CANDIDATE_IS_REFERENCE=false
@@ -224,22 +224,36 @@ compare() {
         printf '    %s differs — approved divergence:\n' "$dim"
         diff "$rn" "$cn" | sed 's/^/      /'
         seen_div="$seen_div$dim "
-        continue
+        [[ "$dim" != stdout ]] && continue
       fi
-      printf '    %s differs:\n' "$dim"
-      diff "$rn" "$cn" | sed 's/^/      /'
-      ok=1
+      if [[ "$dim" != stdout || "$expdiv" != *" stdout "* ]]; then
+        printf '    %s differs:\n' "$dim"
+        diff "$rn" "$cn" | sed 's/^/      /'
+        ok=1
+      fi
     fi
 
     # stdout is also checked structurally when it is JSON — a distinct dimension
     # (issue #43 §4 lists "stdout" and "JSON strukturálně" separately): catches a
     # type or conditional-field difference and is order-insensitive where the
-    # text diff above is not.
-    if [[ "$dim" == stdout && "$expdiv" != *" stdout "* ]]; then
+    # text diff above is not. A release-version change can make raw JSON stdout
+    # differ while the structural difference remains an explicitly checked
+    # dimension, so it is declared as `json` independently of `stdout`.
+    if [[ "$dim" == stdout ]]; then
       json_structural_equal "$rn" "$cn"
       case $? in
         0|2) : ;;                                 # structurally equal, or not JSON
-        *) printf '    stdout (structural JSON) differs\n'; ok=1 ;;
+        *)
+          if [[ "$expdiv" == *" json "* ]]; then
+            printf '    json differs — approved divergence:\n'
+            json_structural_diff="$WORK/$lane/json-structural.diff"
+            diff -u <("$PYBIN" -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])), sort_keys=True, indent=2))' "$rn") <("$PYBIN" -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])), sort_keys=True, indent=2))' "$cn") > "$json_structural_diff" || true
+            sed 's/^/      /' "$json_structural_diff"
+            seen_div="$seen_div json "
+          else
+            printf '    stdout (structural JSON) differs\n'; ok=1
+          fi
+          ;;
       esac
     fi
   done

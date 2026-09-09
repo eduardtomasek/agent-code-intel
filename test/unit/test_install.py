@@ -313,7 +313,7 @@ class ConfigTemplate(unittest.TestCase):
 
 class Run(Base):
     def do_run(self, *, config_source="defaults", write_perms=True, path="",
-               source_launcher="/nowhere/agent-code-intel.py"):
+               source_launcher="/nowhere/agent-code-intel"):
         os.makedirs(self.conf, exist_ok=True)
         rep, out, err = _reporter()
         code = install.run(

@@ -23,7 +23,6 @@ nothing (decision 43).
 """
 
 # The single source of the product version (issue #48, decision 73). The CLI
-# banner and the JSON status both read it from here. It stays 3.0.0 — the value
-# the Bash reference prints — until the release slice bumps it to 4.0.0 at the
-# entrypoint switch.
-__version__ = "3.0.0"
+# banner and the JSON status both read it from here. The active entrypoint
+# switch in issue #58 makes this the 4.0.0 product version.
+__version__ = "4.0.0"

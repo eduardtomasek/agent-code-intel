@@ -362,7 +362,7 @@ Stažené. Pak v terminálu přejdi do té složky a nainstaluj:
 
 ```
 cd ~/Downloads
-bash ./agent-code-intel --install
+python3.11 ./agent-code-intel --install
 ```
 
 Pokud jsi ho uložil do podsložky, uprav cestu — například
@@ -391,13 +391,13 @@ Musí vypsat číslo verze.
 
 ### Verze 4.0.0 a Python 3.11+
 
-Verze 4 používá zdrojový launcher `agent-code-intel.py` a balík
+Verze 4 používá aktivní zdrojový launcher `agent-code-intel` a balík
 `agent_code_intel/`. Vyžaduje Python 3.11 nebo novější — launcher si sám
 nevybírá jiný Python a při starém interpretu skončí přesnou diagnostikou.
 Při instalaci z checkoutu proto použij:
 
 ```
-python3.11 ./agent-code-intel.py --install
+python3.11 ./agent-code-intel --install
 ```
 
 Instalátor uloží tenký launcher do `~/.local/bin/agent-code-intel` a celý
@@ -422,23 +422,22 @@ Existující ENV se automaticky nepřevádí do TOML a existující konfigurace 
 nepřepisuje. Pokud existují oba soubory, nástroj skončí a vyžádá si ponechání
 jednoho z nich.
 
-### Ruční přechod z Bashe na Python
+### Ověření aktivního Pythonového launcheru
 
-Aktivní Bashový vstup zůstává funkční až do samostatného přepínacího kroku.
-Při ručním ověření kandidáta postupuj z checkoutu takto:
+Aktivní vstup je po vydání kandidáta Pythonový launcher. Při ručním ověření
+postupuj z checkoutu takto:
 
 ```
-python3.11 ./agent-code-intel.py --version
-python3.11 ./agent-code-intel.py --install
+python3.11 ./agent-code-intel --version
+python3.11 ./agent-code-intel --install
 hash -r
 command -v agent-code-intel
 agent-code-intel --version
 agent-code-intel --status --json
 ```
 
-Nejdřív zkontroluj, že `command -v` ukazuje do `~/.local/bin`, a teprve potom
-starý checkoutový Bash odlož. Konfigurace ENV zůstane platná; převod do TOML
-je vždy ruční a volitelný.
+Zkontroluj, že `command -v` ukazuje do `~/.local/bin`. Konfigurace ENV zůstává
+platná; převod do TOML je vždy ruční a volitelný.
 
 ---
 
