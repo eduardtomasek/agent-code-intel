@@ -342,8 +342,13 @@ class Stack:
     def watch_stop(self, workspace: str) -> Exec:
         return self._run(("grepai", "watch", "--workspace", workspace, "--stop"))
 
-    def claude_mcp_get(self, name: str, scope: str) -> Exec:
-        return self._run(("claude", "mcp", "get", name, "-s", scope))
+    def claude_mcp_get(self, name: str, _scope: str) -> Exec:
+        """Read a named Claude MCP server.
+
+        ``claude mcp get`` resolves the named server and reports its scope, but
+        does not accept the ``-s`` option used by the remove subcommand.
+        """
+        return self._run(("claude", "mcp", "get", name))
 
     def claude_mcp_add(
         self, root: str, name: str, scope: str, command: tuple[str, ...]

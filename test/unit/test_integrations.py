@@ -235,6 +235,18 @@ class StackProbes(unittest.TestCase):
         self.assertEqual(stack.gitnexus_status("/r"), "out err")
         self.assertEqual(self._stack({}).gitnexus_status("/r"), "")
 
+    def test_claude_mcp_get_uses_supported_cli_arguments(self):
+        seen = {}
+
+        def execute(argv, env, cwd):
+            seen["argv"] = tuple(argv)
+            return Exec(0, "gitnexus: connected", "")
+
+        stack = Stack({"PATH": ""}, execute=execute)
+        result = stack.claude_mcp_get("gitnexus", "user")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(seen["argv"], ("claude", "mcp", "get", "gitnexus"))
+
     def test_remove_adapters_use_reference_argv_and_cwd(self):
         calls = []
 
