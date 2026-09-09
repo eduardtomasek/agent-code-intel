@@ -224,6 +224,36 @@ class Stack:
         """``gitnexus --version`` returns 0 (``9406cce`` :1801)."""
         return self._ok("gitnexus", "--version")
 
+    def gitnexus_analyze_embeddings(self, cwd: str) -> Exec:
+        """``gitnexus analyze --embeddings`` in ``cwd`` (``9406cce`` :2068).
+
+        The reference streams this live; the port captures it and the mode
+        replays it (approved divergence: same seam every other probe uses, and
+        ``--refresh`` re-index output is L-tested only)."""
+        return self._run(("gitnexus", "analyze", "--embeddings"), cwd=cwd)
+
+    def gitnexus_analyze_force(self, cwd: str) -> Exec:
+        """``gitnexus analyze --force`` in ``cwd`` (``9406cce`` :2075) — the
+        structural-only retry the mode runs when the embeddings pass finished
+        but persisted nothing."""
+        return self._run(("gitnexus", "analyze", "--force"), cwd=cwd)
+
+    def gitnexus_status(self, cwd: str) -> str:
+        """``gitnexus status 2>&1`` in ``cwd`` (``9406cce`` :744), stderr merged
+        into stdout; a 127 is the empty string. :func:`gitnexus_fresh` only does
+        substring checks, so the exact interleave is not reproduced."""
+        got = self._run(("gitnexus", "status"), cwd=cwd)
+        return got.stdout + got.stderr
+
+    # -- grepai watcher -----------------------------------------------------
+
+    def watch_start_background(self, workspace: str) -> Exec:
+        """``grepai watch --workspace <ws> --background`` (``9406cce`` :2054).
+
+        ``--refresh`` does not redirect this — the reference lets it write
+        straight to the user; the port captures it and the mode replays it."""
+        return self._run(("grepai", "watch", "--workspace", workspace, "--background"))
+
 
 # -- pure parsers (given a tool's captured output) -----------------------------
 
@@ -262,6 +292,21 @@ def model_state(ws_show_output: str, embed_model: str) -> str:
     if _MODEL_WORD.search(ws_show_output):
         return "mismatch"
     return "unknown"
+
+
+def gitnexus_fresh(status_output: str) -> bool:
+    """``gitnexus status`` reports the index up to date (``9406cce`` :745 —
+    ``*"up-to-date"*|*"up to date"*``)."""
+    return "up-to-date" in status_output or "up to date" in status_output
+
+
+def embeddings_not_persisted(analyze_output: str) -> bool:
+    """The one ``gitnexus analyze`` failure ``--refresh`` retries with
+    ``--force`` (``9406cce`` :2073)."""
+    return (
+        "Embedding generation completed without persisted embeddings"
+        in analyze_output
+    )
 
 
 def watcher_running(watch_status_output: str) -> bool:
