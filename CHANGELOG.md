@@ -5,11 +5,27 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
 
 ## [Unreleased]
 
+### Změněno
+
+- README přepsán na kratší podobu: zkrácený titul, sjednocené číslování obsahu
+  a nový hero obrázek (`hero.jpg`).
+
 ### Odstraněno
 
 - Zmrazený Bash reference harness, diferenční scénáře a jeho shellové helpery.
   Aktivní Pythonová testovací sada zůstává; fixture pro podporovanou migraci
   existujících `refresh-intel.sh` projektů je nyní malý Pythonový pomocník.
+- Sdílený `test/lib/isolated_path.sh` resolver interpretu; `test/unit.sh` teď
+  bere Python 3.11 přímo a `ACI_PYTHON` volí doplňkový interpret explicitně.
+
+### Opraveno
+
+- `.code-intel` s mezerou v hodnotě je nyní čitelný zpět. `--apply` zapisuje
+  `PROJECT` jako holý basename adresáře bez uvozovek, ale `_LINE_RE` vyžadovalo
+  `\S+`, takže projekt v adresáři jako `CS Imager (test)` skončil při každém
+  dalším `--status` a `--refresh` chybou `malformed line`. Hodnota se rozšířila
+  na `.+`; validace klíčů (malé písmeno, řádek bez `=`, prázdná hodnota) se
+  nemění.
 
 ## [4.1.0] - 2026-09-09
 
