@@ -10,8 +10,8 @@ project resolution, then mode dispatch.
 
 Parsing and early exit landed in issue #50; config load and project resolution
 in issue #51; install in #52; the status table and JSON status in #53; refresh
-in #54. Remove (#56) still raises :class:`CliError` — the port fakes no mode as
-working (issue #48, decision 70).
+in #54; preview/apply in #55. Remove (#56) still raises :class:`CliError` —
+the port fakes no mode as working (issue #48, decision 70).
 """
 
 from __future__ import annotations
@@ -314,10 +314,25 @@ def main(
                 stderr=stderr,
             )
 
-        # Config load, identity resolution, status (#53) and refresh (#54) are
-        # converted; remove (and the init preview/apply path) are not — say so
-        # plainly rather than exit 0 on a mode that does nothing (issue #48,
-        # decision 70).
+        if opts.mode == "init":
+            return commands.run_init(
+                apply=opts.apply,
+                bootstrap=opts.bootstrap,
+                do_git=opts.do_git,
+                start_watch=opts.start_watch,
+                run_analyze=opts.run_analyze,
+                write_docs=opts.write_docs,
+                force_docs=opts.force_docs,
+                agent_target=opts.agent_target,
+                context=context,
+                loaded=loaded,
+                conf_dir=_conf_dir(environ),
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+        # Remove is the remaining unconverted mode; do not fake a successful
+        # run that performs no work (issue #56, decision 70).
         raise CliError(
             "the Python port does not implement the '%s' mode yet "
             "(issue #56)" % opts.mode

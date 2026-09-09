@@ -62,6 +62,17 @@ def _real_exec(
 
 
 ExecFn = Callable[[tuple[str, ...], Mapping[str, str], "str | None"], Exec]
+SpawnFn = Callable[[tuple[str, ...], Mapping[str, str]], None]
+
+
+def _real_spawn(argv: tuple[str, ...], env: Mapping[str, str]) -> None:
+    subprocess.Popen(
+        list(argv),
+        cwd=None,
+        env=dict(env),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 # Bounded wait on the qdrant health probes. Approved divergence (issue #35
 # DEV-15): the reference's `curl` and `/dev/tcp` have no timeout, so
@@ -84,11 +95,15 @@ class Stack:
     """
 
     def __init__(
-        self, env: Mapping[str, str], execute: ExecFn = _real_exec
+        self,
+        env: Mapping[str, str],
+        execute: ExecFn = _real_exec,
+        spawn: SpawnFn = _real_spawn,
     ) -> None:
         self._env = dict(env)
         self._path = self._env.get("PATH", "")
         self._exec = execute
+        self._spawn = spawn
 
     # -- generic ----------------------------------------------------------
 
@@ -105,6 +120,12 @@ class Stack:
 
     def _ok(self, *argv: str) -> bool:
         return self._run(argv).returncode == 0
+
+    def git_is_repo(self, cwd: str) -> bool:
+        return self._run(("git", "rev-parse", "--git-dir"), cwd=cwd).returncode == 0
+
+    def git_init(self, cwd: str) -> Exec:
+        return self._run(("git", "init", "-q"), cwd=cwd)
 
     def first_line(self, *argv: str) -> str:
         """stdout of ``argv`` truncated to its first line (``… | head -1``)."""
@@ -205,6 +226,125 @@ class Stack:
         if got.returncode == 0:
             return got.stdout.rstrip("\n")
         return default
+
+    def container_list(self, cli: str) -> str:
+        """Names from ``<cli> ps -a`` for the bootstrap decision."""
+        return self._run((cli, "ps", "-a", "--format", "{{.Names}}")).stdout
+
+    def container_start(self, cli: str, name: str) -> Exec:
+        return self._run((cli, "start", name))
+
+    def container_run(
+        self,
+        cli: str,
+        name: str,
+        http_port: str,
+        grpc_port: str,
+        volume: str,
+        image: str,
+    ) -> Exec:
+        return self._run(
+            (
+                cli,
+                "run",
+                "-d",
+                "--name",
+                name,
+                "-p",
+                "%s:6333" % http_port,
+                "-p",
+                "%s:6334" % grpc_port,
+                "-v",
+                "%s:/qdrant/storage" % volume,
+                image,
+            )
+        )
+
+    def ollama_serve_background(self) -> Exec:
+        """Start ``ollama serve`` without waiting for its server loop."""
+        try:
+            self._spawn(("ollama", "serve"), self._env)
+        except OSError:
+            return Exec(127, "", "")
+        return Exec(0, "", "")
+
+    def ollama_pull(self, model: str) -> Exec:
+        return self._run(("ollama", "pull", model))
+
+    def ollama_list(self) -> Exec:
+        return self._run(("ollama", "list"))
+
+    # -- workspace / MCP mutations --------------------------------------
+
+    def workspace_create(
+        self,
+        workspace: str,
+        endpoint: str,
+        port: str,
+        provider: str,
+        model: str,
+    ) -> Exec:
+        return self._run(
+            (
+                "grepai",
+                "workspace",
+                "create",
+                workspace,
+                "--backend",
+                "qdrant",
+                "--qdrant-endpoint",
+                endpoint,
+                "--qdrant-port",
+                port,
+                "--provider",
+                provider,
+                "--model",
+                model,
+                "--yes",
+            )
+        )
+
+    def workspace_add(self, workspace: str, root: str) -> Exec:
+        return self._run(("grepai", "workspace", "add", workspace, root))
+
+    def workspace_remove(self, workspace: str, project_name: str) -> Exec:
+        return self._run(("grepai", "workspace", "remove", workspace, project_name))
+
+    def grepai_init(self, root: str, provider: str, model: str) -> Exec:
+        return self._run(
+            (
+                "grepai",
+                "init",
+                "--yes",
+                "-p",
+                provider,
+                "-b",
+                "qdrant",
+                "-m",
+                model,
+            ),
+            cwd=root,
+        )
+
+    def watch_stop(self, workspace: str) -> Exec:
+        return self._run(("grepai", "watch", "--workspace", workspace, "--stop"))
+
+    def claude_mcp_get(self, name: str, scope: str) -> Exec:
+        return self._run(("claude", "mcp", "get", name, "-s", scope))
+
+    def claude_mcp_add(
+        self, root: str, name: str, scope: str, command: tuple[str, ...]
+    ) -> Exec:
+        return self._run(("claude", "mcp", "add", name, "-s", scope, "--", *command), cwd=root)
+
+    def claude_mcp_remove(self, name: str, scope: str) -> Exec:
+        return self._run(("claude", "mcp", "remove", name, "-s", scope))
+
+    def codex_mcp_get(self, name: str) -> Exec:
+        return self._run(("codex", "mcp", "get", name))
+
+    def codex_mcp_add(self, name: str, command: tuple[str, ...]) -> Exec:
+        return self._run(("codex", "mcp", "add", name, "--", *command))
 
     # -- node -----------------------------------------------------------------
 
