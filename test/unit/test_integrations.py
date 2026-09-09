@@ -235,6 +235,26 @@ class StackProbes(unittest.TestCase):
         self.assertEqual(stack.gitnexus_status("/r"), "out err")
         self.assertEqual(self._stack({}).gitnexus_status("/r"), "")
 
+    def test_remove_adapters_use_reference_argv_and_cwd(self):
+        calls = []
+
+        def execute(argv, env, cwd):
+            calls.append((tuple(argv), cwd))
+            return Exec(0, "", "")
+
+        stack = Stack({"PATH": ""}, execute=execute)
+        stack.claude_mcp_remove("/project", "grepai", "project")
+        stack.codex_mcp_remove("grepai-team")
+        stack.qdrant_collection_delete("http://127.0.0.1:6333", "team")
+        self.assertEqual(
+            calls,
+            [
+                (("claude", "mcp", "remove", "grepai", "-s", "project"), "/project"),
+                (("codex", "mcp", "remove", "grepai-team"), None),
+                (("curl", "-s", "-X", "DELETE", "http://127.0.0.1:6333/collections/workspace_team"), None),
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

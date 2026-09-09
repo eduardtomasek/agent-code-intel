@@ -1,8 +1,8 @@
 """commands — mode orchestration and the reporter.
 
 Holds the imperative sequences for the modes: ``status`` (table and JSON, issue
-#53) and ``refresh`` (issue #54) are converted here; preview, apply and remove
-are not yet (issues #55, #56). Plus the narrow, testable seams the modes share
+#53), ``refresh`` (issue #54), preview/apply (issue #55) and remove (issue #56)
+are converted here. Plus the narrow, testable seams the modes share
 (issue #41
 §3, §6, §7; issue #51 criterion 5):
 
@@ -32,6 +32,7 @@ import datetime
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
 from collections.abc import Mapping
@@ -830,6 +831,186 @@ def _require_success(result: "integrations.Exec", operation: str) -> None:
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).rstrip()
         raise CliError("%s failed%s" % (operation, ": %s" % detail if detail else ""))
+
+
+# ================================================================ remove =====
+#
+# Remove deliberately has its own imperative path. It does not run the full
+# preflight: a project must remain removable when GrepAI, Qdrant or the agent
+# CLIs are already down. Remote failures are therefore intentionally ignored,
+# while local ownership checks still decide what may be changed.
+
+
+def run_remove(
+    *,
+    apply: bool,
+    as_json: bool,
+    purge_collection: bool,
+    agent_target: str,
+    context: ProjectContext,
+    loaded: LoadedConfig,
+    conf_dir: str,
+    stdout: TextIO,
+    stderr: TextIO,
+    stack: "integrations.Stack | None" = None,
+) -> int:
+    """Preview or apply the safe project removal sequence (issue #56)."""
+    reporter = Reporter(stdout, stderr)
+    if stack is None:
+        stack = integrations.Stack(loaded.child_env)
+    config = loaded.config
+    registry_path = loaded.conf_paths.get("REGISTRY") or os.path.join(
+        conf_dir, "projects"
+    )
+
+    if not as_json:
+        reporter.say("Project:   %s" % context.root)
+        reporter.say("Workspace: %s" % context.workspace)
+        reporter.say("Agents:    %s" % agent_target)
+        reporter.say("")
+
+    reporter.hr(
+        "Remove code-intel from %s (workspace '%s')"
+        % (context.root, context.workspace)
+    )
+
+    def maps_here() -> bool:
+        show = stack.ws_show(context.workspace)
+        mapped = integrations.mapped_path(show, context.proj_name)
+        return bool(mapped) and project.canon(mapped) == context.root
+
+    def removal_plan(verb: str) -> int:
+        actions = 0
+        if integrations.watcher_running(stack.watch_status(context.workspace)):
+            reporter.row(verb, "stop the watcher for '%s'" % context.workspace)
+            actions += 1
+        if maps_here():
+            reporter.row(
+                verb,
+                "grepai workspace remove %s %s"
+                % (context.workspace, context.proj_name),
+            )
+            actions += 1
+        if agent_target in ("claude", "both") and _claude_grepai_ok(
+            context.mcp_json, context.workspace
+        ):
+            reporter.row(verb, "claude mcp remove grepai -s project")
+            actions += 1
+        if agent_target in ("codex", "both") and stack.codex_mcp_get(
+            "grepai-%s" % context.workspace
+        ).returncode == 0:
+            reporter.row(verb, "codex mcp remove grepai-%s" % context.workspace)
+            actions += 1
+        if os.path.isfile(os.path.join(context.root, ".code-intel")):
+            reporter.row(verb, "rm .code-intel")
+            actions += 1
+        if os.path.isfile(context.refresh_script):
+            if project.legacy_refresh_is_pristine(context.refresh_script):
+                reporter.row(verb, "rm refresh-intel.sh")
+                actions += 1
+            else:
+                reporter.row(
+                    "note", "refresh-intel.sh is hand-modified — left alone"
+                )
+        if os.path.lexists(os.path.join(context.root, ".grepai")):
+            reporter.row(verb, "rm -rf .grepai/")
+            actions += 1
+        if os.path.lexists(os.path.join(context.root, ".gitnexus")):
+            reporter.row(verb, "rm -rf .gitnexus/")
+            actions += 1
+        for name in ("CLAUDE.md", "AGENTS.md"):
+            if project.doc_state(os.path.join(context.root, name)) == "present":
+                reporter.row(verb, "strip code-intel block from %s" % name)
+                actions += 1
+        if purge_collection:
+            reporter.row(
+                verb,
+                "DELETE qdrant collection workspace_%s" % context.workspace,
+            )
+            actions += 1
+        return actions
+
+    if not apply:
+        actions = removal_plan("would")
+        reporter.say("")
+        if actions == 0:
+            reporter.say("Nothing to remove.")
+            return 0
+        reporter.say("Nothing was changed. To do the above:")
+        reporter.say(
+            "  agent-code-intel --remove --path %s --apply" % context.root
+        )
+        if not purge_collection:
+            reporter.say(
+                "  (add --purge-collection to also drop the qdrant collection)"
+            )
+        return 2
+
+    if integrations.watcher_running(stack.watch_status(context.workspace)):
+        stack.watch_stop(context.workspace)
+        reporter.say("stopped watcher")
+    if maps_here():
+        stack.workspace_remove(context.workspace, context.proj_name)
+        reporter.say("unmapped from '%s'" % context.workspace)
+    if agent_target in ("claude", "both") and _claude_grepai_ok(
+        context.mcp_json, context.workspace
+    ):
+        stack.claude_mcp_remove(context.root, "grepai", "project")
+        reporter.say("claude: removed project 'grepai'")
+    if agent_target in ("codex", "both") and stack.codex_mcp_get(
+        "grepai-%s" % context.workspace
+    ).returncode == 0:
+        stack.codex_mcp_remove("grepai-%s" % context.workspace)
+        reporter.say("codex: removed 'grepai-%s'" % context.workspace)
+
+    code_intel_path = os.path.join(context.root, ".code-intel")
+    if os.path.isfile(code_intel_path):
+        _remove_path(code_intel_path)
+    _remove_path(os.path.join(context.root, ".grepai"))
+    _remove_path(os.path.join(context.root, ".gitnexus"))
+    reporter.say("removed .code-intel, .grepai/ and .gitnexus/")
+
+    if os.path.isfile(context.refresh_script):
+        if project.legacy_refresh_is_pristine(context.refresh_script):
+            _remove_path(context.refresh_script)
+            reporter.say("removed refresh-intel.sh")
+        else:
+            reporter.say(
+                "refresh-intel.sh is hand-modified — left it alone; remove it yourself"
+            )
+
+    for name in ("CLAUDE.md", "AGENTS.md"):
+        path = os.path.join(context.root, name)
+        result = project.remove_managed_doc(path)
+        if result == "removed":
+            reporter.say(
+                "%s (the code-intel block was its only content)" % ("removed " + name)
+            )
+        elif result == "stripped":
+            reporter.say("stripped the code-intel block from %s" % name)
+
+    if purge_collection:
+        http_url = "http://%s:%s" % (config.qdrant_host, config.qdrant_http_port)
+        stack.qdrant_collection_delete(http_url, context.workspace)
+        reporter.say("deleted qdrant collection workspace_%s" % context.workspace)
+
+    project.registry_delete(registry_path, context.root)
+    reporter.say("")
+    reporter.say(
+        "Done. The user-scope 'gitnexus' MCP entry was left in place — it serves"
+    )
+    reporter.say("every indexed repo, not just this one.")
+    return 0
+
+
+def _remove_path(path: str) -> None:
+    """Remove a file, directory or symlink without following symlinks."""
+    if not os.path.lexists(path):
+        return
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.unlink(path)
 
 
 # ================================================================= status =====

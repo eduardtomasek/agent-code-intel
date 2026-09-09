@@ -19,7 +19,8 @@ The status table and JSON status (issue #53) are the first consumers. Refresh
 (issue #54) added the ``gitnexus analyze`` / ``gitnexus status`` /
 ``grepai watch --background`` adapters and the ``gitnexus_fresh`` /
 ``embeddings_not_persisted`` parsers. The ``.grepai/config.yaml``-writing
-adapter lands with apply (issue #55).
+adapter landed with apply (issue #55); remove adds the teardown adapters
+(issue #56).
 """
 
 from __future__ import annotations
@@ -310,6 +311,18 @@ class Stack:
     def workspace_remove(self, workspace: str, project_name: str) -> Exec:
         return self._run(("grepai", "workspace", "remove", workspace, project_name))
 
+    def qdrant_collection_delete(self, http_url: str, workspace: str) -> Exec:
+        """Delete one workspace collection; the remove mode owns the error policy."""
+        return self._run(
+            (
+                "curl",
+                "-s",
+                "-X",
+                "DELETE",
+                "%s/collections/workspace_%s" % (http_url, workspace),
+            )
+        )
+
     def grepai_init(self, root: str, provider: str, model: str) -> Exec:
         return self._run(
             (
@@ -337,11 +350,17 @@ class Stack:
     ) -> Exec:
         return self._run(("claude", "mcp", "add", name, "-s", scope, "--", *command), cwd=root)
 
+    def claude_mcp_remove(self, root: str, name: str, scope: str) -> Exec:
+        return self._run(("claude", "mcp", "remove", name, "-s", scope), cwd=root)
+
     def codex_mcp_get(self, name: str) -> Exec:
         return self._run(("codex", "mcp", "get", name))
 
     def codex_mcp_add(self, name: str, command: tuple[str, ...]) -> Exec:
         return self._run(("codex", "mcp", "add", name, "--", *command))
+
+    def codex_mcp_remove(self, name: str) -> Exec:
+        return self._run(("codex", "mcp", "remove", name))
 
     # -- node -----------------------------------------------------------------
 

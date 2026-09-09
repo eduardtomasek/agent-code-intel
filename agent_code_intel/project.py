@@ -325,6 +325,48 @@ def registry_add(path: str, workspace: str, project_path: str) -> None:
         handle.write("\n".join(rows) + "\n")
 
 
+def registry_delete(path: str, project_path: str) -> None:
+    """Remove the registry row for ``project_path`` without treating it as a regex."""
+    if not os.path.isfile(path):
+        return
+    with open(path, encoding="utf-8", errors="surrogateescape") as handle:
+        rows = [
+            line
+            for line in handle.read().splitlines()
+            if "\t" not in line or line.split("\t", 1)[1] != project_path
+        ]
+    temporary = path + ".tmp"
+    with open(temporary, "w", encoding="utf-8", errors="surrogateescape") as handle:
+        if rows:
+            handle.write("\n".join(rows) + "\n")
+    os.replace(temporary, path)
+
+
+def remove_managed_doc(path: str) -> str | None:
+    """Remove one owned code-intel block, returning ``stripped`` or ``removed``.
+
+    Unbalanced markers are protected and return ``None``. The caller owns the
+    user-facing wording and decides whether the operation is part of a plan.
+    """
+    if doc_state(path) != "present":
+        return None
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        text = handle.read()
+    updated = re.sub(
+        r"\n*<!-- code-intel:start -->.*?<!-- code-intel:end -->\n*",
+        "\n",
+        text,
+        count=1,
+        flags=re.S,
+    )
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(updated)
+    if not updated.strip():
+        os.unlink(path)
+        return "removed"
+    return "stripped"
+
+
 def write_managed_doc(path: str, block: str, force: bool) -> tuple[str, bool]:
     """Write or replace only the code-intel block in a documentation file."""
     state = doc_state(path)
