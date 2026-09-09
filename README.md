@@ -1,9 +1,9 @@
 # Code intelligence pro AI agenty
 
-Tenhle návod tě provede instalací celého stacku na Macu. Předpokládá jen jedno:
-že umíš otevřít aplikaci. Všechno ostatní je vysvětlené.
+Tato dokumentace popisuje instalaci celého stacku na Macu. Předpokládá pouze
+základní práci s aplikacemi; všechny potřebné kroky jsou vysvětlené.
 
-Až budeš hotový, budeš zakládat nové projekty takhle:
+Po dokončení se nové projekty nastavují takto:
 
 ```
 mkdir ~/projects/muj-projekt
@@ -11,28 +11,29 @@ cd ~/projects/muj-projekt
 agent-code-intel --agent claude --apply
 ```
 
-A tvůj AI kódovací agent bude umět hledat v kódu podle významu, ne podle
-klíčových slov, a bude vědět, co se rozbije, když něco změníš.
+AI kódovací agent pak umí hledat v kódu podle významu, ne pouze podle
+klíčových slov, a vyhodnotit dopad změn.
 
 > `--agent claude` tam nechybí náhodou. Bez něj skript vyžaduje i Codex a
-> odmítne se spustit, když ho nemáš. Kdo používá obojí, přepínač vynechá.
+> odmítne se spustit, pokud Codex není nainstalovaný. Při použití obou agentů
+> lze přepínač vynechat.
 
 ---
 
 ## Rychlý start
 
-Tohle je nejkratší cesta pro nový Mac. Příkazy spouštěj **po jednom** a na
-další přejdi až po návratu řádku s `%`. Když Homebrew po své instalaci vypíše
-další příkazy pro nastavení PATH, spusť nejdřív právě tyto jeho pokyny.
+Toto je nejkratší postup pro nový Mac. Příkazy spouštějte **po jednom** a na
+další přejděte až po návratu řádku s `%`. Pokud Homebrew po instalaci vypíše
+další příkazy pro nastavení PATH, nejdříve spusťte právě tyto pokyny.
 
-Nejdřív ověř Git:
+Nejdříve ověřte Git:
 
 ```
 git --version
 ```
 
-Pokud příkaz selže, macOS nabídne instalaci vývojářských nástrojů. Dokonči ji,
-pak Git zkontroluj znovu:
+Pokud příkaz selže, macOS nabídne instalaci vývojářských nástrojů. Dokončete
+ji a Git zkontrolujte znovu:
 
 ```
 xcode-select --install
@@ -44,7 +45,8 @@ vyhledávací nástroje:
 
 ```
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-brew install python@3.11
+brew install python
+python3 --version
 brew install --cask orbstack
 open -a OrbStack
 brew install ollama
@@ -69,7 +71,7 @@ v prvním projektu:
 ```
 git clone https://github.com/eduardtomasek/agent-code-intel.git ~/src/agent-code-intel
 cd ~/src/agent-code-intel
-python3.11 ./agent-code-intel --install
+python3 ./agent-code-intel --install
 mkdir -p ~/projects/muj-projekt
 cd ~/projects/muj-projekt
 agent-code-intel --agent both --apply
@@ -87,7 +89,7 @@ spravované artefakty:
 ```
 cd ~/src/agent-code-intel
 git pull --ff-only
-python3.11 ./agent-code-intel --install
+python3 ./agent-code-intel --install
 cd /cesta/k/projektu
 agent-code-intel --agent both --apply
 ```
@@ -176,7 +178,8 @@ na stahování.
 ## 2. Co budeš potřebovat
 
 - Mac s macOS — návod je psaný pro Apple Silicon i Intel
-- Pro verzi 4.1.0 Python 3.11 nebo novější; Python 3.9 a starší skončí
+- Pro verzi 4.1.0 Python 3.11 nebo novější; po instalaci ověřte, že
+  `python3 --version` vypíše alespoň 3.11. Python 3.9 a starší skončí
   srozumitelnou chybou bez tracebacku
 - Připojení k internetu
 - Heslo ke svému účtu na Macu, jednou při instalaci Homebrew
@@ -455,17 +458,17 @@ rg --version
 
 ## 10. agent-code-intel
 
-Tohle je ten skript, který všechno výše uvedené propojí do jednoho příkazu.
+Tento skript propojí vše uvedené výše do jednoho příkazu.
 
-Ulož si soubor `agent-code-intel` někam, kde ho najdeš — třeba do složky
-Stažené. Pak v terminálu přejdi do té složky a nainstaluj:
+Soubor `agent-code-intel` uložte na dostupné místo, například do složky
+Stažené. Poté v terminálu přejděte do dané složky a spusťte instalaci:
 
 ```
 cd ~/Downloads
-python3.11 ./agent-code-intel --install
+python3 ./agent-code-intel --install
 ```
 
-Pokud jsi ho uložil do podsložky, uprav cestu — například
+Pokud je soubor uložený v podsložce, upravte cestu — například
 `cd ~/Downloads/inteltest`.
 
 Instalace udělá tři věci. Zkopíruje skript do `~/.local/bin/`, což je místo,
@@ -492,12 +495,13 @@ Musí vypsat číslo verze.
 ### Verze 4.1.0 a Python 3.11+
 
 Verze 4 používá aktivní zdrojový launcher `agent-code-intel` a balík
-`agent_code_intel/`. Vyžaduje Python 3.11 nebo novější — launcher si sám
-nevybírá jiný Python a při starém interpretu skončí přesnou diagnostikou.
-Při instalaci z checkoutu proto použij:
+`agent_code_intel/`. Vyžaduje Python 3.11 nebo novější. Launcher automaticky
+nevybírá jiný interpret a při staré verzi skončí přesnou diagnostikou.
+Při instalaci z checkoutu použijte aktuální `python3`, jehož verzi lze ověřit
+příkazem `python3 --version`:
 
 ```
-python3.11 ./agent-code-intel --install
+python3 ./agent-code-intel --install
 ```
 
 Instalátor uloží tenký launcher do `~/.local/bin/agent-code-intel`, dashboard
@@ -529,8 +533,8 @@ Aktivní vstup je po vydání kandidáta Pythonový launcher. Při ručním ově
 postupuj z checkoutu takto:
 
 ```
-python3.11 ./agent-code-intel --version
-python3.11 ./agent-code-intel --install
+python3 ./agent-code-intel --version
+python3 ./agent-code-intel --install
 hash -r
 command -v agent-code-intel
 agent-code-intel --version
@@ -774,7 +778,7 @@ loopbacku, bez hesla — nikam se nedostane. Ukončíš ho Ctrl+C.
 Instalace z checkoutu ho uloží vedle CLI automaticky:
 
 ```
-python3.11 ./agent-code-intel --install
+python3 ./agent-code-intel --install
 ```
 
 Při každé další instalaci se porovná vlastní verze dashboardu; shodná verze se
