@@ -221,6 +221,8 @@ def update_grepai_config(
 
     before = text
     chunk = _CHUNKING_RE.search(text)
+    if not chunk:
+        raise ValueError(".grepai/config.yaml is missing its chunking block")
     if chunk and (chunk.group(1) != chunk_size or chunk.group(2) != chunk_overlap):
         indent = re.search(r"^chunking:\n(?P<i>[ \t]+)", chunk.group(0), re.M)
         spacing = indent.group("i") if indent else "  "
@@ -233,6 +235,8 @@ def update_grepai_config(
         text = text[: chunk.start()] + replacement + text[chunk.end() :]
 
     block = _IGNORE_BLOCK_RE.search(text)
+    if extra_ignores and not block:
+        raise ValueError(".grepai/config.yaml is missing its ignore block")
     if block and extra_ignores:
         items = block.group(1)
         present = set(_IGNORE_ITEM_RE.findall(items))

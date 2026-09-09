@@ -694,7 +694,10 @@ def _apply_init(
         _require_success(stack.grepai_init(context.root, config.embed_provider, config.embed_model), "grepai init")
         reporter.say("created %s" % context.grepai_cfg)
     if os.path.isfile(context.grepai_cfg):
-        updated, changed = project.update_grepai_config(context.grepai_cfg, config.chunk_size, config.chunk_overlap, config.extra_ignores)
+        try:
+            updated, changed = project.update_grepai_config(context.grepai_cfg, config.chunk_size, config.chunk_overlap, config.extra_ignores)
+        except ValueError as exc:
+            raise CliError(str(exc))
         if changed:
             with open(context.grepai_cfg, "w", encoding="utf-8") as handle:
                 handle.write(updated)
@@ -752,7 +755,9 @@ def _apply_init(
         if integrations.watcher_running(stack.watch_status(context.workspace)):
             reporter.say("watcher already running for '%s'" % context.workspace)
         else:
-            _replay(reporter, stack.watch_start_background(context.workspace))
+            result = stack.watch_start_background(context.workspace)
+            _replay(reporter, result)
+            _require_success(result, "grepai watch --background")
             reporter.say("started watcher for '%s'" % context.workspace)
         reporter.say("")
     reporter.hr("Result")
@@ -797,6 +802,8 @@ def _claude_grepai_ok(path: str, workspace: str) -> bool:
 
 def _write_doc(reporter, path: str, force: bool) -> None:
     message, _ = project.write_managed_doc(path, _DOC_BLOCK, force)
+    if message.startswith("unbalanced code-intel markers"):
+        raise CliError("%s: %s" % (path, message))
     reporter.say("%s: %s" % (os.path.basename(path), message))
 
 
@@ -1249,12 +1256,6 @@ def _json_projects(
 # a `CliError` (exit 1, nothing refreshed); a failed re-index is *not* fatal —
 # the audit still runs and the run exits 2 (AC 3; REF-5 / TOL-3); drift the audit
 # finds is exit 2 too. Only a clean pass is exit 0.
-
-
-@dataclasses.dataclass(frozen=True)
-class _Need:
-    what: str
-    fix: str
 
 
 def run_refresh(

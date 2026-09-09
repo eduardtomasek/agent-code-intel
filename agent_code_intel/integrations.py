@@ -337,9 +337,6 @@ class Stack:
     ) -> Exec:
         return self._run(("claude", "mcp", "add", name, "-s", scope, "--", *command), cwd=root)
 
-    def claude_mcp_remove(self, name: str, scope: str) -> Exec:
-        return self._run(("claude", "mcp", "remove", name, "-s", scope))
-
     def codex_mcp_get(self, name: str) -> Exec:
         return self._run(("codex", "mcp", "get", name))
 

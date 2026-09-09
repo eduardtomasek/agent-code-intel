@@ -117,6 +117,12 @@ class FakeStack:
         return integrations.Exec(0, "analyzed", "")
 
 
+class FailingWatchStack(FakeStack):
+    def watch_start_background(self, workspace):
+        self.calls.append(("watch_start_background", workspace))
+        return integrations.Exec(1, "", "watcher failed")
+
+
 def make_context(root):
     return ProjectContext(
         root=root,
@@ -195,6 +201,42 @@ class Init(unittest.TestCase):
         self.assertLess(names.index("workspace_add"), names.index("grepai_init"))
         self.assertIn("skipped git (--no-git)", out.getvalue())
         self.assertEqual(err.getvalue(), "")
+
+    def test_apply_fails_if_watcher_start_fails(self):
+        root = tempfile.mkdtemp(prefix="aci-init-watch-")
+        with self.assertRaises(commands.CliError):
+            commands.run_init(
+                apply=True,
+                bootstrap=False,
+                do_git=False,
+                start_watch=True,
+                run_analyze=False,
+                write_docs=False,
+                force_docs=False,
+                agent_target="both",
+                context=make_context(root),
+                loaded=loaded(),
+                conf_dir=os.path.join(root, "home", ".config", "code-intel"),
+                stdout=io.StringIO(),
+                stderr=io.StringIO(),
+                stack=FailingWatchStack(),
+            )
+
+    def test_orphaned_managed_doc_is_a_fatal_error(self):
+        root = tempfile.mkdtemp(prefix="aci-init-doc-")
+        path = os.path.join(root, "CLAUDE.md")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("<!-- code-intel:start -->\n")
+        with self.assertRaises(commands.CliError):
+            commands._write_doc(commands.Reporter(io.StringIO(), io.StringIO()), path, False)
+
+    def test_missing_owned_yaml_block_is_not_reported_as_fixed(self):
+        root = tempfile.mkdtemp(prefix="aci-init-yaml-")
+        path = os.path.join(root, "config.yaml")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("foreign: keep\n")
+        with self.assertRaises(ValueError):
+            project.update_grepai_config(path, "256", "25", ("*.lock",))
 
 
 if __name__ == "__main__":
