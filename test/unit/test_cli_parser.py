@@ -193,23 +193,22 @@ class ConfDir(unittest.TestCase):
 
 
 class Dispatch(unittest.TestCase):
-    """Config load, identity resolution, ``--install``, ``--status`` and
-    ``--refresh`` are converted (issues #51–#54); ``--remove`` and the init
-    preview/apply path are not, and an unconverted resolved mode must not
-    report success (issue #48, decision 70)."""
+    """Config load, identity resolution, ``--install``, ``--status``,
+    ``--refresh`` and init preview/apply are converted (issues #51–#55);
+    ``--remove`` remains unconverted."""
 
-    def test_no_mode_is_faked_green(self):
+    def test_init_runs_preflight_and_remove_is_not_implemented(self):
         scratch = tempfile.mkdtemp(prefix="aci-dispatch-")
-        for argv, needle in (
-            ([], "'init' mode"),
-            (["--remove"], "'remove' mode"),
-        ):
-            with self.subTest(argv=argv):
-                code, out, err = run(argv, cwd=scratch)
-                self.assertEqual(code, 1)
-                self.assertEqual(out, "")
-                self.assertTrue(err.startswith("[ERROR: "))
-                self.assertIn(needle, err)
+        code, out, err = run([], cwd=scratch)
+        self.assertEqual(code, 1)
+        self.assertIn("Preflight", out)
+        self.assertIn("preflight found", err)
+
+        code, out, err = run(["--remove"], cwd=scratch)
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertTrue(err.startswith("[ERROR: "))
+        self.assertIn("'remove' mode", err)
 
     def test_refresh_outside_git_fails_before_the_mode(self):
         # --refresh resolves the git root first; an empty dir is not one.

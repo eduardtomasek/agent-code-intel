@@ -59,6 +59,7 @@ class ProjectContext:
     ident_status: str
     ident_workspace: str | None
     ident_project: str | None
+    workspace_explicit: bool = False
 
 
 _LINE_RE = re.compile(r"^[A-Z][A-Z0-9_]*=\S+$")
@@ -199,6 +200,164 @@ def grepai_config_ignores_ok(config_path: str, extra_ignores: tuple[str, ...]) -
     return all(entry in present for entry in extra_ignores)
 
 
+def update_grepai_config(
+    config_path: str,
+    chunk_size: str,
+    chunk_overlap: str,
+    extra_ignores: tuple[str, ...],
+) -> tuple[str, bool]:
+    """Update only the owned chunking and ignore-list portions of GrepAI YAML.
+
+    This intentionally uses the same narrow regex transforms as the Bash
+    reference; it is not a general YAML parser and leaves all other content
+    untouched.
+    """
+
+    try:
+        with open(config_path, encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError:
+        return "", False
+
+    before = text
+    chunk = _CHUNKING_RE.search(text)
+    if not chunk:
+        raise ValueError(".grepai/config.yaml is missing its chunking block")
+    if chunk and (chunk.group(1) != chunk_size or chunk.group(2) != chunk_overlap):
+        indent = re.search(r"^chunking:\n(?P<i>[ \t]+)", chunk.group(0), re.M)
+        spacing = indent.group("i") if indent else "  "
+        replacement = "chunking:\n%ssize: %s\n%soverlap: %s" % (
+            spacing,
+            chunk_size,
+            spacing,
+            chunk_overlap,
+        )
+        text = text[: chunk.start()] + replacement + text[chunk.end() :]
+
+    block = _IGNORE_BLOCK_RE.search(text)
+    if extra_ignores and not block:
+        raise ValueError(".grepai/config.yaml is missing its ignore block")
+    if block and extra_ignores:
+        items = block.group(1)
+        present = set(_IGNORE_ITEM_RE.findall(items))
+        missing = [entry for entry in extra_ignores if entry not in present]
+        if missing:
+            first_indent = re.search(r"^[ \t]+", items, re.M)
+            spacing = first_indent.group(0) if first_indent else "    "
+            if items and not items.endswith("\n"):
+                items += "\n"
+            items += "".join("%s- %s\n" % (spacing, entry) for entry in missing)
+            text = text[: block.start(1)] + items + text[block.end(1) :]
+
+    return text, text != before
+
+
+def doc_state(path: str) -> str:
+    """Return ``missing``, ``present`` or ``orphaned`` for owned markers."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        return "missing"
+    starts = text.count("<!-- code-intel:start -->")
+    ends = text.count("<!-- code-intel:end -->")
+    if starts == 0 and ends == 0:
+        return "missing"
+    return "present" if starts == 1 and ends == 1 else "orphaned"
+
+
+def agents_md_project_owned(path: str) -> bool:
+    """Whether AGENTS.md has project content outside GitNexus's block."""
+    text = _read_text(path)
+    if text is None:
+        return False
+    text = re.sub(r"<!-- gitnexus:start -->.*?<!-- gitnexus:end -->", "", text, flags=re.S)
+    return bool(text.strip())
+
+
+def project_has_sources(root: str) -> bool:
+    """True when the project contains files worth indexing."""
+    excluded_dirs = {".git", ".grepai", ".gitnexus", "node_modules", ".venv", "venv"}
+    excluded_files = {
+        ".gitignore",
+        "CLAUDE.md",
+        "AGENTS.md",
+        "refresh-intel.sh",
+        ".mcp.json",
+        ".DS_Store",
+    }
+    for current, dirs, files in os.walk(root):
+        dirs[:] = [name for name in dirs if name not in excluded_dirs]
+        if any(name not in excluded_files for name in files):
+            return True
+    return False
+
+
+def gitignore_ok(path: str, entries: tuple[str, ...]) -> bool:
+    """Whether every configured ignore entry exists as a complete line."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = {line.rstrip("\n") for line in handle}
+    except OSError:
+        return False
+    return all(entry in lines for entry in entries)
+
+
+def code_intel_present(context: ProjectContext) -> bool:
+    """Whether the already-read identity exactly matches this run."""
+    return (
+        context.ident_status == "OK"
+        and context.ident_workspace == context.workspace
+        and context.ident_project == context.proj_name
+    )
+
+
+def registry_add(path: str, workspace: str, project_path: str) -> None:
+    """Replace the registry entry for a path and append its current mapping."""
+    try:
+        with open(path, encoding="utf-8", errors="surrogateescape") as handle:
+            rows = [line for line in handle.read().splitlines() if "\t" not in line or line.split("\t", 1)[1] != project_path]
+    except OSError:
+        rows = []
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    rows.append("%s\t%s" % (workspace, project_path))
+    with open(path, "w", encoding="utf-8", errors="surrogateescape") as handle:
+        handle.write("\n".join(rows) + "\n")
+
+
+def write_managed_doc(path: str, block: str, force: bool) -> tuple[str, bool]:
+    """Write or replace only the code-intel block in a documentation file."""
+    state = doc_state(path)
+    if state == "orphaned":
+        return "unbalanced code-intel markers — fix them by hand, left untouched", False
+    if state == "present" and not force:
+        return "code-intel block already present", False
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        text = ""
+    if state == "present":
+        updated = re.sub(
+            r"<!-- code-intel:start -->.*?<!-- code-intel:end -->",
+            block,
+            text,
+            count=1,
+            flags=re.S,
+        )
+    else:
+        updated = text
+        if updated and not updated.endswith("\n"):
+            updated += "\n"
+        if updated:
+            updated += "\n"
+        updated += block + "\n"
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(updated)
+    return ("code-intel block rewritten in place" if state == "present" else "code-intel block written"), True
+
+
 def _read_text(path: str) -> str | None:
     try:
         with open(path, encoding="utf-8", errors="replace") as handle:
@@ -323,6 +482,7 @@ def resolve_project(
             )
 
     identity = read_code_intel(root)
+    workspace_was_explicit = workspace is not None
     ws = workspace
 
     if identity.status == "ERR":
@@ -356,6 +516,7 @@ def resolve_project(
         ident_status=identity.status,
         ident_workspace=identity.workspace,
         ident_project=identity.project,
+        workspace_explicit=workspace_was_explicit,
     )
 
 
