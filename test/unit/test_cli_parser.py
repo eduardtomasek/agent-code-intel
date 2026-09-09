@@ -10,6 +10,8 @@ RT-14 (usage → stdout), FMT-1 (``die`` wording).
 
 import dataclasses
 import io
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -191,10 +193,10 @@ class ConfDir(unittest.TestCase):
 
 
 class Dispatch(unittest.TestCase):
-    """Config load, identity resolution, ``--install`` and ``--status`` are
-    converted (issues #51, #52, #53); refresh and remove are not, and an
-    unconverted resolved mode must not report success (issue #48, decision
-    70)."""
+    """Config load, identity resolution, ``--install``, ``--status`` and
+    ``--refresh`` are converted (issues #51–#54); ``--remove`` and the init
+    preview/apply path are not, and an unconverted resolved mode must not
+    report success (issue #48, decision 70)."""
 
     def test_no_mode_is_faked_green(self):
         scratch = tempfile.mkdtemp(prefix="aci-dispatch-")
@@ -215,6 +217,21 @@ class Dispatch(unittest.TestCase):
         code, out, err = run(["--refresh"], cwd=scratch)
         self.assertEqual((code, out), (1, ""))
         self.assertIn("not inside a git repository", err)
+
+    def test_refresh_is_dispatched_and_needs_no_stack_when_both_sides_skip(self):
+        # `--refresh --no-grepai --no-gitnexus` is the one refresh happy path
+        # that runs with nothing installed (issue #54; black-box parity with
+        # test_refresh_with_both_stacks_skipped_needs_no_stack).
+        scratch = tempfile.mkdtemp(prefix="aci-dispatch-refresh-ok-")
+        subprocess.run(["git", "init", "-q", scratch], check=True)
+        with open(os.path.join(scratch, ".code-intel"), "w") as handle:
+            handle.write(
+                "SCHEMA=1\nWORKSPACE=skip-ws\nPROJECT=%s\n" % os.path.basename(scratch)
+            )
+        code, out, err = run(["--refresh", "--no-grepai", "--no-gitnexus"], cwd=scratch)
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("Workspace: skip-ws", out)
+        self.assertIn("Code intelligence is fresh.", out)
 
 
 if __name__ == "__main__":

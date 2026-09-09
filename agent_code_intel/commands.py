@@ -1,8 +1,9 @@
 """commands — mode orchestration and the reporter.
 
-Holds the imperative sequences for the modes: ``status`` (table and JSON) is
-converted here (issue #53); preview, apply, refresh and remove are not yet
-(issues #54–#56). Plus the narrow, testable seams the modes share (issue #41
+Holds the imperative sequences for the modes: ``status`` (table and JSON, issue
+#53) and ``refresh`` (issue #54) are converted here; preview, apply and remove
+are not yet (issues #55, #56). Plus the narrow, testable seams the modes share
+(issue #41
 §3, §6, §7; issue #51 criterion 5):
 
 * :class:`CommandRunner` — the generic *capturing* subprocess seam for the
@@ -116,6 +117,12 @@ class Reporter:
 
     def error(self, message: str) -> None:
         self._stderr.write("[ERROR: %s]\n" % message)
+
+    def emit_err(self, message: str = "") -> None:
+        """``say`` for stderr — ``%s\\n``. Used for a subprocess's captured
+        stderr and the lines of a multi-line error block (``9406cce`` :2072,
+        :2033–:2035) that are not the ``[ERROR: …]`` header itself."""
+        self._stderr.write("%s\n" % message)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -568,3 +575,272 @@ def _json_projects(
         projects.append(entry)
 
     return projects
+
+
+# ================================================================ refresh =====
+#
+# The reference's `--refresh` (``9406cce`` :1969–:2115): a lighter preflight than
+# `preflight()` — only what this run will use, gated by --no-grepai /
+# --no-gitnexus — then re-index and audit. It never founds a project: the ABSENT
+# `.code-intel` case already died in `project.resolve_project` (#51), so by here
+# identity is known-good (issue #54 AC 1; REF-1).
+#
+# Three outcomes, kept apart the way issue #41 §5/§7 asks: an unmet dependency is
+# a `CliError` (exit 1, nothing refreshed); a failed re-index is *not* fatal —
+# the audit still runs and the run exits 2 (AC 3; REF-5 / TOL-3); drift the audit
+# finds is exit 2 too. Only a clean pass is exit 0.
+
+
+@dataclasses.dataclass(frozen=True)
+class _Need:
+    what: str
+    fix: str
+
+
+def run_refresh(
+    *,
+    as_json: bool,
+    do_grepai: bool,
+    do_gitnexus: bool,
+    agent_target: str,
+    context: ProjectContext,
+    loaded: LoadedConfig,
+    stdout: TextIO,
+    stderr: TextIO,
+    stack: "integrations.Stack | None" = None,
+) -> int:
+    """Entry point for the ``refresh`` mode.
+
+    ``stack`` is injectable so a unit test can drive the preflight, the
+    re-index and the audit with no real external tool installed; production
+    passes ``None`` and one is built from the run's child environment.
+    """
+
+    reporter = Reporter(stdout, stderr)
+    if stack is None:
+        stack = integrations.Stack(loaded.child_env)
+    config = loaded.config
+
+    # `if [[ "$AS_JSON" != true ]]` (``9406cce`` :2210) — one guard for every
+    # mode's header; --refresh inherits it (DEV-8 / RT-9).
+    if not as_json:
+        reporter.say("Project:   %s" % context.root)
+        reporter.say("Workspace: %s" % context.workspace)
+        reporter.say("Agents:    %s" % agent_target)
+        reporter.say("")
+
+    _refresh_preflight(reporter, do_grepai, do_gitnexus, context, config, stack)
+    return _do_refresh(reporter, do_grepai, do_gitnexus, context, config, stack)
+
+
+def _refresh_preflight(
+    reporter: Reporter,
+    do_grepai: bool,
+    do_gitnexus: bool,
+    context: ProjectContext,
+    config: Config,
+    stack: integrations.Stack,
+) -> None:
+    """``refresh_preflight`` (``9406cce`` :1984–:2040). Checks only what this
+    run will touch. Any unmet dependency prints the whole ``MISSING`` list, then
+    a multi-line error block to stderr, and raises — exit 1, nothing refreshed
+    (REF-4)."""
+
+    reporter.hr("Preflight (--refresh)")
+    needs: list[_Need] = []
+
+    def need(what: str, fix: str) -> None:
+        needs.append(_Need(what, fix))
+        reporter.row("MISSING", what)
+
+    if do_grepai:
+        if stack.have("grepai"):
+            reporter.row("ok", "grepai on PATH")
+        else:
+            need("grepai not on PATH", "install GrepAI, or re-run with --no-grepai")
+
+        qdrant_http = "http://%s:%s" % (config.qdrant_host, config.qdrant_http_port)
+        http_ok = stack.qdrant_http_ok(qdrant_http)
+        # `if qdrant_http_ok && qdrant_grpc_ok` (``9406cce`` :1991) — the gRPC
+        # port is only probed when HTTP already answered.
+        grpc_ok = http_ok and stack.qdrant_grpc_ok(
+            config.qdrant_host, config.qdrant_port
+        )
+        if http_ok and grpc_ok:
+            reporter.row(
+                "ok",
+                "qdrant healthy on %s (HTTP) and %s (gRPC)"
+                % (config.qdrant_http_port, config.qdrant_port),
+            )
+        elif http_ok:
+            need(
+                "qdrant answers on %s but gRPC %s is closed — grepai reads and "
+                "writes vectors there"
+                % (config.qdrant_http_port, config.qdrant_port),
+                "republish the container with both ports",
+            )
+        else:
+            need(
+                "qdrant not healthy at %s/healthz" % qdrant_http,
+                "start it, or run: agent-code-intel --path %s --apply" % context.root,
+            )
+
+        if not stack.have("ollama"):
+            need(
+                "ollama not on PATH",
+                "install ollama — the watcher embeds every change through it",
+            )
+        elif not stack.ollama_up():
+            need(
+                "ollama server not responding at %s" % config.ollama_http,
+                "start it: ollama serve",
+            )
+        elif not stack.ollama_has_model(config.embed_model):
+            need(
+                "embedding model %s not pulled" % config.embed_model,
+                "ollama pull %s" % config.embed_model,
+            )
+        else:
+            reporter.row("ok", "ollama responding, %s available" % config.embed_model)
+
+    if do_gitnexus:
+        if not stack.have("gitnexus"):
+            need(
+                "gitnexus not on PATH",
+                "npm i -g gitnexus, or re-run with --no-gitnexus",
+            )
+        elif not stack.gitnexus_runs():
+            need(
+                "gitnexus is on PATH but does not run",
+                "npm's global bin is an nvm-versioned shim that a node switch "
+                "leaves broken: npm i -g gitnexus",
+            )
+        else:
+            reporter.row(
+                "ok", "gitnexus %s runs" % stack.first_line("gitnexus", "--version")
+            )
+
+        if stack.have("git"):
+            reporter.row("ok", "git on PATH")
+        else:
+            need(
+                "git not on PATH",
+                "install git — GitNexus derives staleness from it",
+            )
+
+    reporter.say("")
+    if not needs:
+        return
+
+    word = "dependency" if len(needs) == 1 else "dependencies"
+    reporter.error(
+        "refresh preflight found %d unmet %s — nothing was refreshed"
+        % (len(needs), word)
+    )
+    reporter.emit_err("")
+    for entry in needs:
+        reporter.emit_err("  - %s" % entry.what)
+        reporter.emit_err("    fix: %s" % entry.fix)
+    # The block is already on stderr; cli.main only needs the exit code.
+    raise CliError("", code=1, wrap=False)
+
+
+def _do_refresh(
+    reporter: Reporter,
+    do_grepai: bool,
+    do_gitnexus: bool,
+    context: ProjectContext,
+    config: Config,
+    stack: integrations.Stack,
+) -> int:
+    """``do_refresh`` (``9406cce`` :2042–:2115). Start the watcher if it is
+    down, re-index GitNexus (a failure is reported, not fatal), then audit each
+    enabled side: the GrepAI audit reuses ``--status``' own ``_status_one``, and
+    the GitNexus audit is a freshness check on ``gitnexus status`` that only
+    ``--refresh`` does (``--status`` never re-checks the graph)."""
+
+    reporter.hr("code-intel refresh — %s" % context.root)
+    bad = False
+    drift = False
+
+    if do_grepai:
+        reporter.say("")
+        reporter.hr("GrepAI watcher")
+        if integrations.watcher_running(stack.watch_status(context.workspace)):
+            reporter.say("already running for workspace %s" % context.workspace)
+        else:
+            reporter.say("starting watcher for workspace %s..." % context.workspace)
+            _replay(reporter, stack.watch_start_background(context.workspace))
+
+    if do_gitnexus:
+        reporter.say("")
+        reporter.hr("GitNexus re-index")
+        if not _reindex(reporter, stack, context):
+            bad = True
+            reporter.say("gitnexus analyze failed")
+            if stack.have("node") and not stack.node_has_register_hooks():
+                reporter.say(
+                    "  node %s is too old for 'gitnexus analyze'"
+                    % stack.first_line("node", "--version")
+                )
+                reporter.say("  fix: brew upgrade node && npm i -g gitnexus")
+
+    reporter.say("")
+    if do_grepai:
+        reporter.hr("GrepAI audit")
+        drift |= _status_one(
+            reporter, context.workspace, context.root, config, stack
+        )
+        reporter.say("")
+
+    if do_gitnexus:
+        reporter.hr("GitNexus audit")
+        gnout = stack.gitnexus_status(context.root)
+        reporter.say(gnout.rstrip("\n"))
+        if integrations.gitnexus_fresh(gnout):
+            reporter.row("ok", "index up to date")
+        else:
+            reporter.row("DRIFT", "index not up to date")
+            drift = True
+        reporter.say("")
+
+    if bad or drift:
+        reporter.say("Code intelligence has drift or errors above.")
+        return 2
+    reporter.say("Code intelligence is fresh.")
+    return 0
+
+
+def _reindex(
+    reporter: Reporter, stack: integrations.Stack, context: ProjectContext
+) -> bool:
+    """The re-index subshell (``9406cce`` :2066–:2087). ``gitnexus analyze
+    --embeddings``; on the one "completed without persisted embeddings" failure,
+    a structural ``--force`` retry (TOL-4); any other failure is just a failure.
+    Returns whether the index is now built."""
+
+    embeddings = stack.gitnexus_analyze_embeddings(context.root)
+    merged = embeddings.stdout + embeddings.stderr
+    if embeddings.returncode == 0:
+        reporter.say(merged.rstrip("\n"))
+        return True
+
+    reporter.emit_err(merged.rstrip("\n"))
+    if not integrations.embeddings_not_persisted(merged):
+        return False
+
+    reporter.say(
+        "No GitNexus embeddings were persisted; retrying with structural indexing."
+    )
+    forced = stack.gitnexus_analyze_force(context.root)
+    _replay(reporter, forced)
+    return forced.returncode == 0
+
+
+def _replay(reporter: Reporter, result: "integrations.Exec") -> None:
+    """Write a captured subprocess's streams back out in stream order — the
+    reference lets these commands write straight to the user."""
+    if result.stdout:
+        reporter.say(result.stdout.rstrip("\n"))
+    if result.stderr:
+        reporter.emit_err(result.stderr.rstrip("\n"))

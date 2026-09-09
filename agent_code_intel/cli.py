@@ -9,8 +9,8 @@ short-circuit everything to their right — then the early install branch, then
 project resolution, then mode dispatch.
 
 Parsing and early exit landed in issue #50; config load and project resolution
-in issue #51; install in #52; the status table and JSON status in #53. Refresh
-(#54) and remove (#56) still raise :class:`CliError` — the port fakes no mode as
+in issue #51; install in #52; the status table and JSON status in #53; refresh
+in #54. Remove (#56) still raises :class:`CliError` — the port fakes no mode as
 working (issue #48, decision 70).
 """
 
@@ -286,6 +286,18 @@ def main(
             status_all=opts.status_all,
         )
 
+        if opts.mode == "refresh":
+            return commands.run_refresh(
+                as_json=opts.as_json,
+                do_grepai=opts.do_grepai,
+                do_gitnexus=opts.do_gitnexus,
+                agent_target=opts.agent_target,
+                context=context,
+                loaded=loaded,
+                stdout=stdout,
+                stderr=stderr,
+            )
+
         if opts.mode == "status":
             # `have python3 || die` (``9406cce`` :2222) has no analogue: the
             # port *is* Python, and status no longer shells out to a `python3 -`
@@ -302,12 +314,13 @@ def main(
                 stderr=stderr,
             )
 
-        # Config load and identity resolution are converted, and so is status
-        # (#53); refresh and remove are not — say so plainly rather than exit 0
-        # on a mode that does nothing (issue #48, decision 70).
+        # Config load, identity resolution, status (#53) and refresh (#54) are
+        # converted; remove (and the init preview/apply path) are not — say so
+        # plainly rather than exit 0 on a mode that does nothing (issue #48,
+        # decision 70).
         raise CliError(
             "the Python port does not implement the '%s' mode yet "
-            "(issues #54, #56)" % opts.mode
+            "(issue #56)" % opts.mode
         )
     except CliError as exc:
         if exc.wrap:

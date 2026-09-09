@@ -82,6 +82,28 @@ class WatcherRunning(unittest.TestCase):
         self.assertFalse(integrations.watcher_running("grepai: command not found"))
 
 
+class GitnexusFresh(unittest.TestCase):
+    def test_both_spellings_are_fresh(self):
+        self.assertTrue(integrations.gitnexus_fresh("Index: up-to-date"))
+        self.assertTrue(integrations.gitnexus_fresh("the index is up to date"))
+
+    def test_anything_else_is_stale(self):
+        self.assertFalse(integrations.gitnexus_fresh("Index: 3 files changed"))
+        self.assertFalse(integrations.gitnexus_fresh(""))
+
+
+class EmbeddingsNotPersisted(unittest.TestCase):
+    def test_the_one_retryable_message(self):
+        self.assertTrue(
+            integrations.embeddings_not_persisted(
+                "...\nEmbedding generation completed without persisted embeddings\n"
+            )
+        )
+
+    def test_other_failures_are_not_retryable(self):
+        self.assertFalse(integrations.embeddings_not_persisted("segfault"))
+
+
 def _fake(table):
     """table: {argv-tuple: Exec}. Anything not listed → 127/empty (absent)."""
 
@@ -174,6 +196,44 @@ class StackProbes(unittest.TestCase):
 
     def test_node_register_hooks_false_without_node(self):
         self.assertFalse(self._stack({}).node_has_register_hooks())
+
+    def test_watch_start_background_argv(self):  # issue #54
+        seen = {}
+
+        def execute(argv, env, cwd):
+            seen["argv"], seen["cwd"] = tuple(argv), cwd
+            return Exec(0, "started", "")
+
+        stack = Stack({"PATH": ""}, execute=execute)
+        result = stack.watch_start_background("myws")
+        self.assertEqual(
+            seen["argv"], ("grepai", "watch", "--workspace", "myws", "--background")
+        )
+        self.assertEqual(result.stdout, "started")
+
+    def test_gitnexus_analyze_runs_in_cwd(self):  # issue #54 AC 4
+        seen = {}
+
+        def execute(argv, env, cwd):
+            seen.setdefault("calls", []).append((tuple(argv), cwd))
+            return Exec(0, "", "")
+
+        stack = Stack({"PATH": ""}, execute=execute)
+        stack.gitnexus_analyze_embeddings("/proj/root")
+        stack.gitnexus_analyze_force("/proj/root")
+        self.assertEqual(
+            seen["calls"],
+            [
+                (("gitnexus", "analyze", "--embeddings"), "/proj/root"),
+                (("gitnexus", "analyze", "--force"), "/proj/root"),
+            ],
+        )
+
+    def test_gitnexus_status_merges_streams_and_runs_in_cwd(self):
+        table = {("gitnexus", "status"): Exec(0, "out ", "err")}
+        stack = self._stack(table)
+        self.assertEqual(stack.gitnexus_status("/r"), "out err")
+        self.assertEqual(self._stack({}).gitnexus_status("/r"), "")
 
 
 if __name__ == "__main__":
