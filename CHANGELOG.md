@@ -5,11 +5,10 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
 
 ## [Unreleased]
 
-## [4.0.0] - Unreleased
+## [4.0.0] - 2026-09-09
 
-Obsah kandidáta pro Pythonový přepis. Datum vydání záměrně není uvedené;
-doplní se až po přepnutí aktivního vstupu, ověření kandidátního SHA a
-dogfoodingu.
+Vydání Pythonového přepisu po přepnutí aktivního vstupu, ověření kandidátního
+SHA a třech zaznamenaných live relacích.
 
 ### Breaking
 
@@ -46,10 +45,10 @@ dogfoodingu.
 
 ### Testy
 
-- Acceptance report v `docs/acceptance/4.0.0.md` zachycuje referenci, přepnutý
-  kandidát, hermetické ENV/TOML lanes a živé ověření.
-- Třídenní dogfooding zůstává samostatným provozním důkazem; tento záznam
-  nepředstírá jeho dokončení bez skutečně uplynulých tří pracovních dnů.
+- Acceptance report v `docs/acceptance/4.0.0.md` zachycuje referenci, kandidátní
+  a finální SHA, hermetické ENV/TOML lanes a tři živé relace na třech repozitářích.
+- Report uvádí pouze skutečně provedené důkazy; tři různé pracovní dny ani
+  user-session/machine restart nejsou součástí opraveného release scope.
 
 ## [3.0.0] - 2026-09-08
 
