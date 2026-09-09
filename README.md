@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="hero.jpg" alt="agent-code-intel — analýza a code intelligence pro AI agenty" width="100%">
+</p>
+
 # Code intelligence pro AI agenty
 
 Tato dokumentace popisuje instalaci celého stacku na Macu. Předpokládá pouze
