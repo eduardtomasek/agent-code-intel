@@ -37,13 +37,6 @@ HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TOOL="${TOOL:-$HERE/../agent-code-intel}"
 EXPECTED_NAME="${EXPECTED_NAME:-agent-code-intel}"
 
-# /usr/bin:/bin by default (no grepai/gitnexus/ollama/node/claude/codex — a
-# faithful model of a machine without the stack). The migration harness
-# (test/reference-suite.sh) overrides this via ACI_TEST_PATH to prepend a
-# python3 >= 3.11 symlink dir; nothing else about the suite changes. See
-# test/lib/isolated_path.sh and issue #43 §3.
-BARE_PATH="${ACI_TEST_PATH:-/usr/bin:/bin}"
-
 PASS=0; FAIL=0; FAILED_NAMES=()
 EXTRA_TMP=()   # dirs from mktemp_home(), cleaned up alongside TEST_TMP/TEST_HOME
 
@@ -70,12 +63,14 @@ write_code_intel() {  # $1 = adresář, $2.. = řádky souboru .code-intel
   printf '%s\n' "$@" > "$d/.code-intel"
 }
 
-# Legacy refresh-intel.sh fixtures (pristine + hand-modified) live in
-# test/lib/fixtures.sh -- one definition of the stamp format, shared with the
-# migration differential harness (issue #49).
-. "$HERE/lib/fixtures.sh"
-write_pristine_refresh_script() { aci_write_pristine_refresh_script "$@"; }
-write_modified_refresh_script()  { aci_write_modified_refresh_script "$@"; }
+# The migration remains supported for existing projects. Keep its test fixture
+# in Python, not as a copy of the historic Bash tool.
+write_pristine_refresh_script() {
+  python3 "$HERE/lib/legacy_refresh_fixture.py" pristine "$1" "$2"
+}
+write_modified_refresh_script() {
+  python3 "$HERE/lib/legacy_refresh_fixture.py" modified "$1" "$2"
+}
 
 write_routing_skills() {
   local root="$1" source
@@ -742,6 +737,19 @@ TEST_TMP="$(mktemp -d)"; TEST_HOME="$(mktemp -d)"
 # Bash 3.2 (macOS): a bare "${EXTRA_TMP[@]}" on an empty array dies with
 # "unbound variable" under `set -u` -- guard on the count first.
 trap '(( ${#EXTRA_TMP[@]} == 0 )) || rm -rf "${EXTRA_TMP[@]}"; rm -rf "$TEST_TMP" "$TEST_HOME"' EXIT
+
+# Keep black-box tests hermetic while making the current Python launcher run
+# under the supported interpreter. The temporary path contains only python3;
+# GrepAI, GitNexus, Ollama, Node, Claude and Codex remain unavailable.
+TEST_PYTHON="${ACI_PYTHON:-python3.11}"
+PYTHON_PATH="$(command -v "$TEST_PYTHON")" || {
+  echo "[ERROR: no usable Python — set ACI_PYTHON, or install Python 3.11]" >&2
+  exit 1
+}
+PYBIN="$TEST_TMP/pybin"
+mkdir "$PYBIN"
+ln -s "$PYTHON_PATH" "$PYBIN/python3"
+BARE_PATH="$PYBIN:/usr/bin:/bin"
 
 [[ -x "$TOOL" ]] || { echo "[ERROR: nástroj není spustitelný: $TOOL]" >&2; exit 1; }
 

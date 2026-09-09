@@ -248,19 +248,18 @@ class ResolveProject(unittest.TestCase):
             ctx.workspace = "x"  # type: ignore[misc]
 
 
-_FIXTURES_SH = str(Path(__file__).resolve().parents[1] / "lib" / "fixtures.sh")
+_LEGACY_FIXTURE = str(
+    Path(__file__).resolve().parents[1] / "lib" / "legacy_refresh_fixture.py"
+)
 
 
 class Legacy(unittest.TestCase):
     def _pristine(self, ws):
-        # Build via the shared stamp fixture (test/lib/fixtures.sh) — one
-        # definition of the format, the same one run.sh and the differential
-        # harness use.
+        # Build through the shared Python fixture. Production still supports
+        # migrating this legacy file, but the frozen Bash reference does not.
         d = tempfile.mkdtemp(prefix="aci-legacy-")
         subprocess.run(
-            ["bash", "-c",
-             '. "$0"; aci_write_pristine_refresh_script "$1" "$2"',
-             _FIXTURES_SH, d, ws],
+            [sys.executable, _LEGACY_FIXTURE, "pristine", d, ws],
             check=True,
         )
         return os.path.join(d, "refresh-intel.sh")

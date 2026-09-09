@@ -5,6 +5,12 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
 
 ## [Unreleased]
 
+### Odstraněno
+
+- Zmrazený Bash reference harness, diferenční scénáře a jeho shellové helpery.
+  Aktivní Pythonová testovací sada zůstává; fixture pro podporovanou migraci
+  existujících `refresh-intel.sh` projektů je nyní malý Pythonový pomocník.
+
 ## [4.1.0] - 2026-09-09
 
 Vydání spravovaného routing skillu pro GrepAI, GitNexus a volitelný ripgrep,

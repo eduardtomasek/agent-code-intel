@@ -4,9 +4,8 @@ The source launcher, run by an interpreter below 3.11, must print exactly the
 approved one-line diagnostic to stderr and exit 1 with no traceback, before it
 imports anything from the ``agent_code_intel`` package (issue #48, decision 3).
 
-The differential harness proves the same thing against the Bash reference
-(``test/scenarios/runtime-gate.sh``); this test is the fast, direct check and
-the one that runs even when no sub-3.11 interpreter is on PATH (it skips).
+This test is the fast, direct check and the one that runs even when no
+sub-3.11 interpreter is on PATH (it skips).
 """
 
 import subprocess

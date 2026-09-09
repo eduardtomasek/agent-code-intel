@@ -2,9 +2,8 @@
 # test/unit.sh — the `unittest` layer (issue #43 §2, layer 2): pure logic for
 # the Python port, no external stack.
 #
-# Runs under the contract interpreter (Python 3.11.x by default; ACI_PYTHON
-# overrides for a supplementary 3.13/3.14 run) resolved exactly the way the
-# other migration harnesses resolve it — test/lib/isolated_path.sh.
+# Runs under Python 3.11.x by default. ACI_PYTHON selects a supplementary
+# interpreter explicitly.
 #
 # Usage:
 #   test/unit.sh                         # every test
@@ -15,10 +14,9 @@ set -euo pipefail
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd -- "$HERE/.." && pwd)"
-. "$HERE/lib/isolated_path.sh"
-
-PY="$(aci_find_python)" || {
-  echo "[ERROR: no usable Python — set ACI_PYTHON, or install the contract version (see test/lib/isolated_path.sh)]" >&2
+PY_NAME="${ACI_PYTHON:-python3.11}"
+PY="$(command -v "$PY_NAME")" || {
+  echo "[ERROR: no usable Python — set ACI_PYTHON, or install Python 3.11]" >&2
   exit 1
 }
 

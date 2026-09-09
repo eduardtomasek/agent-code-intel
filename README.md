@@ -1,4 +1,4 @@
-# Code intelligence pro AI agenty — návod od nuly
+# Code intelligence pro AI agenty
 
 Tenhle návod tě provede instalací celého stacku na Macu. Předpokládá jen jedno:
 že umíš otevřít aplikaci. Všechno ostatní je vysvětlené.
@@ -108,24 +108,24 @@ změny a jinak aktualizuje pouze artefakty vybraného agenta.
 ## Obsah
 
 0. [Rychlý start](#rychlý-start)
-0. [Aktualizace na 4.1.0](#aktualizace-na-410)
-1. [Co to vlastně dělá](#1-co-to-vlastně-dělá)
-2. [Co budeš potřebovat](#2-co-budeš-potřebovat)
-3. [Terminál — základ](#3-terminál--základ)
-4. [Homebrew](#4-homebrew)
-5. [OrbStack — kontejnery](#5-orbstack--kontejnery)
-6. [Ollama — embedding model](#6-ollama--embedding-model)
-7. [Node.js](#7-nodejs)
-8. [GrepAI](#8-grepai)
-9. [GitNexus](#9-gitnexus)
-10. [agent-code-intel](#10-agent-code-intel)
-11. [První projekt](#11-první-projekt)
-12. [Ověření, že to funguje](#12-ověření-že-to-funguje)
-13. [Každodenní používání](#13-každodenní-používání)
-14. [Dashboard — přehled o všem najednou](#14-dashboard--přehled-o-všem-najednou)
-15. [Když se něco pokazí](#15-když-se-něco-pokazí)
-16. [Odinstalace](#16-odinstalace)
-17. [Slovníček](#17-slovníček)
+1. [Aktualizace na 4.1.0](#aktualizace-na-410)
+2. [Co to vlastně dělá](#1-co-to-vlastně-dělá)
+3. [Co budeš potřebovat](#2-co-budeš-potřebovat)
+4. [Terminál — základ](#3-terminál--základ)
+5. [Homebrew](#4-homebrew)
+6. [OrbStack — kontejnery](#5-orbstack--kontejnery)
+7. [Ollama — embedding model](#6-ollama--embedding-model)
+8. [Node.js](#7-nodejs)
+9. [GrepAI](#8-grepai)
+10. [GitNexus](#9-gitnexus)
+11. [agent-code-intel](#10-agent-code-intel)
+12. [První projekt](#11-první-projekt)
+13. [Ověření, že to funguje](#12-ověření-že-to-funguje)
+14. [Každodenní používání](#13-každodenní-používání)
+15. [Dashboard — přehled o všem najednou](#14-dashboard--přehled-o-všem-najednou)
+16. [Když se něco pokazí](#15-když-se-něco-pokazí)
+17. [Odinstalace](#16-odinstalace)
+18. [Slovníček](#17-slovníček)
 
 ---
 
@@ -156,17 +156,17 @@ a zároveň napíše tvému AI agentovi instrukce, kdy má co použít.
 
 ### Z čeho se to skládá
 
-| Součást | Co dělá | Proč je potřeba |
-|---|---|---|
-| **Ollama** | Převádí text na vektory | Bez ní není z čeho hledat |
-| **qdrant** | Databáze vektorů, běží v kontejneru | Ukládá a prohledává, co ollama vyrobila |
-| **OrbStack** | Spouští kontejnery | Hostitel pro qdrant |
-| **GrepAI** | Sémantické vyhledávání | Řídí indexování a hledání |
-| **GitNexus** | Mapa vztahů v kódu | Odpovídá na „co se rozbije" |
-| **Node.js** | Běhové prostředí | GitNexus je v něm napsaný |
-| **ripgrep (`rg`)** | Přesné hledání a ověření | Volitelný nástroj pro routing skill |
-| **Homebrew** | Správce balíčků | Instaluje většinu z výše uvedeného |
-| **agent-code-intel** | Propojí to všechno | Aby to byl jeden příkaz, ne patnáct |
+| Součást              | Co dělá                             | Proč je potřeba                         |
+| -------------------- | ----------------------------------- | --------------------------------------- |
+| **Ollama**           | Převádí text na vektory             | Bez ní není z čeho hledat               |
+| **qdrant**           | Databáze vektorů, běží v kontejneru | Ukládá a prohledává, co ollama vyrobila |
+| **OrbStack**         | Spouští kontejnery                  | Hostitel pro qdrant                     |
+| **GrepAI**           | Sémantické vyhledávání              | Řídí indexování a hledání               |
+| **GitNexus**         | Mapa vztahů v kódu                  | Odpovídá na „co se rozbije"             |
+| **Node.js**          | Běhové prostředí                    | GitNexus je v něm napsaný               |
+| **ripgrep (`rg`)**   | Přesné hledání a ověření            | Volitelný nástroj pro routing skill     |
+| **Homebrew**         | Správce balíčků                     | Instaluje většinu z výše uvedeného      |
+| **agent-code-intel** | Propojí to všechno                  | Aby to byl jeden příkaz, ne patnáct     |
 
 Připrav si zhruba **20 minut** a **5 GB místa na disku**. Většina času je čekání
 na stahování.
@@ -578,19 +578,19 @@ agent-code-intel --apply
 Projde devíti kroky a na konci vypíše shrnutí. Ve složce ti přibudou tyhle
 soubory:
 
-| Soubor | K čemu je | Kdo ho vytvoří |
-|---|---|---|
-| `.git/` | Verzovací systém, založí se automaticky | agent-code-intel |
-| `.gitignore` | Aby se indexy nedostaly do gitu | agent-code-intel |
-| `.grepai/` | Nastavení indexování pro tenhle projekt | agent-code-intel |
-| `.mcp.json` | Napojení vyhledávání na tvého AI agenta | agent-code-intel |
-| `CLAUDE.md` | Odkaz na routing skill pro Claude | agent-code-intel pro `claude`/`both` |
-| `.claude/skills/agent-code-intel-routing/` | Rozhoduje, kdy použít GrepAI, GitNexus nebo ripgrep | agent-code-intel pro `claude`/`both` |
-| `AGENTS.md` | Odkaz na routing skill pro Codex a ostatní agenty | agent-code-intel pro `codex`/`both` |
-| `.agents/skills/agent-code-intel-routing/` | Stejný routing skill ve formátu, který objevuje Codex | agent-code-intel pro `codex`/`both` |
-| `.gitnexus/` | Grafový index a jeho databáze | gitnexus |
-| `AGENTS.md`, `CLAUDE.md` | Vlastní oddělený blok s pravidly grafu | gitnexus |
-| `.claude/skills/gitnexus/` | Dovednosti pro Claude Code k práci s grafem | gitnexus |
+| Soubor                                     | K čemu je                                             | Kdo ho vytvoří                       |
+| ------------------------------------------ | ----------------------------------------------------- | ------------------------------------ |
+| `.git/`                                    | Verzovací systém, založí se automaticky               | agent-code-intel                     |
+| `.gitignore`                               | Aby se indexy nedostaly do gitu                       | agent-code-intel                     |
+| `.grepai/`                                 | Nastavení indexování pro tenhle projekt               | agent-code-intel                     |
+| `.mcp.json`                                | Napojení vyhledávání na tvého AI agenta               | agent-code-intel                     |
+| `CLAUDE.md`                                | Odkaz na routing skill pro Claude                     | agent-code-intel pro `claude`/`both` |
+| `.claude/skills/agent-code-intel-routing/` | Rozhoduje, kdy použít GrepAI, GitNexus nebo ripgrep   | agent-code-intel pro `claude`/`both` |
+| `AGENTS.md`                                | Odkaz na routing skill pro Codex a ostatní agenty     | agent-code-intel pro `codex`/`both`  |
+| `.agents/skills/agent-code-intel-routing/` | Stejný routing skill ve formátu, který objevuje Codex | agent-code-intel pro `codex`/`both`  |
+| `.gitnexus/`                               | Grafový index a jeho databáze                         | gitnexus                             |
+| `AGENTS.md`, `CLAUDE.md`                   | Vlastní oddělený blok s pravidly grafu                | gitnexus                             |
+| `.claude/skills/gitnexus/`                 | Dovednosti pro Claude Code k práci s grafem           | gitnexus                             |
 
 `--agent claude`, `--agent codex` a výchozí `--agent both` řídí současně MCP
 registraci, dokument s instrukcemi i umístění routing skillu. GitNexus si při
@@ -757,7 +757,7 @@ Hlídače nastartuje a všechno doindexuje.
 
 ## 14. Dashboard — přehled o všem najednou
 
-`agent-code-intel --status --all` ti řekne, jestli sedí *nastavení* projektů.
+`agent-code-intel --status --all` ti řekne, jestli sedí _nastavení_ projektů.
 Neřekne ti ale, jestli běží služby pod nimi a jestli opravdu dělají, co mají —
 to je schválně, protože status musí fungovat i na stroji, kde je všechno
 vypnuté.
@@ -789,13 +789,13 @@ Proto potřebuje `agent-code-intel` na PATH; bez něj rovnou řekne, že neví n
 
 Nahoře **stack**, tedy věci společné všem projektům:
 
-| Karta | Co ověřuje |
-|---|---|
-| docker | běží daemon, běží kontejner, publikuje **oba** porty 6333 i 6334 |
-| qdrant | HTTP odpovídá, gRPC port je otevřený, kolik má kolekcí, jak rychle odpovídá |
-| ollama | server žije, model je stažený a načtený, **a skutečně vrátí vektor** |
-| Node.js | verze, `registerHooks`, a jestli se gitnexus vůbec spustí |
-| MCP servers | jestli běžící `gitnexus mcp` není starší než index — viz níže |
+| Karta       | Co ověřuje                                                                  |
+| ----------- | --------------------------------------------------------------------------- |
+| docker      | běží daemon, běží kontejner, publikuje **oba** porty 6333 i 6334            |
+| qdrant      | HTTP odpovídá, gRPC port je otevřený, kolik má kolekcí, jak rychle odpovídá |
+| ollama      | server žije, model je stažený a načtený, **a skutečně vrátí vektor**        |
+| Node.js     | verze, `registerHooks`, a jestli se gitnexus vůbec spustí                   |
+| MCP servers | jestli běžící `gitnexus mcp` není starší než index — viz níže               |
 
 Dole každý **projekt** ve čtyřech záložkách. Rozhraní dashboardu je anglicky:
 
@@ -832,7 +832,7 @@ U každé komponenty zkusí přímo to, kvůli čemu existuje:
   procesu, takže po `npm i -g gitnexus` běží každý už otevřený agent dál na
   staré verzi. Nová `analyze` pak zapíše index, který ten starý server neumí
   přečíst, a uprostřed práce dostaneš `DB version mismatch, v43 index vs v42
-  MCP server`. Na disku není nic rozbité — jen je čtenář starší než soubor.
+MCP server`. Na disku není nic rozbité — jen je čtenář starší než soubor.
   Spraví to restart klienta a dashboard ti řekne, kterého.
 
 Když je něco špatně, napíše rovnou příkaz, kterým se to spraví.
