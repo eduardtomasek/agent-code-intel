@@ -217,6 +217,10 @@ def run_init(
         stack = integrations.Stack(loaded.child_env)
     config = loaded.config
     context = _adopt_preview_context(context)
+    reporter.say("Project:   %s" % context.root)
+    reporter.say("Workspace: %s" % context.workspace)
+    reporter.say("Agents:    %s" % agent_target)
+    reporter.say("")
     _init_preflight(
         reporter,
         bootstrap,
@@ -277,6 +281,7 @@ def _init_preflight(
 ) -> None:
     reporter.hr("Preflight")
     needs: list[_Need] = []
+    reporter.row("ok", "python3 on PATH")
 
     def need(what: str, fix: str) -> None:
         needs.append(_Need(what, fix))
