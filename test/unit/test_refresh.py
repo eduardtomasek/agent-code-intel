@@ -323,6 +323,52 @@ class Reindex(unittest.TestCase):
         self.assertIn(("gitnexus_analyze_embeddings", root), stack.calls)
         self.assertIn(("gitnexus_status", root), stack.calls)
 
+    def test_a_force_retry_that_also_fails_still_runs_the_audit(self):  # AC 3 / REF-5
+        stack = _Stack(
+            analyze=integrations.Exec(
+                1, "", "Embedding generation completed without persisted embeddings"
+            ),
+            force=integrations.Exec(1, "", "still broken"),
+            gn_status="index is stale",
+        )
+        code, out, _ = _run(stack=stack, do_grepai=False)
+        order = [c[0] for c in stack.calls]
+        self.assertIn("gitnexus_analyze_force", order)
+        # the audit ran even though both the embeddings pass and the retry failed
+        self.assertLess(order.index("gitnexus_analyze_force"), order.index("gitnexus_status"))
+        self.assertIn("gitnexus analyze failed", out)
+        self.assertIn("index not up to date", out)
+        self.assertEqual(code, 2)
+
+
+class Ordering(unittest.TestCase):
+    """The command sequence through the narrow ``Stack`` seam (issue #54 AC 4):
+    left to right it is the reference's (``9406cce`` :1987–:2098)."""
+
+    def test_preflight_probes_the_grepai_side_before_the_gitnexus_side(self):
+        stack = _Stack(present=("curl", "git"), http=False)
+        _run(stack=stack)
+        probes = [c for c in stack.calls if c[0] in ("have", "qdrant_http")]
+        grepai_i = probes.index(("have", "grepai"))
+        qdrant_i = probes.index(("qdrant_http", "http://127.0.0.1:6333"))
+        gitnexus_i = probes.index(("have", "gitnexus"))
+        git_i = probes.index(("have", "git"))
+        self.assertLess(grepai_i, qdrant_i)
+        self.assertLess(qdrant_i, gitnexus_i)
+        self.assertLess(gitnexus_i, git_i)
+
+    def test_watcher_start_precedes_the_reindex_which_precedes_the_audit(self):
+        stack = _Stack(watch="watcher not running")
+        _run(stack=stack, do_gitnexus=True)
+        order = [c[0] for c in stack.calls]
+        self.assertLess(
+            order.index("watch_start_background"),
+            order.index("gitnexus_analyze_embeddings"),
+        )
+        self.assertLess(
+            order.index("gitnexus_analyze_embeddings"), order.index("gitnexus_status")
+        )
+
 
 # --------------------------------------------------------------------- shape --
 

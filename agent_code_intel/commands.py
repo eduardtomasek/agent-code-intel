@@ -754,8 +754,10 @@ def _do_refresh(
     stack: integrations.Stack,
 ) -> int:
     """``do_refresh`` (``9406cce`` :2042–:2115). Start the watcher if it is
-    down, re-index GitNexus (a failure is reported, not fatal), then run the
-    same audit ``--status`` runs on each side that is enabled."""
+    down, re-index GitNexus (a failure is reported, not fatal), then audit each
+    enabled side: the GrepAI audit reuses ``--status``' own ``_status_one``, and
+    the GitNexus audit is a freshness check on ``gitnexus status`` that only
+    ``--refresh`` does (``--status`` never re-checks the graph)."""
 
     reporter.hr("code-intel refresh — %s" % context.root)
     bad = False

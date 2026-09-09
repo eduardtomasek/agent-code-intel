@@ -15,9 +15,11 @@ Qdrant counts as healthy only with both HTTP health and an open gRPC port
 (decision 47); a GrepAI project name mapped elsewhere is ``CONFLICT``
 (decision 48).
 
-The status table and JSON status (issue #53) are the first consumers. The
-grepai-config-writing and gitnexus-analyze adapters land with apply / refresh
-(issues #54, #55).
+The status table and JSON status (issue #53) are the first consumers. Refresh
+(issue #54) added the ``gitnexus analyze`` / ``gitnexus status`` /
+``grepai watch --background`` adapters and the ``gitnexus_fresh`` /
+``embeddings_not_persisted`` parsers. The ``.grepai/config.yaml``-writing
+adapter lands with apply (issue #55).
 """
 
 from __future__ import annotations
