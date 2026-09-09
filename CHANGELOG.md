@@ -5,11 +5,10 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
 
 ## [Unreleased]
 
-## [4.0.0] - Unreleased
+## [4.0.0] - 2026-09-09
 
-Obsah kandidáta pro Pythonový přepis. Datum vydání záměrně není uvedené;
-doplní se až po přepnutí aktivního vstupu, ověření kandidátního SHA a
-dogfoodingu.
+Vydání Pythonového přepisu po přepnutí aktivního vstupu, ověření kandidátního
+SHA a třech zaznamenaných live relacích.
 
 ### Breaking
 
@@ -46,10 +45,10 @@ dogfoodingu.
 
 ### Testy
 
-- Acceptance report v `docs/acceptance/4.0.0.md` zachycuje referenci, přepnutý
-  kandidát, hermetické ENV/TOML lanes a živé ověření.
-- Třídenní dogfooding zůstává samostatným provozním důkazem; tento záznam
-  nepředstírá jeho dokončení bez skutečně uplynulých tří pracovních dnů.
+- Acceptance report v `docs/acceptance/4.0.0.md` zachycuje referenci, kandidátní
+  a finální SHA, hermetické ENV/TOML lanes a tři živé relace na třech repozitářích.
+- Report uvádí pouze skutečně provedené důkazy; tři různé pracovní dny ani
+  user-session/machine restart nejsou součástí opraveného release scope.
 
 ## [3.0.0] - 2026-09-08
 
@@ -114,6 +113,6 @@ dopočítat: nástroj sem přišel v téhle verzi z externího zdroje (viz `git
 log`, merge `Hessevalentino/audit-fixes-dashboard-v2.4.1`), ne z vlastního
 vývoje v tomhle repu.
 
-[Unreleased]: https://github.com/eduardtomasek/agent-code-intel/compare/v3.0.0...HEAD
-[4.0.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/eduardtomasek/agent-code-intel/compare/52232ad1b202d520474278ca8044e24d7af398d2...HEAD
+[4.0.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v3.0.0...52232ad1b202d520474278ca8044e24d7af398d2
 [3.0.0]: https://github.com/eduardtomasek/agent-code-intel/releases/tag/v3.0.0
