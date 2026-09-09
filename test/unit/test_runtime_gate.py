@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-LAUNCHER = REPO / "agent-code-intel.py"
+LAUNCHER = REPO / "agent-code-intel"
 
 _MESSAGE = "[ERROR: agent-code-intel requires Python 3.11 or newer (found {}.{}.{})]\n"
 
@@ -61,7 +61,7 @@ class RuntimeGate(unittest.TestCase):
             [sys.executable, str(LAUNCHER), "--version"],
             capture_output=True, text=True, timeout=15,
         )
-        self.assertEqual((proc.returncode, proc.stdout), (0, "agent-code-intel 3.0.0\n"))
+        self.assertEqual((proc.returncode, proc.stdout), (0, "agent-code-intel 4.0.0\n"))
 
 
 if __name__ == "__main__":

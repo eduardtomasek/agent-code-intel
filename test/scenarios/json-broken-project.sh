@@ -4,8 +4,9 @@
 # (JSON-6) — and the run still exits 0 (JSON-2). A second, healthy row keeps the
 # enumeration honest.
 #
-# env lane byte-identical; toml lane diverges on meta.config_file (stdout) and
-# the .toml-vs-.env config file on disk (manifest).
+# Both lanes differ on the switched product version inside stdout/JSON; the
+# toml lane additionally differs on meta.config_file and the config file on
+# disk (manifest).
 
 scenario_name()       { echo "json-broken-project"; }
 scenario_invariants() { echo "JSON-2 JSON-6"; }
@@ -14,7 +15,9 @@ scenario_args()       { echo "--status --all --json"; }
 scenario_env_config()  { printf 'CHUNK_SIZE=200\n'; }
 scenario_toml_config() { printf 'chunk_size = 200\n'; }
 
-scenario_expected_divergence() { [ "${1:-}" = toml ] && echo "stdout manifest" || true; }
+scenario_expected_divergence() {
+  if [ "${1:-}" = toml ]; then echo "stdout json manifest"; else echo "stdout json"; fi
+}
 
 scenario_setup() {
   local fixture="$1" home="$2" tag="$3"

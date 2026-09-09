@@ -3,11 +3,13 @@
 # output) and its stderr to the tool's stderr, "including that breakage",
 # preserved 1:1. The Python port inherits both streams for the harvester, so
 # --version shows the file's line, then the banner, and the stderr line lands
-# on stderr — identical to the reference. Zero-divergence positive scenario.
+# on stderr — identical to the reference apart from the switched release
+# version in stdout.
 
 scenario_name()       { echo "config-env-output"; }
 scenario_invariants() { echo "CFG-13"; }
 scenario_args()       { echo "--version"; }
+scenario_expected_divergence() { echo "stdout"; }
 
 scenario_setup() {
   local home="$2"

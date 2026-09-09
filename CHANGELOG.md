@@ -16,7 +16,8 @@ dogfoodingu.
 - CLI v4 vyžaduje Python 3.11 nebo novější a při starším interpretu vrací
   schválenou runtime diagnostiku bez tracebacku.
 - Produktová verze má jediný zdroj v `agent_code_intel.__version__`; aktivní
-  Bashový vstup zůstává beze změny až do samostatného přepínacího kroku.
+  vstup `agent-code-intel` je Pythonový launcher se stejnou runtime bránou jako
+  instalační kopie.
 
 ### Přidáno
 
@@ -45,11 +46,10 @@ dogfoodingu.
 
 ### Testy
 
-- Pre-cutover gate v `docs/acceptance/4.0.0.md` pokrývá jednotkové testy,
-  nezměněnou black-box sadu, oba hermetické lanes a izolované instalační a
-  upgrade scénáře.
-- Živý stack, přepnutí aktivního vstupu, verze 4.0.0 a dogfooding zůstávají
-  navazujícím krokem issue #58; tento záznam nepředstírá jejich dokončení.
+- Acceptance report v `docs/acceptance/4.0.0.md` zachycuje referenci, přepnutý
+  kandidát, hermetické ENV/TOML lanes a živé ověření.
+- Třídenní dogfooding zůstává samostatným provozním důkazem; tento záznam
+  nepředstírá jeho dokončení bez skutečně uplynulých tří pracovních dnů.
 
 ## [3.0.0] - 2026-09-08
 
