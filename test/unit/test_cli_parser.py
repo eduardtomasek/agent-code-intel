@@ -194,10 +194,10 @@ class ConfDir(unittest.TestCase):
 
 class Dispatch(unittest.TestCase):
     """Config load, identity resolution, ``--install``, ``--status``,
-    ``--refresh`` and init preview/apply are converted (issues #51–#55);
-    ``--remove`` remains unconverted."""
+    ``--refresh``, init preview/apply and ``--remove`` are converted
+    (issues #51–#56)."""
 
-    def test_init_runs_preflight_and_remove_is_not_implemented(self):
+    def test_init_runs_preflight_and_remove_is_a_noop_on_an_unconfigured_project(self):
         scratch = tempfile.mkdtemp(prefix="aci-dispatch-")
         code, out, err = run([], cwd=scratch)
         self.assertEqual(code, 1)
@@ -205,10 +205,8 @@ class Dispatch(unittest.TestCase):
         self.assertIn("preflight found", err)
 
         code, out, err = run(["--remove"], cwd=scratch)
-        self.assertEqual(code, 1)
-        self.assertEqual(out, "")
-        self.assertTrue(err.startswith("[ERROR: "))
-        self.assertIn("'remove' mode", err)
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("Nothing to remove.", out)
 
     def test_refresh_outside_git_fails_before_the_mode(self):
         # --refresh resolves the git root first; an empty dir is not one.
