@@ -10,11 +10,12 @@ Two things live here:
 
 * the install / upgrade machinery (issue #52; issue #48, decisions 56–67;
   issues #39, #40). :func:`run` writes a thin launcher into ``~/.local/bin``
-  and the whole package into ``~/.local/lib/agent-code-intel`` (the lib dir
-  holds an importable package but is not itself one), preserving existing
-  config, registry and dashboard, and idempotently cleaning up the v2/v3
+  and the whole package bundle into ``~/.local/lib/agent-code-intel`` (the lib
+  dir holds an importable package but is not itself one), preserving existing
+  config and registry, installing the dashboard from its own version, and
+  idempotently cleaning up the v2/v3
   ``code-intel-init`` name and its two legacy permission rules. The step order
-  is lib → launcher → old-name → PATH check → dashboard warning → config
+  is lib → launcher → old-name → PATH check → dashboard → config
   template → permission rule (issue #40 §3); transactionality ends at the
   launcher, so a later failure can leave a working CLI just as the reference
   does.
@@ -28,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -84,6 +86,10 @@ raise SystemExit(
 #   source     — the package sits next to this file in the checkout
 #   installed  — an absolute lib directory the installer bakes in
 _SOURCE_PACKAGE_PARENT = "os.path.dirname(os.path.realpath(__file__))"
+_DASHBOARD_NAME = "code-intel-dash"
+_DASHBOARD_VERSION_RE = re.compile(
+    r"^VERSION\s*=\s*[\"']([^\"']+)[\"']\s*$", re.MULTILINE
+)
 
 
 def render_launcher(shebang: str, package_parent: str = _SOURCE_PACKAGE_PARENT) -> str:
@@ -122,6 +128,11 @@ def _source_package() -> str:
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def _source_dashboard() -> str:
+    """The dashboard bundled beside the source or installed package."""
+    return os.path.join(os.path.dirname(_source_package()), _DASHBOARD_NAME)
+
+
 # The installed launcher locates its package *relative to its own realpath*
 # (issue #39 decision 6) — never an absolute path baked in at install time. So
 # it survives a symlink to the launcher and does not assume ``bin`` sits under
@@ -154,7 +165,7 @@ def run(
     not be resolved; it is only used to recognise ``--install`` from an already
     installed copy (issue #39 decision 14, issue #40 decision 12).
 
-    Returns 0. The only failure is the lib step, which raises
+    Returns 0 on success. The lib or dashboard steps can raise
     :class:`~agent_code_intel.config.CliError` (``[ERROR: …]``, exit 1, issue
     #40 decision 14) — the caller renders it. Transactionality ends at the
     launcher: a failure in a later step leaves a working CLI, exactly as today.
@@ -166,7 +177,8 @@ def run(
     os.makedirs(os.path.dirname(lib_dir), exist_ok=True)
     os.makedirs(conf_dir, exist_ok=True)
 
-    # Step order lib → launcher (issue #40 decision 9): "new lib + old bash
+    # Step order lib → launcher → old-name → PATH check → dashboard
+    # (issue #40 decision 9): "new lib + old bash
     # bin" is harmless (bash knows nothing of the lib dir); "new bin + old/no
     # lib" is a broken tool. Each step prints its own reference line; the lib
     # step's `installed -> <lib dir>` is the one new output line (issue #39
@@ -177,7 +189,7 @@ def run(
 
     _remove_old_name(bin_dir, source_launcher, reporter)
     _check_path(home, path, reporter)
-    _dashboard_warning(bin_dir, reporter)
+    _install_dashboard(bin_dir, reporter)
     _write_config_template(conf_dir, config_source, reporter)
 
     if write_perms:
@@ -223,6 +235,10 @@ def _install_lib(lib_dir: str) -> bool:
             "agent-code-intel install (no agent_code_intel/__init__.py)" % lib_dir
         )
 
+    src_dashboard = _source_dashboard()
+    if not os.path.isfile(src_dashboard):
+        raise CliError("could not install %s: source dashboard is missing" % lib_dir)
+
     new = lib_dir + ".new"
     old = lib_dir + ".old"
     _remove_path(new)
@@ -235,6 +251,7 @@ def _install_lib(lib_dir: str) -> bool:
             os.path.join(new, "agent_code_intel"),
             ignore=shutil.ignore_patterns("__pycache__"),
         )
+        shutil.copy2(src_dashboard, os.path.join(new, _DASHBOARD_NAME))
         if os.path.exists(lib_dir):
             os.rename(lib_dir, old)
             try:
@@ -339,19 +356,47 @@ def _check_path(home: str, path: str, reporter: Reporter) -> None:
         reporter.say('  export PATH="$HOME/.local/bin:$PATH"')
 
 
-def _dashboard_warning(bin_dir: str, reporter: Reporter) -> None:
-    """``--install`` only touches its own launcher; a ``code-intel-dash`` next
-    to it reads this tool's ``--status --all --json`` and breaks silently if
-    the two drift, so say so (issue #40 §3 step 6; ``9406cce`` :402–:405)."""
+def _dashboard_version(path: str) -> str:
+    """Read the dashboard's own VERSION constant."""
 
-    if os.path.exists(os.path.join(bin_dir, "code-intel-dash")):
-        reporter.say(
-            "WARNING: ~/.local/bin/code-intel-dash also needs reinstalling to match:"
-        )
-        reporter.say(
-            "         cp code-intel-dash ~/.local/bin/ && chmod +x "
-            "~/.local/bin/code-intel-dash"
-        )
+    try:
+        with open(path) as handle:
+            match = _DASHBOARD_VERSION_RE.search(handle.read())
+    except OSError as exc:
+        raise CliError("could not read %s: %s" % (path, exc))
+    if match is None:
+        raise CliError("could not read %s: missing VERSION" % path)
+    return match.group(1)
+
+
+def _install_dashboard(bin_dir: str, reporter: Reporter) -> None:
+    """Install the dashboard and keep its own version as the source of truth."""
+
+    src = _source_dashboard()
+    version = _dashboard_version(src)
+    dst = os.path.join(bin_dir, _DASHBOARD_NAME)
+
+    if os.path.isfile(dst) and os.access(dst, os.X_OK):
+        try:
+            if _dashboard_version(dst) == version:
+                reporter.say(
+                    "%s %s already installed at %s"
+                    % (_DASHBOARD_NAME, version, dst)
+                )
+                return
+        except CliError:
+            pass
+
+    fd, tmp = tempfile.mkstemp(dir=bin_dir, prefix=".%s." % _DASHBOARD_NAME)
+    os.close(fd)
+    try:
+        shutil.copy2(src, tmp)
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, dst)
+    except OSError as exc:
+        _remove_path(tmp)
+        raise CliError("could not install %s: %s" % (dst, exc))
+    reporter.say("installed -> %s (code-intel-dash %s)" % (dst, version))
 
 
 def _write_config_template(

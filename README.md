@@ -400,11 +400,12 @@ Při instalaci z checkoutu proto použij:
 python3.11 ./agent-code-intel --install
 ```
 
-Instalátor uloží tenký launcher do `~/.local/bin/agent-code-intel` a celý
-importovatelný balík do `~/.local/lib/agent-code-intel/`. Instalace zkopíruje
-všechny Pythonové moduly, nepřenáší `__pycache__` ani soubory z checkoutu a
-upgrade nahradí vlastní balík jako celek. Konfiguraci, registr projektů a
-dashboard nemaže.
+Instalátor uloží tenký launcher do `~/.local/bin/agent-code-intel`, dashboard
+do `~/.local/bin/code-intel-dash` a celý importovatelný balík do
+`~/.local/lib/agent-code-intel/`. Instalace zkopíruje všechny Pythonové
+moduly i dashboard, nepřenáší `__pycache__` a upgrade nahradí vlastní balík
+jako celek. Verze dashboardu se čte z jeho vlastního `VERSION`; verze CLI
+`4.0.0` ji nepřebíjí.
 
 ### Konfigurace: `defaults.env` a `defaults.toml`
 
@@ -654,16 +655,14 @@ code-intel-dash --open
 Otevře se stránka na `http://127.0.0.1:7717`. Běží jen na tvém počítači, na
 loopbacku, bez hesla — nikam se nedostane. Ukončíš ho Ctrl+C.
 
-Aby šel spustit odkudkoli, zkopíruj si ho vedle `agent-code-intel`:
+Instalace z checkoutu ho uloží vedle CLI automaticky:
 
 ```
-cp code-intel-dash ~/.local/bin/ && chmod +x ~/.local/bin/code-intel-dash
+python3.11 ./agent-code-intel --install
 ```
 
-Pamatuj na tohle i při každé budoucí aktualizaci: `agent-code-intel --install`
-přepisuje jen sebe. Najde-li v `~/.local/bin/` starší `code-intel-dash`,
-upozorní tě, ale sám ho nepřeinstaluje — udělej to ručně stejným příkazem jako
-výše.
+Při každé další instalaci se porovná vlastní verze dashboardu; shodná verze se
+nepřepisuje, starší nebo poškozená kopie se nahradí zdrojovou verzí.
 
 Dashboard nemá vlastní kontroly — všechno o projektech si vytáhne z
 `agent-code-intel --status --all --json`. Kdyby měl kontroly vlastní, dřív nebo

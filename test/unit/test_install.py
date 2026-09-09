@@ -60,6 +60,13 @@ class LibStep(Base):
         )
         self.assertEqual(installed, source)
 
+    def test_clean_install_bundles_the_dashboard(self):
+        self.assertIs(install._install_lib(self.lib), True)
+        installed = Path(self.lib, "code-intel-dash")
+        source = Path(install._source_package()).parent / "code-intel-dash"
+        self.assertEqual(installed.read_bytes(), source.read_bytes())
+        self.assertTrue(installed.stat().st_mode & stat.S_IXUSR)
+
     def test_no_pycache_in_the_installed_tree(self):
         install._install_lib(self.lib)
         self.assertEqual(
@@ -338,6 +345,8 @@ class Run(Base):
             + "installed -> %s\n" % os.path.join(self.bin, "agent-code-intel")
             + "WARNING: ~/.local/bin is not on PATH. Add to your shell rc:\n"
             + '  export PATH="$HOME/.local/bin:$PATH"\n'
+            + "installed -> %s (code-intel-dash 1.1.0)\n"
+            % os.path.join(self.bin, "code-intel-dash")
             + "wrote %s\n" % toml_path
             + "claude: allowed Bash(agent-code-intel --refresh) in %s\n" % settings
             + "        (so Claude Code can run it after a task without asking "
@@ -346,6 +355,33 @@ class Run(Base):
         self.assertTrue(os.access(os.path.join(self.bin, "agent-code-intel"), os.X_OK))
         self.assertTrue(os.path.isfile(self.marker()))
         self.assertTrue(os.path.isfile(toml_path))
+
+    def test_clean_install_installs_dashboard_at_its_own_version(self):
+        self.do_run()
+        dashboard = os.path.join(self.bin, "code-intel-dash")
+        proc = subprocess.run(
+            [sys.executable, dashboard, "--version"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, "code-intel-dash 1.1.0\n")
+
+    def test_matching_dashboard_version_is_not_rewritten(self):
+        self.do_run()
+        dashboard = os.path.join(self.bin, "code-intel-dash")
+        before = os.stat(dashboard).st_mtime_ns
+        _, out, _ = self.do_run()
+        self.assertEqual(os.stat(dashboard).st_mtime_ns, before)
+        self.assertIn("code-intel-dash 1.1.0 already installed at", out)
+
+    def test_matching_non_executable_dashboard_is_repaired(self):
+        self.do_run()
+        dashboard = os.path.join(self.bin, "code-intel-dash")
+        os.chmod(dashboard, stat.S_IRUSR | stat.S_IWUSR)
+        _, out, _ = self.do_run()
+        self.assertTrue(os.stat(dashboard).st_mode & stat.S_IXUSR)
+        self.assertIn("installed -> %s (code-intel-dash 1.1.0)" % dashboard, out)
 
     def test_installed_command_runs_standalone_from_an_unrelated_cwd(self):
         # issue #52 AC3 / INST-11 — the installed launcher works with no
@@ -403,12 +439,21 @@ class Run(Base):
         self.assertFalse(os.path.exists(old))
         self.assertIn("removed old binary -> %s" % old, out)
 
-    def test_dashboard_warning_only_when_a_dashboard_sits_alongside(self):
+    def test_stale_dashboard_is_replaced_with_the_source_version(self):
         os.makedirs(self.bin)
         with open(os.path.join(self.bin, "code-intel-dash"), "w") as handle:
-            handle.write("#!/bin/sh\n")
+            handle.write("VERSION = \"0.9.0\"\n")
         _, out, _ = self.do_run()
-        self.assertIn("code-intel-dash also needs reinstalling", out)
+        dashboard = os.path.join(self.bin, "code-intel-dash")
+        self.assertEqual(
+            subprocess.run(
+                [sys.executable, dashboard, "--version"],
+                capture_output=True,
+                text=True,
+            ).stdout,
+            "code-intel-dash 1.1.0\n",
+        )
+        self.assertIn("installed -> %s (code-intel-dash 1.1.0)" % dashboard, out)
 
     def test_from_installed_copy_says_already_installed_at_the_bin_path(self):
         # issue #39 decision 14 / issue #40 decision 12 — `already installed at

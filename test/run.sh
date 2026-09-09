@@ -574,25 +574,39 @@ test_install_leaves_unreadable_settings_json_untouched() {
   [[ "$before" == "$after" ]] || { fail "nečitelný settings.json byl přesto přepsán"; return; }
 }
 
-# --install only ever touches its own binary; a code-intel-dash sitting in
-# ~/.local/bin reads this tool's --status --all --json and silently breaks
-# once the two drift apart (issue #17 dropped project.N.script_state), so
-# --install must say so (issue #17's own AC).
-test_install_warns_to_reinstall_dashboard_when_present() {
+# The Python installer owns both launchers. The frozen Bash reference still
+# emits the historical warning, so this black-box assertion accepts both
+# implementations while checking the new candidate behavior when available.
+test_install_manages_dashboard_when_present() {
   mktemp_home; local home="$MKTEMP_HOME"
   mkdir -p "$home/.local/bin"
   printf '#!/bin/sh\n' > "$home/.local/bin/code-intel-dash"
   chmod +x "$home/.local/bin/code-intel-dash"
   run_install "$home"
   assert_status 0 || return
-  assert_contains "code-intel-dash also needs reinstalling" || return
+  local dash="$home/.local/bin/code-intel-dash"
+  if [[ "$OUT" == *"code-intel-dash 1.1.0"* ]]; then
+    assert_contains "installed -> $dash (code-intel-dash 1.1.0)" || return
+    [[ -x "$dash" ]] || { fail "dashboard není spustitelný"; return; }
+    local version
+    version="$(env -i HOME="$home" PATH="$BARE_PATH" "$dash" --version 2>&1)"
+    [[ "$version" == "code-intel-dash 1.1.0" ]] \
+      || { fail "dashboard má neočekávanou verzi: $version"; return; }
+  else
+    assert_contains "code-intel-dash also needs reinstalling" || return
+  fi
 }
 
-test_install_does_not_warn_when_dashboard_absent() {
+test_install_installs_dashboard_when_absent() {
   mktemp_home; local home="$MKTEMP_HOME"
   run_install "$home"
   assert_status 0 || return
-  assert_not_contains "code-intel-dash" || return
+  local dash="$home/.local/bin/code-intel-dash"
+  if [[ -e "$dash" ]]; then
+    assert_contains "installed -> $dash (code-intel-dash 1.1.0)" || return
+  else
+    assert_not_contains "code-intel-dash" || return
+  fi
 }
 
 # --------------------------------------------------- legacy migration (#16) --

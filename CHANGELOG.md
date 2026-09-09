@@ -5,6 +5,11 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
 
 ## [Unreleased]
 
+### Změněno
+
+- `--install` nově instaluje i `code-intel-dash`; jeho vlastní `VERSION` řídí
+  aktualizaci dashboardu nezávisle na verzi `agent-code-intel`.
+
 ## [4.0.0] - 2026-09-09
 
 Vydání Pythonového přepisu po přepnutí aktivního vstupu, ověření kandidátního
