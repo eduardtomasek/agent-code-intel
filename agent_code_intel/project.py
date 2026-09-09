@@ -62,7 +62,10 @@ class ProjectContext:
     workspace_explicit: bool = False
 
 
-_LINE_RE = re.compile(r"^[A-Z][A-Z0-9_]*=\S+$")
+# The value may contain spaces: PROJECT is the directory basename, and a
+# directory name like "CS Imager (test)" is legal on macOS. The writer in
+# commands.py emits it unquoted, so \S+ here made a written file unreadable.
+_LINE_RE = re.compile(r"^[A-Z][A-Z0-9_]*=.+$")
 _KNOWN_KEYS = ("SCHEMA", "WORKSPACE", "PROJECT")
 _SUPPORTED_SCHEMA = "1"
 _LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)

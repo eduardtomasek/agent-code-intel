@@ -56,6 +56,14 @@ class ReadCodeIntel(unittest.TestCase):
         _write_code_intel(root, "# hi", "", "SCHEMA=1", "WORKSPACE=team", "PROJECT=widget")
         self.assertEqual(project.read_code_intel(root).status, "OK")
 
+    def test_value_may_contain_spaces(self):
+        root = _mkrepo("CS Imager (test intel code)")
+        _write_code_intel(root, "SCHEMA=1", "WORKSPACE=cs-imager",
+                          "PROJECT=CS Imager (test intel code)")
+        ident = project.read_code_intel(root)
+        self.assertEqual((ident.status, ident.project),
+                         ("OK", "CS Imager (test intel code)"))
+
     def test_malformed_line(self):
         root = _mkrepo("widget")
         _write_code_intel(root, "SCHEMA=1", "this is not valid", "WORKSPACE=t", "PROJECT=widget")
