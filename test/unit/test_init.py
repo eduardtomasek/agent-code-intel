@@ -123,6 +123,15 @@ class FailingWatchStack(FakeStack):
         return integrations.Exec(1, "", "watcher failed")
 
 
+class FailingRestartStack(FakeStack):
+    def watch_status(self, workspace):
+        return "watcher running"
+
+    def watch_start_background(self, workspace):
+        self.calls.append(("watch_start_background", workspace))
+        return integrations.Exec(1, "", "watcher restart failed")
+
+
 def make_context(root):
     return ProjectContext(
         root=root,
@@ -220,6 +229,26 @@ class Init(unittest.TestCase):
                 stdout=io.StringIO(),
                 stderr=io.StringIO(),
                 stack=FailingWatchStack(),
+            )
+
+    def test_apply_fails_if_config_change_cannot_restart_watcher(self):
+        root = tempfile.mkdtemp(prefix="aci-init-restart-")
+        with self.assertRaises(commands.CliError):
+            commands.run_init(
+                apply=True,
+                bootstrap=False,
+                do_git=False,
+                start_watch=False,
+                run_analyze=False,
+                write_docs=False,
+                force_docs=False,
+                agent_target="both",
+                context=make_context(root),
+                loaded=loaded(),
+                conf_dir=os.path.join(root, "home", ".config", "code-intel"),
+                stdout=io.StringIO(),
+                stderr=io.StringIO(),
+                stack=FailingRestartStack(),
             )
 
     def test_orphaned_managed_doc_is_a_fatal_error(self):
