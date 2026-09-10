@@ -38,7 +38,7 @@ import time
 from collections.abc import Mapping
 from typing import TextIO
 
-from . import agent_skills, integrations, project
+from . import agent_skills, hooks, integrations, project
 from .config import CliError, Config, LoadedConfig
 from .project import ProjectContext
 
@@ -218,6 +218,7 @@ def run_init(
     stdout: TextIO,
     stderr: TextIO,
     stack: "integrations.Stack | None" = None,
+    write_hook: bool = True,
 ) -> int:
     """Run the initial project setup in preview or apply mode."""
 
@@ -247,6 +248,7 @@ def run_init(
             start_watch,
             run_analyze,
             write_docs,
+            write_hook,
             force_docs,
             agent_target,
             context,
@@ -261,6 +263,7 @@ def run_init(
         start_watch,
         run_analyze,
         write_docs,
+        write_hook,
         force_docs,
         agent_target,
         context,
@@ -452,6 +455,7 @@ def _preview_init(
     start_watch,
     run_analyze,
     write_docs,
+    write_hook,
     force_docs,
     agent_target,
     context,
@@ -603,6 +607,24 @@ def _preview_init(
     else:
         plan("skip", "agent documents and routing skills (--no-docs)")
 
+    if write_hook and agent_target in ("claude", "both"):
+        hook_state = str(hooks.status(context.root)["state"])
+        if hook_state == "current":
+            plan("keep", "claude SessionStart hook current")
+        elif hook_state == "missing":
+            plan("WRITE", "claude SessionStart hook")
+        elif hook_state == "managed-drift":
+            plan("UPDATE", "claude SessionStart hook")
+        else:
+            plan("CONFLICT", "claude SessionStart hook is %s" % hook_state)
+    else:
+        plan(
+            "skip",
+            "SessionStart hook (--no-hook)"
+            if not write_hook
+            else "SessionStart hook (claude not selected)",
+        )
+
     if start_watch:
         if integrations.watcher_running(stack.watch_status(context.workspace)):
             plan("keep", "watcher running for '%s'" % context.workspace)
@@ -626,6 +648,7 @@ def _apply_init(
     start_watch,
     run_analyze,
     write_docs,
+    write_hook,
     force_docs,
     agent_target,
     context,
@@ -813,6 +836,21 @@ def _apply_init(
         reporter.say("skipped agent documents and routing skills (--no-docs)")
     reporter.say("")
 
+    if write_hook and agent_target in ("claude", "both"):
+        result = hooks.install(context.root)
+        reporter.say(
+            "claude: SessionStart hook %s at %s"
+            % ("updated" if result.changed else "current", hooks.SCRIPT_RELATIVE)
+        )
+        if result.warning:
+            reporter.emit_err("WARNING: %s" % result.warning)
+    else:
+        reporter.say(
+            "skipped SessionStart hook (%s)"
+            % ("--no-hook" if not write_hook else "claude not selected")
+        )
+    reporter.say("")
+
     if start_watch:
         reporter.hr("8. GrepAI watcher")
         if integrations.watcher_running(stack.watch_status(context.workspace)):
@@ -979,6 +1017,9 @@ def run_remove(
                 ),
             )
             actions += 1
+        if hooks.status(context.root)["state"] in ("current", "managed-drift"):
+            reporter.row(verb, "rm Claude SessionStart hook")
+            actions += 1
         if purge_collection:
             reporter.row(
                 verb,
@@ -1057,6 +1098,12 @@ def run_remove(
                 os.path.relpath(path, context.root),
             )
         )
+
+    hook_result = hooks.remove(context.root)
+    for path in hook_result.removed:
+        reporter.say("removed Claude SessionStart hook at %s" % path)
+    if hook_result.warning:
+        reporter.emit_err("WARNING: %s" % hook_result.warning)
 
     if purge_collection:
         http_url = "http://%s:%s" % (config.qdrant_host, config.qdrant_http_port)
@@ -1218,6 +1265,20 @@ def _report_routing_status(
     return bad
 
 
+def _report_hook_status(reporter: Reporter, root: str) -> bool:
+    details = hooks.status(root)
+    state = str(details["state"])
+    if state == "current":
+        reporter.row("", "  claude SessionStart hook current at %s" % details["path"])
+        return False
+    reporter.row(
+        "",
+        "  claude SessionStart hook is %s at %s"
+        % (state, details["path"]),
+    )
+    return True
+
+
 # ---------------------------------------------------------------- text table --
 
 
@@ -1283,7 +1344,10 @@ def _status_one(
         reporter.row("BROKEN", "%s  %s" % (workspace, path))
         reporter.row("", "  %s" % identity.message)
         if agent_target is not None:
-            _report_routing_status(reporter, root, agent_target)
+            bad = _report_routing_status(reporter, root, agent_target)
+            if agent_target in ("claude", "both"):
+                bad = _report_hook_status(reporter, root) or bad
+            return bad
         return True
 
     workspace, proj_name = _identity_names(root, identity, workspace)
@@ -1295,12 +1359,20 @@ def _status_one(
             "GONE", "%s  %s  (directory no longer exists)" % (workspace, path)
         )
         if agent_target is not None:
-            _report_routing_status(reporter, root, agent_target)
+            bad = _report_routing_status(reporter, root, agent_target)
+            if agent_target in ("claude", "both"):
+                bad = _report_hook_status(reporter, root) or bad
+            return bad
         return True
 
     routing_bad = (
         _report_routing_status(reporter, root, agent_target)
         if agent_target is not None
+        else False
+    )
+    hook_bad = (
+        _report_hook_status(reporter, root)
+        if agent_target in ("claude", "both")
         else False
     )
 
@@ -1318,7 +1390,7 @@ def _status_one(
         )
         return True
 
-    bad = routing_bad
+    bad = routing_bad or hook_bad
     if not stack.ws_exists(workspace):
         bad = True
         reporter.row("", "  workspace '%s' does not exist" % workspace)
@@ -1501,6 +1573,8 @@ def _json_projects(
             entry["path"] = root
             entry["code_intel_error"] = identity.message
             entry["routing_skills"] = agent_skills.status(root, agent_target)
+            if agent_target in ("claude", "both"):
+                entry["session_start_hook"] = hooks.status(root)
             entry["ok"] = False
             projects.append(entry)
             continue
@@ -1518,6 +1592,8 @@ def _json_projects(
         if not os.path.isdir(root):
             entry["exists"] = False
             entry["routing_skills"] = agent_skills.status(root, agent_target)
+            if agent_target in ("claude", "both"):
+                entry["session_start_hook"] = hooks.status(root)
             entry["ok"] = False
             projects.append(entry)
             continue
@@ -1576,6 +1652,12 @@ def _json_projects(
             for details in skills.values()
         ):
             bad = True
+
+        if agent_target in ("claude", "both"):
+            hook_status = hooks.status(root)
+            entry["session_start_hook"] = hook_status
+            if not bool(hook_status["ok"]):
+                bad = True
 
         entry["gob_leftover"] = os.path.isfile(
             os.path.join(root, ".grepai", "index.gob")

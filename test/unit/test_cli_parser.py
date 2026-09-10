@@ -122,7 +122,7 @@ class Options_(unittest.TestCase):
         self.assertIsNone(o.workspace)
         self.assertEqual(o.agent_target, "both")
         for name in ("bootstrap", "do_git", "start_watch", "run_analyze", "write_docs",
-                     "write_perms", "do_grepai", "do_gitnexus"):
+                     "write_hook", "write_perms", "do_grepai", "do_gitnexus"):
             self.assertTrue(getattr(o, name), name)
         for name in ("apply", "force_docs", "status_all", "as_json", "purge_collection"):
             self.assertFalse(getattr(o, name), name)
@@ -146,6 +146,7 @@ class Options_(unittest.TestCase):
             "--no-watch": ("start_watch", False),
             "--no-analyze": ("run_analyze", False),
             "--no-docs": ("write_docs", False),
+            "--no-hook": ("write_hook", False),
             "--force-docs": ("force_docs", True),
             "--no-grepai": ("do_grepai", False),
             "--no-gitnexus": ("do_gitnexus", False),
