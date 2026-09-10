@@ -5,7 +5,42 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-09-10
+
+Vydání vlastního code-context řetězce pro Claude a Codex: spravované skilly,
+repo-lokální `SessionStart` hooky a kontrola doporučených nástrojů.
+
+### Breaking
+
+- `--apply` nově zapisuje nástrojem vlastněné repo-lokální `SessionStart` hooky
+  a druhý skill `code-context`; pro projekty, které si hooky spravují samy,
+  je k dispozici `--no-hook`.
+
+### Přidáno
+
+- Samostatný režim `--install-deps`, který kontroluje devět nástrojů a na
+  macOS po potvrzení nabídne instalaci dostupných Homebrew balíčků.
+- `SessionStart` hook pro Claude i Codex a tři podmínky aktivace Codex hooku
+  zdokumentované v README.
+- `code-context` jako druhý byte-identický, spravovaný skill pro oba agenty;
+  status, refresh a remove rozlišují jeho stav a vlastnictví.
+
 ### Změněno
+
+- `ctags` a `rg` jsou v preflightu doporučené nástroje s fallbackem; chybějící
+  `ast-grep`, `fd`, `rga`, `tokei` a `scc` se hlásí jako doporučení.
+- README uvádí ověřené jazyky, postup pro neověřené jazyky a rozšířené volby
+  `--no-hook` a `--no-install-deps`.
+
+### Testy
+
+- 292 unit testů a 53 hermetických black-box scénářů.
+- Behaviorální měření code-context řetězce splnilo práh 80 %: tři ze tří
+  čtecích operací ve fresh relaci použily odvozený rozsah nebo celý malý
+  soubor po ověření jeho velikosti.
+- [Acceptance report](docs/acceptance/5.0.0.md) zachycuje živé ověření všech
+  projektových režimů pro `claude`, `codex` i `both` na čistých projektech a
+  samostatnou kontrolu `--install-deps`.
 
 - README přepsán na kratší podobu: zkrácený titul, sjednocené číslování obsahu
   a nový hero obrázek (`hero.jpg`).
@@ -167,7 +202,8 @@ dopočítat: nástroj sem přišel v téhle verzi z externího zdroje (viz `git
 log`, merge `Hessevalentino/audit-fixes-dashboard-v2.4.1`), ne z vlastního
 vývoje v tomhle repu.
 
-[Unreleased]: https://github.com/eduardtomasek/agent-code-intel/compare/v4.1.0...HEAD
+[Unreleased]: https://github.com/eduardtomasek/agent-code-intel/compare/v5.0.0...HEAD
+[5.0.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v4.1.0...v5.0.0
 [4.1.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v3.0.0...52232ad1b202d520474278ca8044e24d7af398d2
 [3.0.0]: https://github.com/eduardtomasek/agent-code-intel/releases/tag/v3.0.0
