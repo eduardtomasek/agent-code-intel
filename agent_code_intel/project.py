@@ -34,12 +34,19 @@ class Identity:
 
     ``status`` is ``"OK"`` / ``"ABSENT"`` / ``"ERR"``; ``message`` is set only
     for ``"ERR"`` and is the exact text ``die`` would print.
+
+    ``agents`` is what ``AGENTS=`` recorded (schema 2), or ``None`` for a
+    schema-1 file written before the key existed. ``None`` therefore means "this
+    project never said", not "this project wants nothing" — the difference the
+    caller needs to fall back to the command line instead of auditing an agent
+    the project was never set up for.
     """
 
     status: str
     workspace: str | None = None
     project: str | None = None
     message: str | None = None
+    agents: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -59,6 +66,7 @@ class ProjectContext:
     ident_status: str
     ident_workspace: str | None
     ident_project: str | None
+    ident_agents: str | None = None
     workspace_explicit: bool = False
 
 
@@ -66,8 +74,16 @@ class ProjectContext:
 # directory name like "CS Imager (test)" is legal on macOS. The writer in
 # commands.py emits it unquoted, so \S+ here made a written file unreadable.
 _LINE_RE = re.compile(r"^[A-Z][A-Z0-9_]*=.+$")
-_KNOWN_KEYS = ("SCHEMA", "WORKSPACE", "PROJECT")
-_SUPPORTED_SCHEMA = "1"
+_KNOWN_KEYS = ("SCHEMA", "WORKSPACE", "PROJECT", "AGENTS")
+_REQUIRED_KEYS = ("SCHEMA", "WORKSPACE", "PROJECT")
+
+# Schema 1 is the shape every project written before ``AGENTS`` existed still
+# has on disk, and it stays readable forever: a tool that refuses to read the
+# files it wrote last week is worse than one that admits it does not know which
+# agents a project uses. Schema 2 adds ``AGENTS`` and is what --apply writes.
+_SCHEMA_CURRENT = "2"
+_SUPPORTED_SCHEMAS = ("1", "2")
+AGENT_VALUES = ("claude", "codex", "both")
 _LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
 _STAMP_RE = re.compile(rb"^# code-intel-init: version=(\S+) body=([0-9a-f]{64})$")
 
@@ -132,14 +148,23 @@ def read_code_intel(root: str) -> Identity:
                 return _err("%s:%d: duplicate key '%s'" % (path, lineno, key))
             values[key] = val
 
-    for key in _KNOWN_KEYS:
+    for key in _REQUIRED_KEYS:
         if key not in values:
             return _err("%s: missing required key %s" % (path, key))
 
-    if values["SCHEMA"] != _SUPPORTED_SCHEMA:
+    if values["SCHEMA"] not in _SUPPORTED_SCHEMAS:
         return _err(
             "%s: unsupported SCHEMA=%s (this tool understands %s)"
-            % (path, values["SCHEMA"], _SUPPORTED_SCHEMA)
+            % (path, values["SCHEMA"], " and ".join(_SUPPORTED_SCHEMAS))
+        )
+
+    if values["SCHEMA"] == _SCHEMA_CURRENT and "AGENTS" not in values:
+        return _err("%s: missing required key AGENTS (SCHEMA=2 records it)" % path)
+
+    if "AGENTS" in values and values["AGENTS"] not in AGENT_VALUES:
+        return _err(
+            "%s: AGENTS=%s is not one of %s"
+            % (path, values["AGENTS"], ", ".join(AGENT_VALUES))
         )
 
     if values["PROJECT"] != base:
@@ -149,7 +174,12 @@ def read_code_intel(root: str) -> Identity:
             % (path, values["PROJECT"], base, path)
         )
 
-    return Identity("OK", workspace=values["WORKSPACE"], project=values["PROJECT"])
+    return Identity(
+        "OK",
+        workspace=values["WORKSPACE"],
+        project=values["PROJECT"],
+        agents=values.get("AGENTS"),
+    )
 
 
 def read_registry(path: str) -> list[tuple[str, str]]:
@@ -317,6 +347,62 @@ def code_intel_present(context: ProjectContext) -> bool:
         and context.ident_workspace == context.workspace
         and context.ident_project == context.proj_name
     )
+
+
+def identity_current(context: ProjectContext, agents: str) -> bool:
+    """Whether ``.code-intel`` already says everything this run would write.
+
+    A schema-1 file is deliberately never "current": it predates ``AGENTS``, so
+    a project that was only ever set up for one agent still reads as an
+    unanswered question until ``--apply`` rewrites the file. That one rewrite is
+    what stops ``--status`` from auditing an agent the project never had.
+    """
+
+    return code_intel_present(context) and context.ident_agents == agents
+
+
+def write_identity(
+    root: str, workspace: str, proj_name: str, agents: str
+) -> None:
+    """Write ``.code-intel`` at the current schema. The only writer of it.
+
+    ``AGENTS`` is validated here rather than trusted: the file is the record
+    ``--status`` audits against, and a value the parser would later reject
+    would break the project it was meant to describe.
+    """
+
+    if agents not in AGENT_VALUES:
+        raise CliError(
+            "internal error: refusing to record AGENTS=%s in .code-intel" % agents
+        )
+    with open(os.path.join(root, ".code-intel"), "w", encoding="utf-8") as handle:
+        handle.write(
+            "# agent-code-intel — identity of this repository. Generated, do "
+            "not edit by hand.\nSCHEMA=%s\nWORKSPACE=%s\nPROJECT=%s\nAGENTS=%s\n"
+            % (_SCHEMA_CURRENT, workspace, proj_name, agents)
+        )
+
+
+def effective_agents(
+    recorded: str | None, cli_target: str, cli_explicit: bool
+) -> str:
+    """Which agents a run acts on, from the three places that can say.
+
+    In order:
+
+    * ``--agent`` on the command line — an explicit override always wins, and
+      is how a project changes what it is set up for;
+    * ``AGENTS=`` in the project's own ``.code-intel`` — what ``--apply`` set
+      this project up for, and therefore what every later run must act on.
+      Auditing codex artifacts in a project applied for claude alone reports a
+      drift whose only "fix" is installing an agent the user does not use;
+    * the command line's default — a schema-1 project has not said, and the
+      answer stays where it was before this key existed.
+    """
+
+    if cli_explicit or not recorded:
+        return cli_target
+    return recorded
 
 
 def registry_add(path: str, workspace: str, project_path: str) -> None:
@@ -565,6 +651,7 @@ def resolve_project(
         ident_status=identity.status,
         ident_workspace=identity.workspace,
         ident_project=identity.project,
+        ident_agents=identity.agents,
         workspace_explicit=workspace_was_explicit,
     )
 

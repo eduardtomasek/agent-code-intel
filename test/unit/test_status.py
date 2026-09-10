@@ -102,11 +102,16 @@ def _mkrepo(name="proj"):
     return project.canon(root)
 
 
-def _code_intel(root, ws, proj=None):
+def _code_intel(root, ws, proj=None, agents=None):
+    """Schema 1 by default — the shape every project written before AGENTS has.
+    Pass ``agents`` for a schema-2 file."""
+    body = "SCHEMA=%s\nWORKSPACE=%s\nPROJECT=%s\n" % (
+        "2" if agents else "1", ws, proj or os.path.basename(root)
+    )
+    if agents:
+        body += "AGENTS=%s\n" % agents
     with open(os.path.join(root, ".code-intel"), "w") as handle:
-        handle.write(
-            "SCHEMA=1\nWORKSPACE=%s\nPROJECT=%s\n" % (ws, proj or os.path.basename(root))
-        )
+        handle.write(body)
 
 
 def _grepai_config(root, size="256", overlap="25", ignores=None):
@@ -142,13 +147,15 @@ def _context(root, workspace="ws"):
     )
 
 
-def _run(*, as_json, status_all, context, stack, registry=None, source="defaults"):
+def _run(*, as_json, status_all, context, stack, registry=None, source="defaults",
+         agent_target="both", agent_explicit=False):
     out, err = io.StringIO(), io.StringIO()
     conf_paths = {"REGISTRY": registry} if registry else {}
     code = commands.run_status(
         as_json=as_json,
         status_all=status_all,
-        agent_target="both",
+        agent_target=agent_target,
+        agent_explicit=agent_explicit,
         context=context,
         loaded=_loaded(source=source, conf_paths=conf_paths),
         conf_dir="/conf/code-intel",
@@ -533,7 +540,8 @@ class JsonDocument(unittest.TestCase):
         doc = json.loads(out)
         entry = doc["projects"][0]
         self.assertEqual(list(entry), [
-            "workspace", "path", "name", "exists", "workspace_exists", "mapped",
+            "workspace", "path", "name", "agents", "agents_recorded", "exists",
+            "workspace_exists", "mapped",
             "mapped_path", "embedder", "chunking_ok", "ignores_ok", "watcher",
             "routing_skills", "session_start_hook", "gob_leftover", "collection", "ok",
         ])
@@ -629,6 +637,8 @@ class JsonDocument(unittest.TestCase):
             [
                 "workspace",
                 "path",
+                "agents",
+                "agents_recorded",
                 "code_intel_error",
                 "routing_skills",
                 "session_start_hook",
@@ -651,6 +661,8 @@ class JsonDocument(unittest.TestCase):
                 "workspace",
                 "path",
                 "name",
+                "agents",
+                "agents_recorded",
                 "exists",
                 "routing_skills",
                 "session_start_hook",
@@ -734,6 +746,134 @@ class GrepaiConfigProbes(unittest.TestCase):
     def test_ignores_no_block(self):
         path = self._cfg("chunking:\n  size: 1\n  overlap: 1\n")
         self.assertFalse(project.grepai_config_ignores_ok(path, ("a",)))
+
+
+class PerProjectAgents(unittest.TestCase):
+    """A project's own ``AGENTS`` decides what its row is audited against.
+
+    Auditing codex artifacts in a project that was applied for claude alone
+    reports a drift whose only fix is installing an agent the user does not
+    use — and ``--status --all`` used to do exactly that to every project on
+    the machine at once.
+    """
+
+    def _registry(self, *roots):
+        reg = os.path.join(tempfile.mkdtemp(prefix="aci-reg-"), "projects")
+        with open(reg, "w") as handle:
+            for root in roots:
+                handle.write("%s\t%s\n" % (os.path.basename(root), root))
+        return reg
+
+    def _healthy_stack(self, root, name):
+        return _Stack(
+            ws_exists=True,
+            show="  - %s: %s\n  model nomic-embed-text-v2-moe\n" % (name, root),
+            watch="running",
+        )
+
+    def test_recorded_agents_narrow_the_audit(self):
+        root = _mkrepo("widget")
+        _code_intel(root, "widget", agents="claude")
+        _grepai_config(root)
+        agent_skills.install_targets(root, "claude", False)
+        doc, _ = self._doc(root)
+        entry = doc["projects"][0]
+        self.assertEqual(entry["agents"], "claude")
+        self.assertEqual(entry["agents_recorded"], "claude")
+        self.assertEqual(set(entry["routing_skills"]), {"claude"})
+        self.assertIs(entry["ok"], True)
+
+    def test_an_explicit_flag_still_overrides_the_file(self):
+        root = _mkrepo("widget")
+        _code_intel(root, "widget", agents="claude")
+        _grepai_config(root)
+        agent_skills.install_targets(root, "claude", False)
+        doc, _ = self._doc(root, agent_target="both", agent_explicit=True)
+        entry = doc["projects"][0]
+        self.assertEqual(entry["agents"], "both")
+        self.assertEqual(entry["agents_recorded"], "claude")
+        self.assertEqual(set(entry["routing_skills"]), {"claude", "codex"})
+        self.assertIs(entry["ok"], False)
+
+    def test_a_schema_1_project_falls_back_to_the_command_line(self):
+        root = _mkrepo("widget")
+        _code_intel(root, "widget")
+        _grepai_config(root)
+        doc, _ = self._doc(root)
+        entry = doc["projects"][0]
+        self.assertEqual(entry["agents"], "both")
+        self.assertIsNone(entry["agents_recorded"])
+
+    def test_two_projects_in_one_run_answer_for_themselves(self):
+        claude_only = _mkrepo("widget")
+        _code_intel(claude_only, "widget", agents="claude")
+        _grepai_config(claude_only)
+        every = _mkrepo("gadget")
+        _code_intel(every, "gadget", agents="both")
+        _grepai_config(every)
+        reg = self._registry(claude_only, every)
+        _, out, _ = _run(
+            as_json=True,
+            status_all=True,
+            context=_context(claude_only),
+            registry=reg,
+            stack=_Stack(),
+        )
+        entries = {e["path"]: e for e in json.loads(out)["projects"]}
+        self.assertEqual(set(entries[claude_only]["routing_skills"]), {"claude"})
+        self.assertEqual(
+            set(entries[every]["routing_skills"]), {"claude", "codex"}
+        )
+
+    def test_the_text_table_tells_a_schema_1_project_what_it_is_missing(self):
+        root = _mkrepo("widget")
+        _code_intel(root, "widget")
+        _grepai_config(root)
+        _, out, _ = _run(
+            as_json=False,
+            status_all=True,
+            context=_context(root),
+            registry=self._registry(root),
+            stack=_Stack(),
+        )
+        self.assertIn(".code-intel predates AGENTS", out)
+
+    def test_a_recorded_project_is_not_nagged(self):
+        root = _mkrepo("widget")
+        _code_intel(root, "widget", agents="claude")
+        _grepai_config(root)
+        _, out, _ = _run(
+            as_json=False,
+            status_all=True,
+            context=_context(root),
+            registry=self._registry(root),
+            stack=_Stack(),
+        )
+        self.assertNotIn("predates AGENTS", out)
+
+    def test_the_header_names_where_the_answer_came_from(self):
+        root = _mkrepo("widget")
+        _code_intel(root, "widget", agents="claude")
+        context = project.resolve_project(
+            root=root, root_explicit=True, mode="status", workspace=None,
+            home=os.path.expanduser("~"), status_all=False,
+        )
+        _, out, _ = _run(
+            as_json=False, status_all=False, context=context, stack=_Stack()
+        )
+        self.assertIn("Agents:    claude (from .code-intel)", out)
+
+    def _doc(self, root, agent_target="both", agent_explicit=False):
+        _, out, err = _run(
+            as_json=True,
+            status_all=True,
+            context=_context(root),
+            registry=self._registry(root),
+            agent_target=agent_target,
+            agent_explicit=agent_explicit,
+            stack=self._healthy_stack(root, os.path.basename(root)),
+        )
+        return json.loads(out), err
 
 
 if __name__ == "__main__":

@@ -358,6 +358,21 @@ definition range with `ctags` instead of guessing a line window, and use
 }
 
 
+def _agents_line(recorded: str | None, cli_target: str, cli_explicit: bool) -> str:
+    """The ``Agents:`` header, naming which of the three sources decided.
+
+    Once the answer can come from the project file, printing the value alone
+    leaves the reader guessing why a run acts on one agent and not the other.
+    """
+
+    agents = project.effective_agents(recorded, cli_target, cli_explicit)
+    if cli_explicit:
+        return "%s (--agent)" % agents
+    if recorded:
+        return "%s (from .code-intel)" % agents
+    return "%s (default)" % agents
+
+
 def run_init(
     *,
     apply: bool,
@@ -375,6 +390,7 @@ def run_init(
     stderr: TextIO,
     stack: "integrations.Stack | None" = None,
     write_hook: bool = True,
+    agent_explicit: bool = False,
 ) -> int:
     """Run the initial project setup in preview or apply mode."""
 
@@ -383,9 +399,15 @@ def run_init(
         stack = integrations.Stack(loaded.child_env)
     config = loaded.config
     context = _adopt_preview_context(context)
+    # What this run acts on, and what --apply then records in `.code-intel` so
+    # every later run acts on the same thing without being told again.
+    agents_line = _agents_line(context.ident_agents, agent_target, agent_explicit)
+    agent_target = project.effective_agents(
+        context.ident_agents, agent_target, agent_explicit
+    )
     reporter.say("Project:   %s" % context.root)
     reporter.say("Workspace: %s" % context.workspace)
-    reporter.say("Agents:    %s" % agent_target)
+    reporter.say("Agents:    %s" % agents_line)
     reporter.say("")
     _init_preflight(
         reporter,
@@ -651,10 +673,16 @@ def _preview_init(
         if context.workspace_explicit and legacy_workspace and context.workspace != legacy_workspace:
             plan("CONFLICT", "explicit workspace '%s' vs. '%s' read from refresh-intel.sh" % (context.workspace, legacy_workspace))
 
-    if project.code_intel_present(context):
-        plan("keep", ".code-intel present")
+    if project.identity_current(context, agent_target):
+        plan("keep", ".code-intel present (AGENTS=%s)" % agent_target)
+    elif project.code_intel_present(context):
+        plan(
+            "EDIT",
+            ".code-intel (AGENTS=%s, was %s)"
+            % (agent_target, context.ident_agents or "unrecorded"),
+        )
     else:
-        plan("CREATE", ".code-intel (WORKSPACE=%s, PROJECT=%s)" % (context.workspace, context.proj_name))
+        plan("CREATE", ".code-intel (WORKSPACE=%s, PROJECT=%s, AGENTS=%s)" % (context.workspace, context.proj_name, agent_target))
 
     show = stack.ws_show(context.workspace)
     if stack.ws_exists(context.workspace):
@@ -864,13 +892,25 @@ def _apply_init(
     else:
         reporter.say("skipped git (--no-git)")
 
-    identity_path = os.path.join(context.root, ".code-intel")
-    if project.code_intel_present(context):
-        reporter.say(".code-intel already present")
+    # The file is rewritten, not merely created, when the agents it records are
+    # not the agents this run applies: `.code-intel` is what every later
+    # --status, --refresh and --remove reads back, so a stale AGENTS there would
+    # keep auditing an agent this project no longer has.
+    if project.identity_current(context, agent_target):
+        reporter.say(".code-intel already present (AGENTS=%s)" % agent_target)
     else:
-        with open(identity_path, "w", encoding="utf-8") as handle:
-            handle.write("# agent-code-intel — identity of this repository. Generated, do not edit by hand.\nSCHEMA=1\nWORKSPACE=%s\nPROJECT=%s\n" % (context.workspace, context.proj_name))
-        reporter.say("wrote .code-intel")
+        existed = project.code_intel_present(context)
+        was = context.ident_agents
+        project.write_identity(
+            context.root, context.workspace, context.proj_name, agent_target
+        )
+        if existed:
+            reporter.say(
+                "updated .code-intel (AGENTS=%s, was %s)"
+                % (agent_target, was or "unrecorded")
+            )
+        else:
+            reporter.say("wrote .code-intel (AGENTS=%s)" % agent_target)
     reporter.say("")
 
     reporter.hr("1. GrepAI workspace")
@@ -921,7 +961,8 @@ def _apply_init(
     reporter.hr("3. Chunking + ignore config")
     before = None
     if os.path.isfile(context.grepai_cfg):
-        before = open(context.grepai_cfg, encoding="utf-8").read()
+        with open(context.grepai_cfg, encoding="utf-8") as handle:
+            before = handle.read()
     else:
         _require_success(stack.grepai_init(context.root, config.embed_provider, config.embed_model), "grepai init")
         reporter.say("created %s" % context.grepai_cfg)
@@ -1106,6 +1147,7 @@ def run_remove(
     stdout: TextIO,
     stderr: TextIO,
     stack: "integrations.Stack | None" = None,
+    agent_explicit: bool = False,
 ) -> int:
     """Preview or apply the safe project removal sequence (issue #56)."""
     reporter = Reporter(stdout, stderr)
@@ -1115,11 +1157,17 @@ def run_remove(
     registry_path = loaded.conf_paths.get("REGISTRY") or os.path.join(
         conf_dir, "projects"
     )
+    # Tear out what was set up here, which is what `.code-intel` recorded — not
+    # what the default happens to be on the machine doing the removing.
+    agents_line = _agents_line(context.ident_agents, agent_target, agent_explicit)
+    agent_target = project.effective_agents(
+        context.ident_agents, agent_target, agent_explicit
+    )
 
     if not as_json:
         reporter.say("Project:   %s" % context.root)
         reporter.say("Workspace: %s" % context.workspace)
-        reporter.say("Agents:    %s" % agent_target)
+        reporter.say("Agents:    %s" % agents_line)
         reporter.say("")
 
     reporter.hr(
@@ -1333,6 +1381,7 @@ def run_status(
     stdout: TextIO,
     stderr: TextIO,
     stack: "integrations.Stack | None" = None,
+    agent_explicit: bool = False,
 ) -> int:
     """Entry point for the ``status`` mode — text table or JSON.
 
@@ -1350,11 +1399,20 @@ def run_status(
     )
 
     # The Project / Workspace / Agents header (``9406cce`` :2210–:2215) —
-    # suppressed by --json in every mode (RT-9 / DEV-8).
+    # suppressed by --json in every mode (RT-9 / DEV-8). Under --all there is no
+    # single answer to print: every row resolves its own from its own file.
     if not as_json:
+        if agent_explicit:
+            agents_line = "%s (--agent)" % agent_target
+        elif status_all:
+            agents_line = "per project (default %s)" % agent_target
+        else:
+            agents_line = _agents_line(
+                context.ident_agents, agent_target, agent_explicit
+            )
         reporter.say("Project:   %s" % context.root)
         reporter.say("Workspace: %s" % context.workspace)
-        reporter.say("Agents:    %s" % agent_target)
+        reporter.say("Agents:    %s" % agents_line)
         reporter.say("")
 
     if as_json:
@@ -1366,6 +1424,7 @@ def run_status(
             version,
             agent_target,
             stack,
+            agent_explicit,
         )
         return 0
     return _status_text(
@@ -1376,6 +1435,7 @@ def run_status(
         config,
         agent_target,
         stack,
+        agent_explicit,
     )
 
 
@@ -1475,6 +1535,7 @@ def _status_text(
     config: Config,
     agent_target: str,
     stack: integrations.Stack,
+    agent_explicit: bool = False,
 ) -> int:
     drift = False
     reporter.hr("Code-context tools")
@@ -1488,7 +1549,8 @@ def _status_text(
             return 0
         for workspace, path in rows:
             drift |= _status_one(
-                reporter, workspace, path, config, stack, agent_target
+                reporter, workspace, path, config, stack, agent_target,
+                agent_explicit,
             )
     else:
         reporter.hr("code-intel status — %s" % context.root)
@@ -1499,6 +1561,7 @@ def _status_text(
             config,
             stack,
             agent_target,
+            agent_explicit,
         )
 
     reporter.say("")
@@ -1516,17 +1579,24 @@ def _status_one(
     config: Config,
     stack: integrations.Stack,
     agent_target: str | None = None,
+    agent_explicit: bool = False,
 ) -> bool:
     """One project's table rows; returns whether it contributed drift
     (``9406cce`` :1710–:1771).
 
     ``.code-intel`` outranks the registry's own workspace; a broken file is a
     ``BROKEN`` row, never a ``die`` — this also runs inside the ``--all`` loop,
-    where one broken project must not hide every other.
+    where one broken project must not hide every other. It also names the
+    agents to audit, which is why ``--all`` can hold projects set up for
+    different agents and report each one against what it actually has.
     """
 
     root = project.canon(path)
     identity = project.read_code_intel(root)
+    if agent_target is not None:
+        agent_target = project.effective_agents(
+            identity.agents, agent_target, agent_explicit
+        )
 
     if identity.status == "ERR":
         reporter.row("BROKEN", "%s  %s" % (workspace, path))
@@ -1608,6 +1678,14 @@ def _status_one(
         )
     if os.path.isfile(os.path.join(path, ".grepai", "index.gob")):
         reporter.row("", "  stale .grepai/index.gob present (rm it)")
+    if identity.status == "OK" and identity.agents is None:
+        # Not drift: the project works, it just cannot say which agents it was
+        # set up for, so this audit fell back to the command line's default.
+        reporter.row(
+            "",
+            "  .code-intel predates AGENTS — --apply records which agents this "
+            "project uses",
+        )
 
     reporter.row("DRIFT" if bad else "ok", "%s  %s" % (workspace, path))
     return bad
@@ -1624,6 +1702,7 @@ def _status_json(
     version: str,
     agent_target: str,
     stack: integrations.Stack,
+    agent_explicit: bool = False,
 ) -> None:
     """Machine-readable status (``9406cce`` :1781–:1942).
 
@@ -1652,7 +1731,9 @@ def _status_json(
         "svc": _json_services(config, stack),
         "projects": [],
     }
-    projects = _json_projects(registry_path, config, agent_target, stack)
+    projects = _json_projects(
+        registry_path, config, agent_target, stack, agent_explicit
+    )
     doc["projects"] = projects
     meta["project_count"] = str(len(projects))
 
@@ -1748,17 +1829,27 @@ def _json_projects(
     config: Config,
     agent_target: str,
     stack: integrations.Stack,
+    agent_explicit: bool = False,
 ) -> list[dict[str, object]]:
     projects: list[dict[str, object]] = []
+    cli_target = agent_target
 
     for workspace, registered_path in project.read_registry(registry_path):
         root = project.canon(registered_path)
         identity = project.read_code_intel(root)
+        # Each project answers for itself: `agents` is what this row was
+        # audited against, `agents_recorded` is what its own file says (null
+        # for a schema-1 project that predates the key).
+        agent_target = project.effective_agents(
+            identity.agents, cli_target, agent_explicit
+        )
         entry: dict[str, object] = {}
 
         if identity.status == "ERR":
             entry["workspace"] = workspace
             entry["path"] = root
+            entry["agents"] = agent_target
+            entry["agents_recorded"] = identity.agents
             entry["code_intel_error"] = identity.message
             entry["routing_skills"] = agent_skills.status(root, agent_target)
             entry["session_start_hook"] = hooks.status(root, agent_target)
@@ -1775,6 +1866,8 @@ def _json_projects(
         entry["workspace"] = workspace
         entry["path"] = root
         entry["name"] = proj_name
+        entry["agents"] = agent_target
+        entry["agents_recorded"] = identity.agents
 
         if not os.path.isdir(root):
             entry["exists"] = False
@@ -1879,6 +1972,7 @@ def run_refresh(
     stdout: TextIO,
     stderr: TextIO,
     stack: "integrations.Stack | None" = None,
+    agent_explicit: bool = False,
 ) -> int:
     """Entry point for the ``refresh`` mode.
 
@@ -1891,13 +1985,19 @@ def run_refresh(
     if stack is None:
         stack = integrations.Stack(loaded.child_env)
     config = loaded.config
+    # --refresh audits the same artifacts --apply wrote, so it asks the same
+    # file which ones those are.
+    agents_line = _agents_line(context.ident_agents, agent_target, agent_explicit)
+    agent_target = project.effective_agents(
+        context.ident_agents, agent_target, agent_explicit
+    )
 
     # `if [[ "$AS_JSON" != true ]]` (``9406cce`` :2210) — one guard for every
     # mode's header; --refresh inherits it (DEV-8 / RT-9).
     if not as_json:
         reporter.say("Project:   %s" % context.root)
         reporter.say("Workspace: %s" % context.workspace)
-        reporter.say("Agents:    %s" % agent_target)
+        reporter.say("Agents:    %s" % agents_line)
         reporter.say("")
 
     _refresh_preflight(reporter, do_grepai, do_gitnexus, context, config, stack)

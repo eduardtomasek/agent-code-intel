@@ -5,6 +5,38 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
 
 ## [Unreleased]
 
+### Přidáno
+
+- `.code-intel` si pamatuje, pro které agenty byl projekt zapojený. `--apply`
+  zapisuje `AGENTS=claude|codex|both` a zvedá `SCHEMA` na `2`; `--status`,
+  `--refresh` a `--remove` pak pracují právě s těmi agenty, aniž by se jim to
+  muselo pokaždé znovu říkat. Dřív byla odpověď jen v příkazové řádce, takže
+  projekt zapojený pro samotného Clauda hlásil při každém běhu bez
+  `--agent claude` drift na chybějícím Codex routing skillu a chybějícím Codex
+  hooku — červená, kterou nešlo uklidit ničím jiným než instalací agenta, který
+  uživatele nezajímá. Obcházelo se to wrapperem na `PATH` nebo tím, že se
+  přepínač psal ke každému příkazu; obojí je nadbytečné.
+- `--status --all` řeší agenty pro každý projekt zvlášť, takže jeden stroj může
+  mít vedle sebe projekt pro Clauda i projekt pro oba a každý řádek se porovnává
+  s tím, co ten projekt skutečně má.
+- JSON ze `--status --all --json` má u každého projektu dva nové klíče: `agents`
+  (proti čemu se řádek posuzoval) a `agents_recorded` (co říká jeho vlastní
+  soubor, `null` u schématu 1). Ostatní klíče ani jejich pořadí se nemění.
+
+### Změněno
+
+- `--apply` `.code-intel` nejen zakládá, ale i přepisuje, pokud se zaznamenaní
+  agenti liší od těch, se kterými se právě spouští — `--agent` je tedy dál
+  nadřazený a je to způsob, jak volbu projektu změnit. Identický soubor zůstává
+  beze změny bajt po bajtu.
+- Hlavička `Agents:` u `--apply`, `--refresh`, `--status` a `--remove` říká i
+  odkud hodnota pochází: `(--agent)`, `(from .code-intel)`, nebo `(default)`.
+- Soubory se `SCHEMA=1` se čtou dál a fungují beze změny; `--status` u nich
+  přidá řádek `.code-intel predates AGENTS`, který není drift a jen říká, že
+  příští `--apply` volbu zaznamená. Naopak starší verze nástroje nový soubor
+  nepřečte a skončí hláškou `unsupported SCHEMA=2` — po downgradu je potřeba
+  `--apply` z odpovídající verze.
+
 ## [5.1.0] - 2026-09-10
 
 Drobné vydání: `--apply` ignoruje `.DS_Store` a preflight pozná BSD `ctags` od

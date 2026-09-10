@@ -174,8 +174,9 @@ test_path_flag_overrides_cwd() {
 # #13 (writing .code-intel in --apply) has no automated test here: --apply
 # and --preview both require preflight, the file-header known limitation
 # above. Verified manually instead: preview reports CREATE without writing;
-# --apply writes the header/SCHEMA=1/WORKSPACE/PROJECT shape; a second
-# --apply says "already present" and leaves it byte-for-byte unchanged;
+# --apply writes the header/SCHEMA=2/WORKSPACE/PROJECT/AGENTS shape; a second
+# --apply with the same --agent says "already present" and leaves it
+# byte-for-byte unchanged, and a different --agent rewrites AGENTS;
 # --status --json afterward reads the workspace back from it.
 
 test_code_intel_overrides_basename() {
