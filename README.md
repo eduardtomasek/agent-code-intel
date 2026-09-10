@@ -7,7 +7,7 @@
 Tato dokumentace popisuje instalaci celého stacku na Macu. Předpokládá pouze
 základní práci s aplikacemi; všechny potřebné kroky jsou vysvětlené.
 
-Text odpovídá vydání 5.1.0.
+Text odpovídá vydání 6.0.0.
 
 Po dokončení se nové projekty nastavují takto:
 
@@ -88,7 +88,7 @@ agent-code-intel --agent both --apply
 Místo posledního příkazu použij `--agent claude`, pokud má projekt obsluhovat
 jen Claude, nebo `--agent codex`, pokud jen Codex. `both` nastaví oba.
 
-## Aktualizace na 5.0.0
+## Aktualizace na 6.0.0
 
 Aktualizace vždy začíná checkoutem, ze kterého jsi nástroj instaloval. Stáhni
 nový zdroj, znovu nainstaluj **lokální soubor** a pak v každém projektu obnov
@@ -114,12 +114,30 @@ agent-code-intel --agent codex --apply
 konfiguraci. `--apply` je idempotentní: identický routing skill nechá beze
 změny a jinak aktualizuje pouze artefakty vybraného agenta.
 
+### Co se v šestce mění nekompatibilně
+
+`--apply` zapisuje `.code-intel` ve **schématu 2**, které navíc obsahuje klíč
+`AGENTS` — viz [Které agenty projekt používá](#které-agenty-projekt-používá).
+
+- **Projekty ze starších verzí fungují dál.** Jejich `SCHEMA=1` se čte
+  a `--status` u nich přidá řádek `.code-intel predates AGENTS`, který **není
+  drift**. Spuštění `--apply` není povinné; je to jen způsob, jak volbu
+  zaznamenat.
+- **Opačný směr nefunguje.** Jakmile projekt projde `--apply` ze šestky, starší
+  verze nástroje jeho `.code-intel` odmítne s hláškou `unsupported SCHEMA=2`.
+  Po downgradu je proto potřeba spustit `--apply` z té starší verze, která
+  soubor přepíše zpět na schéma 1.
+
+Pokud na jednom stroji držíš vedle sebe dvě různé verze nástroje, aktualizuj
+je obě, nebo nespouštěj `--apply` ze šestky v projektech, které obsluhuje
+starší instalace.
+
 ---
 
 ## Obsah
 
 0. [Rychlý start](#rychlý-start)
-1. [Aktualizace na 5.0.0](#aktualizace-na-500)
+1. [Aktualizace na 6.0.0](#aktualizace-na-600)
 2. [Co to vlastně dělá](#1-co-to-vlastně-dělá)
 3. [Co budeš potřebovat](#2-co-budeš-potřebovat)
 4. [Terminál — základ](#3-terminál--základ)
@@ -188,7 +206,7 @@ na stahování.
 ## 2. Co budeš potřebovat
 
 - Mac s macOS — návod je psaný pro Apple Silicon i Intel
-- Pro verzi 5.0.0 Python 3.11 nebo novější; po instalaci ověřte, že
+- Od verze 5.0.0 Python 3.11 nebo novější; po instalaci ověřte, že
   `python3 --version` vypíše alespoň 3.11. Python 3.9 a starší skončí
   srozumitelnou chybou bez tracebacku
 - Připojení k internetu
@@ -200,7 +218,7 @@ u každého je napsané, co se stane a jak poznáš, že to vyšlo.
 
 ### Závislosti ve třech úrovních
 
-Verze 5.0.0 rozlišuje mezi tím, co je nutné pro samotný produkt, co má
+Od verze 5.0.0 nástroj rozlišuje mezi tím, co je nutné pro samotný produkt, co má
 spolehlivý náhradní postup a co rozšiřuje schopnosti agenta:
 
 | Úroveň | Nástroje | Když chybí |
@@ -543,9 +561,9 @@ agent-code-intel --version
 
 Příkaz musí vypsat číslo verze.
 
-### Verze 5.0.0 a Python 3.11+
+### Python 3.11+
 
-Verze 5 používá aktivní zdrojový launcher `agent-code-intel` a balík
+Verze 5 a 6 používají aktivní zdrojový launcher `agent-code-intel` a balík
 `agent_code_intel/`. Vyžaduje Python 3.11 nebo novější. Launcher automaticky
 nevybírá jiný interpret a při staré verzi skončí přesnou diagnostikou.
 Při instalaci z checkoutu použijte aktuální `python3`, jehož verzi lze ověřit

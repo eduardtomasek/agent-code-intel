@@ -5,6 +5,20 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
 
 ## [Unreleased]
 
+## [6.0.0] - 2026-09-10
+
+`.code-intel` si pamatuje, pro které agenty byl projekt zapojený. Hlavní verze
+se zvedá kvůli schématu toho souboru, ne kvůli rozsahu změn.
+
+### Breaking
+
+- `--apply` zapisuje `.code-intel` ve **schématu 2** s klíčem `AGENTS`. Starší
+  verze nástroje takový soubor odmítnou s hláškou `unsupported SCHEMA=2`, takže
+  po downgradu je potřeba `--apply` z té starší verze. Opačný směr je v pořádku:
+  soubory se `SCHEMA=1` se čtou dál a fungují beze změny, `--status` u nich jen
+  přidá řádek `.code-intel predates AGENTS`, který **není drift** — spuštění
+  `--apply` tedy není povinné.
+
 ### Přidáno
 
 - `.code-intel` si pamatuje, pro které agenty byl projekt zapojený. `--apply`
@@ -31,11 +45,6 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
   beze změny bajt po bajtu.
 - Hlavička `Agents:` u `--apply`, `--refresh`, `--status` a `--remove` říká i
   odkud hodnota pochází: `(--agent)`, `(from .code-intel)`, nebo `(default)`.
-- Soubory se `SCHEMA=1` se čtou dál a fungují beze změny; `--status` u nich
-  přidá řádek `.code-intel predates AGENTS`, který není drift a jen říká, že
-  příští `--apply` volbu zaznamená. Naopak starší verze nástroje nový soubor
-  nepřečte a skončí hláškou `unsupported SCHEMA=2` — po downgradu je potřeba
-  `--apply` z odpovídající verze.
 
 ## [5.1.0] - 2026-09-10
 
