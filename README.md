@@ -7,6 +7,10 @@
 Tato dokumentace popisuje instalaci celého stacku na Macu. Předpokládá pouze
 základní práci s aplikacemi; všechny potřebné kroky jsou vysvětlené.
 
+Text popisuje připravované vydání 5.0.0. Dokud nebude vydání uzavřené, může
+`agent-code-intel --version` vracet předchozí verzi 4.1.0; samotné vydání řeší
+issue #88.
+
 Po dokončení se nové projekty nastavují takto:
 
 ```
@@ -44,8 +48,7 @@ xcode-select --install
 git --version
 ```
 
-Pak nainstaluj Homebrew, Python, kontejnery, lokální embeddingy, Node.js a
-vyhledávací nástroje:
+Pak nainstaluj Homebrew, Python, kontejnery, lokální embeddingy a Node.js:
 
 ```
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -56,14 +59,12 @@ open -a OrbStack
 brew install ollama
 brew services start ollama
 brew install node
-npm i -g gitnexus
-brew install yoanbernabeu/tap/grepai
-brew install ripgrep
 ```
 
-`ripgrep` poskytuje příkaz `rg`. Je volitelný, ale routing skill ho použije pro
-přesné hledání a závěrečné ověření; bez něj zůstávají GrepAI a GitNexus
-funkční. Po prvním otevření OrbStacku vyčkej, až dokončí nastavení, a ověř ho:
+`gitnexus` není Homebrew balíček a `grepai` se instaluje vlastním instalačním
+příkazem. Obě věci a nástroje pro `code-context` nabídne nebo vypíše
+`--install-deps` níže. Po prvním otevření OrbStacku vyčkej, až dokončí
+nastavení, a ověř ho:
 
 ```
 docker info
@@ -76,6 +77,7 @@ v prvním projektu:
 git clone https://github.com/eduardtomasek/agent-code-intel.git ~/src/agent-code-intel
 cd ~/src/agent-code-intel
 python3 ./agent-code-intel --install
+agent-code-intel --install-deps
 mkdir -p ~/projects/muj-projekt
 cd ~/projects/muj-projekt
 agent-code-intel --agent both --apply
@@ -84,7 +86,7 @@ agent-code-intel --agent both --apply
 Místo posledního příkazu použij `--agent claude`, pokud má projekt obsluhovat
 jen Claude, nebo `--agent codex`, pokud jen Codex. `both` nastaví oba.
 
-## Aktualizace na 4.1.0
+## Aktualizace na 5.0.0
 
 Aktualizace vždy začíná checkoutem, ze kterého jsi nástroj instaloval. Stáhni
 nový zdroj, znovu nainstaluj **lokální soubor** a pak v každém projektu obnov
@@ -94,6 +96,7 @@ spravované artefakty:
 cd ~/src/agent-code-intel
 git pull --ff-only
 python3 ./agent-code-intel --install
+agent-code-intel --install-deps
 cd /cesta/k/projektu
 agent-code-intel --agent both --apply
 ```
@@ -114,7 +117,7 @@ změny a jinak aktualizuje pouze artefakty vybraného agenta.
 ## Obsah
 
 0. [Rychlý start](#rychlý-start)
-1. [Aktualizace na 4.1.0](#aktualizace-na-410)
+1. [Aktualizace na 5.0.0](#aktualizace-na-500)
 2. [Co to vlastně dělá](#1-co-to-vlastně-dělá)
 3. [Co budeš potřebovat](#2-co-budeš-potřebovat)
 4. [Terminál — základ](#3-terminál--základ)
@@ -126,12 +129,13 @@ změny a jinak aktualizuje pouze artefakty vybraného agenta.
 10. [GitNexus](#9-gitnexus)
 11. [agent-code-intel](#10-agent-code-intel)
 12. [První projekt](#11-první-projekt)
-13. [Ověření, že to funguje](#12-ověření-že-to-funguje)
-14. [Každodenní používání](#13-každodenní-používání)
-15. [Dashboard — přehled o všem najednou](#14-dashboard--přehled-o-všem-najednou)
-16. [Když se něco pokazí](#15-když-se-něco-pokazí)
-17. [Odinstalace](#16-odinstalace)
-18. [Slovníček](#17-slovníček)
+13. [Codex — tři brány pro aktivní hook](#codex--tři-brány-pro-aktivní-hook)
+14. [Ověření, že to funguje](#12-ověření-že-to-funguje)
+15. [Každodenní používání](#13-každodenní-používání)
+16. [Dashboard — přehled o všem najednou](#14-dashboard--přehled-o-všem-najednou)
+17. [Když se něco pokazí](#15-když-se-něco-pokazí)
+18. [Odinstalace](#16-odinstalace)
+19. [Slovníček](#17-slovníček)
 
 ---
 
@@ -182,7 +186,7 @@ na stahování.
 ## 2. Co budeš potřebovat
 
 - Mac s macOS — návod je psaný pro Apple Silicon i Intel
-- Pro verzi 4.1.0 Python 3.11 nebo novější; po instalaci ověřte, že
+- Pro verzi 5.0.0 Python 3.11 nebo novější; po instalaci ověřte, že
   `python3 --version` vypíše alespoň 3.11. Python 3.9 a starší skončí
   srozumitelnou chybou bez tracebacku
 - Připojení k internetu
@@ -191,6 +195,42 @@ na stahování.
 
 Nemusíš umět programovat. Nemusíš rozumět tomu, co jednotlivé příkazy dělají —
 u každého je napsané, co se stane a jak poznáš, že to vyšlo.
+
+### Závislosti ve třech úrovních
+
+Verze 5.0.0 rozlišuje mezi tím, co je nutné pro samotný produkt, co má
+spolehlivý náhradní postup a co rozšiřuje schopnosti agenta:
+
+| Úroveň | Nástroje | Když chybí |
+| --- | --- | --- |
+| **Povinné** | `git`, `curl`, Python 3.11+, Node.js, Docker/OrbStack, Ollama, `grepai`, `gitnexus` | preflight může práci zablokovat; `grepai` a `gitnexus` nejsou v Homebrew |
+| **Doporučené s fallbackem** | `rg`, `ctags` (`universal-ctags`) | preflight vypíše `warn`; pro hledání lze použít `grep` a pro rozsahy Pythonu stdlib `ast`, případně `ast-grep` |
+| **Silně doporučené** | `ast-grep`, `fd`, `rga`, `tokei`, `scc` | `warn`; agent přijde jen o strukturální dotazy, výběr podle vlastností, čtení archivů nebo přehled/složitost |
+
+`--install-deps` kontroluje sedm nástrojů druhé a třetí úrovně plus
+`grepai` a `gitnexus`, tedy celkem devět: `rg`, `ctags`, `ast-grep`, `fd`,
+`rga`, `tokei`, `scc`, `grepai` a `gitnexus`. Na macOS nabídne `brew install` pro sedm
+balíčků dostupných v Homebrew; pro `grepai` vypíše vlastní instalační příkaz a
+pro `gitnexus` `npm i -g gitnexus`. Bez TTY pouze vypíše příkazy a nic
+neinstaluje.
+
+Spusť ho po instalaci tohoto nástroje:
+
+```
+agent-code-intel --install-deps
+```
+
+Přepínač `--no-install-deps` potlačí nabídku a instalaci Homebrew, ale stále
+vypíše kontrolu, chybějící nástroje a příkazy, které můžeš spustit ručně:
+
+```
+agent-code-intel --install-deps --no-install-deps
+```
+
+`rg` a `ctags` jsou důležité pro dokumentovaný postup, ale jejich absence není
+blokace. U nepythonového jazyka, kde `ctags` nevrací konce definic, však bez
+`ast-grep` zůstává jen méně spolehlivý ruční fallback; preflight navíc
+výslovně varuje, když chybí oba nástroje.
 
 ---
 
@@ -404,11 +444,11 @@ GrepAI je ten nástroj, který dělá sémantické vyhledávání. Instaluje se 
 vlastního repozitáře autora:
 
 ```
-brew install yoanbernabeu/tap/grepai
+curl -sSL https://raw.githubusercontent.com/yoanbernabeu/grepai/main/install.sh | sh
 ```
 
-Homebrew se během instalace může zeptat, jestli tomu repozitáři důvěřuješ.
-Potvrď.
+Instalaci lze místo toho spustit přes `agent-code-intel --install-deps`, který
+vypíše tento příkaz, pokud `grepai` chybí.
 
 Kontrola:
 
@@ -501,9 +541,9 @@ agent-code-intel --version
 
 Příkaz musí vypsat číslo verze.
 
-### Verze 4.1.0 a Python 3.11+
+### Verze 5.0.0 a Python 3.11+
 
-Verze 4 používá aktivní zdrojový launcher `agent-code-intel` a balík
+Verze 5 používá aktivní zdrojový launcher `agent-code-intel` a balík
 `agent_code_intel/`. Vyžaduje Python 3.11 nebo novější. Launcher automaticky
 nevybírá jiný interpret a při staré verzi skončí přesnou diagnostikou.
 Při instalaci z checkoutu použijte aktuální `python3`, jehož verzi lze ověřit
@@ -518,7 +558,41 @@ do `~/.local/bin/code-intel-dash` a celý importovatelný balík do
 `~/.local/lib/agent-code-intel/`. Instalace zkopíruje všechny Pythonové
 moduly i dashboard, nepřenáší `__pycache__` a upgrade nahradí vlastní balík
 jako celek. Verze dashboardu se čte z jeho vlastního `VERSION`; verze CLI
-`4.1.0` ji nepřebíjí.
+ji nepřebíjí.
+
+### Přepínače pro závislosti a hook
+
+`--install-deps` je samostatný režim pro kontrolu a nabídku instalace
+závislostí. `--install` instaluje jen vlastní produkt a `--apply` cizí
+závislosti pouze kontroluje — ani jeden z nich je sám neinstaluje.
+
+Pokud si hooky v projektu spravuješ sám, použij při nastavování:
+
+```
+agent-code-intel --agent both --apply --no-hook
+```
+
+`--no-hook` přeskočí zápis repo-lokálního `SessionStart` hooku. Skill
+`code-context`, routing skill a ostatní dokumentace se tím nevypínají.
+
+### Ověřené jazyky pro přesné rozsahy
+
+Přesnost rozsahů byla ověřena na těchto skutečných projektech:
+
+| Jazyk | Co bylo ověřeno | Doporučený postup |
+| --- | --- | --- |
+| **Python** | `ctags` přesně 10/10 rozsahů | `ctags` |
+| **TypeScript** | `ctags` nemá konce u 170 definic; `ast-grep` 99,4 % | `ast-grep` s `kind:` pravidlem |
+| **PHP / Laravel** | `ctags` nemá konce u 145 definic; `ast-grep` 99,3 % | `ast-grep` s `kind:` pravidlem |
+| **JavaScript** | rozsahy ověřené na 236 definicích; pro širší pokrytí je nutné přidat `function_expression` a `arrow_function` | nejdřív ověřit `ctags`, jinak `ast-grep` podle skillu |
+| **Shell** | pouze rozsahy; `ctags` našel konce u 2/70 definic | `ast-grep` kind pravidlo; při jeho absenci ruční fallback |
+
+Úplná sada ověření skillu se týkala Pythonu, TypeScriptu a PHP; JavaScript a
+Shell mají jen výše uvedené cílené testy. Ostatní jazyky testované nejsou.
+Nepřenášej proto výsledek z jednoho jazyka na jiný bez ověření. Nejdřív zjisti, zda
+`ctags --_xformat='%N|%n|%{end}|%K'` vrací konce; pokud je nevrací a jazyk
+podporuje `ast-grep`, použij kind pravidlo ze skillu `code-context`. Postup a
+naměřená data jsou v [plánu měření code-context](docs/plans/code-context-toolchain.md).
 
 ### Konfigurace: `defaults.env` a `defaults.toml`
 
@@ -597,10 +671,14 @@ soubory:
 | `.gitignore`                               | Aby se indexy nedostaly do gitu                       | agent-code-intel                     |
 | `.grepai/`                                 | Nastavení indexování pro tenhle projekt               | agent-code-intel                     |
 | `.mcp.json`                                | Napojení vyhledávání na tvého AI agenta               | agent-code-intel                     |
-| `CLAUDE.md`                                | Odkaz na routing skill pro Claude                     | agent-code-intel pro `claude`/`both` |
+| `CLAUDE.md`                                | Odkaz na routing a `code-context` skilly pro Claude  | agent-code-intel pro `claude`/`both` |
+| `.claude/helpers/code-context-hint.py`     | Repo-lokální Claude i Codex `SessionStart` hint      | agent-code-intel pro `claude`/`both` |
 | `.claude/skills/agent-code-intel-routing/` | Rozhoduje, kdy použít GrepAI, GitNexus nebo ripgrep   | agent-code-intel pro `claude`/`both` |
+| `.claude/skills/code-context/`              | Přesné rozsahy, reference, struktura a nečitelné formáty | agent-code-intel pro `claude`/`both` |
 | `AGENTS.md`                                | Odkaz na routing skill pro Codex a ostatní agenty     | agent-code-intel pro `codex`/`both`  |
 | `.agents/skills/agent-code-intel-routing/` | Stejný routing skill ve formátu, který objevuje Codex | agent-code-intel pro `codex`/`both`  |
+| `.agents/skills/code-context/`             | Stejný `code-context` skill pro Codex                 | agent-code-intel pro `codex`/`both`  |
+| `.codex/hooks.json`                        | Registrace repo-lokálního Codex `SessionStart` hooku | agent-code-intel pro `codex`/`both`  |
 | `.gitnexus/`                               | Grafový index a jeho databáze                         | gitnexus                             |
 | `AGENTS.md`, `CLAUDE.md`                   | Vlastní oddělený blok s pravidly grafu                | gitnexus                             |
 | `.claude/skills/gitnexus/`                 | Dovednosti pro Claude Code k práci s grafem           | gitnexus                             |
@@ -623,6 +701,30 @@ Opakovaný `--apply` identický skill vůbec nepřepíše. Změněnou managed ko
 opraví automaticky; cizí skill stejného jména bezpečně odmítne. Pokud jej chceš
 výslovně převzít pod správu nástroje, použij `--force-docs`. Přepínač
 `--no-docs` přeskočí dokumenty i routing skilly.
+
+---
+
+## Codex — tři brány pro aktivní hook
+
+> **Důležité:** samotný soubor `.codex/hooks.json` ještě neznamená, že Codex
+> hook spouští. Všechny tři podmínky musí být splněné; při nesplnění může hook
+> zůstat neaktivní bez chyby.
+
+Při `--agent codex` nebo `--agent both` zapíše `--apply` registraci do
+`.codex/hooks.json` a sdílený skript do `.claude/helpers/code-context-hint.py`.
+V Codexu pak ověř:
+
+1. V `~/.codex/config.toml` nesmí být `[features] hooks = false`.
+2. Projektová vrstva `.codex/` musí být důvěryhodná.
+3. V CLI spusť `/hooks` a projektový hook schval.
+
+Schvaluje se definice v `hooks.json`, ne text skriptu. Pokud ji další
+`--apply` nezmění, schválení stačí jednou; změna registrace vyžádá nové
+schválení. Stav schválení `--status` ověřit neumí, hlásí pouze existenci
+`hooks.json`.
+
+Při vytvoření nebo změně registrace vypíše `--apply` tyto tři kroky. Pokud
+hooky spravuješ sám, zápis přeskoč pomocí `--no-hook`.
 
 ---
 
