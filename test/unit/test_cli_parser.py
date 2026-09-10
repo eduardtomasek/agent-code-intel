@@ -124,7 +124,14 @@ class Options_(unittest.TestCase):
         for name in ("bootstrap", "do_git", "start_watch", "run_analyze", "write_docs",
                      "write_hook", "write_perms", "do_grepai", "do_gitnexus"):
             self.assertTrue(getattr(o, name), name)
-        for name in ("apply", "force_docs", "status_all", "as_json", "purge_collection"):
+        for name in (
+            "apply",
+            "force_docs",
+            "status_all",
+            "as_json",
+            "purge_collection",
+            "no_install_deps",
+        ):
             self.assertFalse(getattr(o, name), name)
 
     def test_options_is_immutable(self):
@@ -152,6 +159,7 @@ class Options_(unittest.TestCase):
             "--no-gitnexus": ("do_gitnexus", False),
             "--purge-collection": ("purge_collection", True),
             "--no-perms": ("write_perms", False),
+            "--no-install-deps": ("no_install_deps", True),
         }
         for flag, (attr, want) in cases.items():
             with self.subTest(flag=flag):
@@ -169,6 +177,7 @@ class Options_(unittest.TestCase):
         self.assertEqual(parse_args(["--status", "--remove"], default_root="/w").mode, "remove")
         self.assertEqual(parse_args(["--remove", "--status"], default_root="/w").mode, "status")
         self.assertEqual(parse_args(["--refresh", "--install", "--status"], default_root="/w").mode, "status")
+        self.assertEqual(parse_args(["--install-deps"], default_root="/w").mode, "install_deps")
 
     def test_positional_is_the_workspace(self):
         o = parse_args(["my-ws"], default_root="/w")
@@ -240,7 +249,7 @@ class Pipeline(unittest.TestCase):
 
         def load(*args, **kwargs):
             events.append("config")
-            return mock.Mock(source="defaults")
+            return mock.Mock(source="defaults", child_env={})
 
         def parse(*args, **kwargs):
             events.append("parse")

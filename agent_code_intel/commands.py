@@ -31,9 +31,11 @@ import dataclasses
 import datetime
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
+import sys
 import time
 from collections.abc import Mapping
 from typing import TextIO
@@ -164,6 +166,20 @@ class _Need:
 
 _CODE_CONTEXT_TOOLS = ("rg", "ctags", "ast-grep", "fd", "rga", "tokei", "scc")
 _INSTALL_DEPS = "agent-code-intel --install-deps"
+_INSTALL_DEPS_TOOLS = _CODE_CONTEXT_TOOLS + ("grepai", "gitnexus")
+_INSTALL_DEPS_PACKAGES = {
+    "rg": "ripgrep",
+    "ctags": "universal-ctags",
+    "ast-grep": "ast-grep",
+    "fd": "fd",
+    "rga": "ripgrep-all",
+    "tokei": "tokei",
+    "scc": "scc",
+}
+_INSTALL_DEPS_COMMANDS = {
+    "grepai": "curl -sSL https://raw.githubusercontent.com/yoanbernabeu/grepai/main/install.sh | sh",
+    "gitnexus": "npm i -g gitnexus",
+}
 
 
 def _code_context_tool_presence(stack: integrations.Stack) -> dict[str, bool]:
@@ -187,6 +203,86 @@ def _report_code_context_tools(reporter: Reporter, stack: integrations.Stack) ->
             "ctags and ast-grep are both missing — code navigation ranges are degraded; "
             "install with: %s" % _INSTALL_DEPS,
         )
+
+
+def _missing_install_deps(stack: integrations.Stack) -> list[str]:
+    return [name for name in _INSTALL_DEPS_TOOLS if not stack.have(name)]
+
+
+def report_install_deps_hint(reporter: Reporter, stack: integrations.Stack) -> None:
+    """Append the one-line dependency hint used by ``--install``."""
+    missing = _missing_install_deps(stack)
+    if missing:
+        reporter.say(
+            "Missing tools: %s — run %s" % (", ".join(missing), _INSTALL_DEPS)
+        )
+
+
+def run_install_deps(
+    *,
+    no_install_deps: bool,
+    stdout: TextIO,
+    stderr: TextIO,
+    stack: integrations.Stack,
+    stdin: TextIO | None = None,
+    system: str | None = None,
+) -> int:
+    """Check the nine external tools and optionally offer Homebrew installs."""
+    reporter = Reporter(stdout, stderr)
+    if stdin is None:
+        stdin = sys.stdin
+    if system is None:
+        system = platform.system()
+
+    reporter.hr("Install dependencies")
+    missing = _missing_install_deps(stack)
+    for name in _INSTALL_DEPS_TOOLS:
+        if name in missing:
+            reporter.row("MISSING", "%s not on PATH" % name)
+        else:
+            reporter.row("ok", "%s on PATH" % name)
+
+    if not missing:
+        reporter.say("")
+        reporter.say("All install dependencies are present.")
+        return 0
+
+    reporter.say("")
+    reporter.say("Missing tools: %s" % ", ".join(missing))
+    brew_packages = [
+        _INSTALL_DEPS_PACKAGES[name]
+        for name in missing
+        if name in _INSTALL_DEPS_PACKAGES
+    ]
+    if system == "Darwin" and brew_packages:
+        reporter.say("brew install %s" % " ".join(brew_packages))
+    elif brew_packages:
+        reporter.say("Packages to install: %s" % " ".join(brew_packages))
+
+    for name in missing:
+        command = _INSTALL_DEPS_COMMANDS.get(name)
+        if command:
+            reporter.say(command)
+
+    if no_install_deps:
+        reporter.say("Installation offer suppressed by --no-install-deps.")
+        return 1
+    if system != "Darwin" or not brew_packages:
+        return 1
+    if not bool(getattr(stdin, "isatty", lambda: False)()):
+        reporter.say("No TTY; nothing was installed.")
+        return 1
+
+    reporter.say("Install missing Homebrew packages? [y/N]")
+    if stdin.readline().strip().lower() not in ("y", "yes"):
+        reporter.say("Installation skipped.")
+        return 1
+
+    result = stack.brew_install(tuple(brew_packages))
+    if result.returncode != 0:
+        reporter.error("Homebrew installation failed")
+        return result.returncode or 1
+    return 0 if not any(name in _INSTALL_DEPS_COMMANDS for name in missing) else 1
 
 
 _DOC_BLOCKS = {

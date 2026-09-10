@@ -112,6 +112,10 @@ class Stack:
         """``command -v <name>`` (``9406cce`` :137)."""
         return shutil.which(name, path=self._path) is not None
 
+    def brew_install(self, packages: tuple[str, ...]) -> Exec:
+        """Install the selected Homebrew packages."""
+        return self._run(("brew", "install", *packages))
+
     def which(self, name: str) -> str:
         """``command -v <name>`` as a path, or ``""``."""
         return shutil.which(name, path=self._path) or ""
