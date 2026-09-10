@@ -148,6 +148,7 @@ starší instalace.
 9. [GrepAI](#8-grepai)
 10. [GitNexus](#9-gitnexus)
 11. [agent-code-intel](#10-agent-code-intel)
+    - [Referenční tabulka všech režimů a přepínačů](#referenční-tabulka-všech-režimů-a-přepínačů)
 12. [První projekt](#11-první-projekt)
 13. [Codex — tři brány pro aktivní hook](#codex--tři-brány-pro-aktivní-hook)
 14. [Ověření, že to funguje](#12-ověření-že-to-funguje)
@@ -660,6 +661,75 @@ agent-code-intel --status --json
 
 Zkontroluj, že `command -v` ukazuje do `~/.local/bin`. Konfigurace ENV zůstává
 platná; převod do TOML je vždy ruční a volitelný.
+
+### Referenční tabulka všech režimů a přepínačů
+
+Úplný výpis dostaneš kdykoliv příkazem `agent-code-intel --help`. Tahle tabulka
+je jeho čitelnější podoba — pro běžné používání stačí `--apply`, `--refresh`
+a `--status`, zbytek jsou záchranné brzdy.
+
+#### Režimy
+
+Režim se vybírá jedním přepínačem; bez něj běží **náhled**, který nic nemění.
+
+| Režim | Co udělá |
+| --- | --- |
+| _(bez přepínače)_ | Náhled: vypíše, co by se stalo, a nic nezapíše |
+| `--apply` | Nastaví projekt nebo opraví, co se rozešlo |
+| `--refresh` | Znovu zaindexuje, nahodí hlídače a zkontroluje stav. Nic nezakládá — bez `.code-intel` selže |
+| `--status` | Kontrola zdraví bez zápisů |
+| `--remove` | Vyjme nástroj z projektu (`--remove` samo je náhled, zapíše až `--remove --apply`) |
+| `--install` | Nainstaluje vlastní produkt do `~/.local/bin` |
+| `--install-deps` | Zkontroluje devět nástrojů a na macOS nabídne `brew install` |
+| `--version` | Vypíše verzi |
+| `-h`, `--help` | Vypíše nápovědu |
+
+#### Obecné přepínače
+
+| Přepínač | Co dělá |
+| --- | --- |
+| `--path DIR` | Pracovní adresář projektu (výchozí: aktuální). S `--refresh` přeskočí hledání kořene gitu |
+| `--agent claude\|codex\|both` | Pro které agenty pracovat. Výchozí je `AGENTS` z `.code-intel`, a `both` u projektu, který to nemá zaznamenané |
+| `[workspace]` | Jméno GrepAI workspace jako první poziční argument (výchozí: jméno adresáře) |
+
+#### Co při nastavování vynechat
+
+Platí pro náhled a `--apply`.
+
+| Přepínač | Co vynechá |
+| --- | --- |
+| `--no-bootstrap` | Nespouští qdrant ani ollama, jen je zkontroluje |
+| `--no-git` | Nespustí `git init` a nesahá na `.gitignore` |
+| `--no-watch` | Nenahazuje hlídače GrepAI |
+| `--no-analyze` | Přeskočí první indexování GitNexusem (na velkém repozitáři pomalé) |
+| `--no-docs` | Nesahá na dokumenty pro agenty ani na routing skill |
+| `--no-hook` | Nezapíše repo-lokální `SessionStart` hook |
+| `--force-docs` | Naopak: přepíše spravované dokumenty a převezme cizí routing skill |
+
+#### K jednotlivým režimům
+
+| Přepínač | Patří k | Co dělá |
+| --- | --- | --- |
+| `--no-grepai` | `--refresh` | Přeskočí kontrolu a spuštění hlídače |
+| `--no-gitnexus` | `--refresh` | Přeskočí znovu-zaindexování |
+| `--all` | `--status` | Všechny projekty z registru, ne jen tenhle |
+| `--json` | `--status` | Strojově čitelný výstup místo tabulky. Hlásí i služby a nic nespouští; tohle čte dashboard |
+| `--purge-collection` | `--remove` | Smaže i kolekci v qdrantu |
+| `--no-perms` | `--install` | Nesahá na `~/.claude/settings.json` |
+| `--no-install-deps` | `--install-deps` | Nenabídne instalaci přes Homebrew, jen vypíše kontrolu |
+
+#### Návratové kódy
+
+| Režim | 0 | 1 | 2 |
+| --- | --- | --- | --- |
+| náhled | vše odpovídá | chyba | rozešlo se |
+| `--refresh` | v pořádku | nešlo spustit (chybí závislosti, nebo projekt ještě nemá `.code-intel`) | proběhlo, ale našlo rozpad nebo starý index |
+| `--status` | v pořádku | chyba | rozešlo se |
+| `--status --json` | **vždy** | — | — |
+
+`--status --json` vrací **nulu i při rozpadu** — záměrně, protože ho volá
+dashboard, který si stav čte z JSONu, ne z návratového kódu. Ve skriptu se proto
+na návratový kód `--json` nespoléhej a čti klíč `ok`.
 
 ---
 

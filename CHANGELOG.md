@@ -19,6 +19,9 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
   rozhoduje) a `version_min`. `register_hooks` zůstává, protože pojmenovává
   přesný projev indexu postaveného pod starým Nodem. `code-intel-dash` svůj
   verdikt bere z `version_ok`.
+- README má v kapitole 10 referenční tabulku všech režimů, přepínačů
+  a návratových kódů, ověřenou proti `--help`. Včetně toho, že
+  `--status --json` vrací nulu i při rozpadu, protože stav se čte z klíče `ok`.
 - README uvádí minimum 24.11.0 v přehledu součástí, v seznamu požadavků, v tabulce
   tří úrovní závislostí, v kapitole 7 a v popisu dashboardu.
 
