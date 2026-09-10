@@ -94,7 +94,7 @@ def _mkrepo(name="proj"):
     root = os.path.join(tempfile.mkdtemp(prefix="aci-status-"), name)
     os.makedirs(root)
     subprocess.run(["git", "init", "-q", root], check=True)
-    hooks.install(root)
+    hooks.install(root, "both")
     return project.canon(root)
 
 
@@ -188,7 +188,7 @@ class TextTable(unittest.TestCase):
         root = _mkrepo("hook-drift")
         _code_intel(root, "team", "hook-drift")
         _grepai_config(root)
-        hooks.remove(root)
+        hooks.remove(root, "both")
         stack = _Stack(
             ws_exists=True,
             show="  - hook-drift: %s\n  model nomic-embed-text-v2-moe\n" % root,
@@ -202,6 +202,7 @@ class TextTable(unittest.TestCase):
         )
         self.assertEqual(code, 2)
         self.assertIn("claude SessionStart hook is missing", out)
+        self.assertIn("codex SessionStart hook is missing at .codex/hooks.json", out)
 
     def test_hr_rule_is_byte_length_of_the_heading(self):
         root = _mkrepo()
@@ -455,6 +456,9 @@ class JsonDocument(unittest.TestCase):
         self.assertIs(entry["ok"], True)
         self.assertIs(entry["gob_leftover"], False)
         self.assertIs(entry["chunking_ok"], True)
+        self.assertEqual(
+            entry["session_start_hook"]["agents"]["codex"]["state"], "current"
+        )
         self.assertEqual(entry["collection"], "workspace_team")  # a string
         self.assertEqual(entry["embedder"], "match")  # a string, not coerced
         self.assertEqual(entry["mapped_path"], root)  # canonical, string

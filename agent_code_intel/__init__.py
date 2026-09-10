@@ -13,7 +13,7 @@ Module layout (issue #48, decision 33) — these seven, no ``utils``:
     project       .code-intel / registry identity, status probes, Finding
     integrations  grepai / gitnexus / qdrant / ollama / container adapters
     commands      preview / apply / refresh / status / remove orchestration
-    hooks         repo-local Claude SessionStart hook lifecycle
+    hooks         repo-local Claude and Codex SessionStart hook lifecycle
     install       self-install, upgrade, the launcher templates
 
 Dependency direction is one-way (decision 34): cli → commands/install,
