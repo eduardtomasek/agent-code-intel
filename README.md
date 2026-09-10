@@ -7,7 +7,7 @@
 Tato dokumentace popisuje instalaci celého stacku na Macu. Předpokládá pouze
 základní práci s aplikacemi; všechny potřebné kroky jsou vysvětlené.
 
-Text odpovídá vydání 5.0.0.
+Text odpovídá vydání 5.1.0.
 
 Po dokončení se nové projekty nastavují takto:
 

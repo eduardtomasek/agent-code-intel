@@ -11,12 +11,16 @@ from agent_code_intel import commands, integrations
 
 
 class FakeStack:
-    def __init__(self, present=()):
+    def __init__(self, present=(), universal_ctags=True):
         self.present = set(present)
+        self.universal_ctags = universal_ctags
         self.calls = []
 
     def have(self, name):
         return name in self.present
+
+    def ctags_is_universal(self):
+        return "ctags" in self.present and self.universal_ctags
 
     def brew_install(self, packages):
         self.calls.append(("brew_install", packages))
@@ -28,9 +32,17 @@ class TtyInput(io.StringIO):
         return True
 
 
-def run(*, present=(), answer="", no_install_deps=False, system="Darwin", tty=False):
+def run(
+    *,
+    present=(),
+    answer="",
+    no_install_deps=False,
+    system="Darwin",
+    tty=False,
+    universal_ctags=True,
+):
     out, err = io.StringIO(), io.StringIO()
-    stack = FakeStack(present)
+    stack = FakeStack(present, universal_ctags=universal_ctags)
     stdin = TtyInput(answer) if tty else io.StringIO(answer)
     code = commands.run_install_deps(
         no_install_deps=no_install_deps,
@@ -100,6 +112,28 @@ class InstallDeps(unittest.TestCase):
         self.assertIn("All install dependencies are present.", out)
         self.assertNotIn("brew install", out)
         self.assertEqual(stack.calls, [])
+
+    def test_bsd_ctags_is_offered_as_universal_ctags(self):  # issue #99
+        present = commands._INSTALL_DEPS_TOOLS
+        code, out, err, stack = run(present=present, universal_ctags=False)
+
+        self.assertEqual((code, err), (1, ""))
+        self.assertIn("MISSING", out)
+        self.assertIn("ctags on PATH is not Universal Ctags", out)
+        # The row must not claim it is absent from PATH …
+        self.assertNotIn("ctags not on PATH", out)
+        # … and the fix the message points at must actually offer it.
+        self.assertIn("universal-ctags", out)
+        self.assertNotIn("All install dependencies are present.", out)
+
+    def test_install_hint_names_a_present_but_unusable_ctags(self):  # issue #99
+        out, err = io.StringIO(), io.StringIO()
+        stack = FakeStack(commands._INSTALL_DEPS_TOOLS, universal_ctags=False)
+
+        commands.report_install_deps_hint(commands.Reporter(out, err), stack)
+
+        self.assertIn("Missing tools: ctags", out.getvalue())
+        self.assertIn("agent-code-intel --install-deps", out.getvalue())
 
     def test_install_hint_mentions_only_missing_tools(self):
         out, err = io.StringIO(), io.StringIO()

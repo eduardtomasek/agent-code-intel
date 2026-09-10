@@ -20,10 +20,16 @@ class FakeStack:
         self.present = set(present or ("grepai", "gitnexus", "curl", "git", "claude", "codex", "ollama"))
         self.calls = []
         self.workspace = False
+        # A present ctags is a working one unless a test says otherwise
+        # (issue #99).
+        self.universal_ctags = True
 
     def have(self, name):
         self.calls.append(("have", name))
         return name in self.present
+
+    def ctags_is_universal(self):
+        return "ctags" in self.present and self.universal_ctags
 
     def first_line(self, *argv):
         return "gitnexus 9.9.9"

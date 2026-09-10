@@ -40,6 +40,7 @@ class _Stack:
         self._has_model = over.get("has_model", False)
         self._cli = over.get("cli", "")
         self._daemon = over.get("daemon", False)
+        self._universal_ctags = over.get("universal_ctags", True)
 
     def ws_show(self, ws):
         return self._show
@@ -52,6 +53,9 @@ class _Stack:
 
     def have(self, name):
         return name in self._present
+
+    def ctags_is_universal(self):
+        return "ctags" in self._present and self._universal_ctags
 
     def which(self, name):
         return "/usr/bin/%s" % name if name in self._present else ""
@@ -194,6 +198,49 @@ class TextTable(unittest.TestCase):
             self.assertIn("warn      %s not on PATH" % tool, out)
         self.assertIn("ctags and ast-grep are both missing", out)
         self.assertIn("agent-code-intel --install-deps", out)
+
+    def test_bsd_ctags_is_a_warn_with_its_own_reason(self):  # issue #99
+        root = _mkrepo()
+        names = ("rg", "ctags", "ast-grep", "fd", "rga", "tokei", "scc")
+        _, out, _ = _run(
+            as_json=False,
+            status_all=False,
+            context=_context(root),
+            stack=_Stack(present=names, universal_ctags=False),
+        )
+
+        self.assertIn("warn      ctags on PATH is not Universal Ctags", out)
+        self.assertNotIn("ok        ctags on PATH", out)
+        # Not the same diagnosis as an absent ctags, and it must not claim the
+        # binary is missing from PATH.
+        self.assertNotIn("ctags not on PATH", out)
+        # Every other tool is unaffected.
+        for name in ("rg", "ast-grep", "fd", "rga", "tokei", "scc"):
+            self.assertIn("ok        %s on PATH" % name, out)
+
+    def test_usable_ctags_stays_ok(self):  # issue #99 — no regression
+        root = _mkrepo()
+        names = ("rg", "ctags", "ast-grep", "fd", "rga", "tokei", "scc")
+        _, out, _ = _run(
+            as_json=False,
+            status_all=False,
+            context=_context(root),
+            stack=_Stack(present=names),
+        )
+
+        self.assertIn("ok        ctags on PATH", out)
+        self.assertNotIn("not Universal Ctags", out)
+
+    def test_bsd_ctags_alone_degrades_ranges_like_a_missing_one(self):  # issue #99
+        root = _mkrepo()
+        _, out, _ = _run(
+            as_json=False,
+            status_all=False,
+            context=_context(root),
+            stack=_Stack(present=("ctags",), universal_ctags=False),
+        )
+
+        self.assertIn("ctags and ast-grep are both missing", out)
 
     def test_missing_session_start_hook_is_status_drift(self):
         root = _mkrepo("hook-drift")
