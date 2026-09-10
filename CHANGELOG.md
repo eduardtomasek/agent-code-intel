@@ -5,6 +5,11 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
 
 ## [Unreleased]
 
+## [5.1.0] - 2026-09-10
+
+Drobné vydání: `--apply` ignoruje `.DS_Store` a preflight pozná BSD `ctags` od
+Universal Ctags.
+
 ### Opraveno
 
 - Preflight, `--status` a `--install-deps` rozlišují BSD `ctags` od Universal
