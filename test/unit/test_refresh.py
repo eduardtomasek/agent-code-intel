@@ -6,8 +6,10 @@ Ledger: REF-1, REF-3, REF-4, REF-5, REF-7, TOL-2 (``gn_status``), TOL-3, TOL-4,
 DEV-8 (header suppressed by ``--json``), FMT-5 (the preflight error block).
 """
 
+import dataclasses
 import io
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from agent_code_intel import agent_skills, commands, integrations, project
+from agent_code_intel import agent_skills, commands, hooks, integrations, project
 from agent_code_intel.config import (
     ChildEnvironment,
     CliError,
@@ -174,7 +176,8 @@ def _healthy_project(root, workspace="ws"):
     }
 
 
-def _run(*, stack, context=None, do_grepai=True, do_gitnexus=True, as_json=False):
+def _run(*, stack, context=None, do_grepai=True, do_gitnexus=True, as_json=False,
+         agent_target="both", agent_explicit=False):
     context = context or _context(_mkrepo())
     out, err = io.StringIO(), io.StringIO()
     try:
@@ -182,7 +185,8 @@ def _run(*, stack, context=None, do_grepai=True, do_gitnexus=True, as_json=False
             as_json=as_json,
             do_grepai=do_grepai,
             do_gitnexus=do_gitnexus,
-            agent_target="both",
+            agent_target=agent_target,
+            agent_explicit=agent_explicit,
             context=context,
             loaded=_loaded(),
             stdout=out,
@@ -452,6 +456,34 @@ class Shape(unittest.TestCase):
         self.assertNotIn("GrepAI audit", out)
         self.assertIn("GitNexus re-index", out)
         self.assertIn("GitNexus audit", out)
+
+
+class RecordedAgents(unittest.TestCase):
+    """``--refresh`` audits the artifacts ``--apply`` wrote, so it asks the same
+    file which agents those belong to."""
+
+    def _context_with(self, agents):
+        """A project set up for claude alone: no .agents/ tree, no codex hook."""
+        root = _mkrepo()
+        shutil.rmtree(os.path.join(root, ".agents"), ignore_errors=True)
+        shutil.rmtree(os.path.join(root, ".codex"), ignore_errors=True)
+        hooks.install(root, "claude")
+        return root, dataclasses.replace(_context(root), ident_agents=agents)
+
+    def test_a_claude_only_project_is_not_audited_for_codex(self):
+        root, context = self._context_with("claude")
+        stack = _Stack(**_healthy_project(root))
+        code, out, _ = _run(stack=stack, context=context)
+        self.assertIn("Agents:    claude (from .code-intel)", out)
+        self.assertNotIn("codex routing skill", out)
+        self.assertEqual(code, 0)
+
+    def test_without_the_record_the_default_still_audits_both(self):
+        root, context = self._context_with(None)
+        stack = _Stack(**_healthy_project(root))
+        code, out, _ = _run(stack=stack, context=context)
+        self.assertIn("codex routing skill", out)
+        self.assertEqual(code, 2)
 
 
 if __name__ == "__main__":

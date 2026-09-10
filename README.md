@@ -23,6 +23,10 @@ klíčových slov, a vyhodnotit dopad změn.
 > `--agent claude` tam nechybí náhodou. Bez něj skript vyžaduje i Codex a
 > odmítne se spustit, pokud Codex není nainstalovaný. Při použití obou agentů
 > lze přepínač vynechat.
+>
+> Stačí ho ale napsat jednou: `--apply` volbu zapíše do `.code-intel` projektu
+> jako `AGENTS=claude` a `--status`, `--refresh` i `--remove` z ní pak vycházejí
+> samy. Viz [Které agenty projekt používá](#které-agenty-projekt-používá).
 
 ---
 
@@ -685,6 +689,44 @@ soubory:
 registraci, dokument s instrukcemi i umístění routing skillu. GitNexus si při
 `analyze` může navíc vytvořit vlastní bloky a Claude skilly bez ohledu na tuto
 volbu; ty nejsou vlastnictvím `agent-code-intel`.
+
+### Které agenty projekt používá
+
+Volba se nezadává pokaždé znovu. `--apply` ji zapíše do `.code-intel` daného
+projektu:
+
+```
+# agent-code-intel — identity of this repository. Generated, do not edit by hand.
+SCHEMA=2
+WORKSPACE=muj-projekt
+PROJECT=muj-projekt
+AGENTS=claude
+```
+
+`--status`, `--refresh` a `--remove` pak pracují přesně s těmi agenty, pro které
+byl projekt zapojený. Projekt nastavený jen pro Clauda tak nehlásí drift na
+chybějícím Codex routing skillu, a to ani ve výpisu `--status --all`, kde má
+každý projekt vlastní odpověď.
+
+Přednost má vždy `--agent` na příkazové řádce — je to i způsob, jak volbu
+projektu změnit:
+
+```
+agent-code-intel --agent both --apply      # projekt nově obsluhují oba agenti
+```
+
+Hlavička výpisu říká, odkud hodnota pochází:
+
+```
+Agents:    claude (from .code-intel)
+Agents:    both (--agent)
+Agents:    both (default)
+```
+
+Projekty zapojené starší verzí mají `SCHEMA=1` bez klíče `AGENTS`. Čtou se dál a
+fungují; `--status` u nich přidá řádek `.code-intel predates AGENTS`, který není
+drift — jen upozorňuje, že příští `--apply` volbu zaznamená. Opačným směrem to
+nejde: starší verze nástroje soubor se `SCHEMA=2` odmítne přečíst.
 
 Umístění odpovídají oficiální dokumentaci pro
 [Claude Code](https://code.claude.com/docs/en/skills) a

@@ -552,5 +552,86 @@ class Init(unittest.TestCase):
         self.assertIn(".gitignore += .grepai/ .gitnexus/", stdout.getvalue())
 
 
+class RecordsTheAgents(unittest.TestCase):
+    """``--apply`` writes what it set the project up for into ``.code-intel``,
+    so no later run has to be told again (and none has to guess ``both``)."""
+
+    def _apply(self, root, agent_target, context=None, agent_explicit=False):
+        out = io.StringIO()
+        code = commands.run_init(
+            apply=True,
+            bootstrap=False,
+            do_git=False,
+            start_watch=False,
+            run_analyze=False,
+            write_docs=False,
+            write_hook=False,
+            force_docs=False,
+            agent_target=agent_target,
+            agent_explicit=agent_explicit,
+            context=context or make_context(root),
+            loaded=loaded(),
+            conf_dir=os.path.join(root, "config"),
+            stdout=out,
+            stderr=io.StringIO(),
+            stack=FakeStack(),
+        )
+        self.assertEqual(code, 0)
+        return out.getvalue()
+
+    def _root(self):
+        root = tempfile.mkdtemp(prefix="aci-agents-")
+        subprocess.run(["git", "init", "-q", root], check=True)
+        return project.canon(root)
+
+    def _reread(self, root):
+        return project.resolve_project(
+            root=root, root_explicit=True, mode="init", workspace=None,
+            home=os.path.expanduser("~"), status_all=False,
+        )
+
+    def test_apply_records_the_agents_it_applied(self):
+        root = self._root()
+        out = self._apply(root, "claude")
+        self.assertIn("wrote .code-intel (AGENTS=claude)", out)
+        self.assertEqual(project.read_code_intel(root).agents, "claude")
+
+    def test_a_second_apply_leaves_the_file_alone(self):
+        root = self._root()
+        self._apply(root, "claude")
+        before = Path(os.path.join(root, ".code-intel")).read_bytes()
+        out = self._apply(root, "claude", context=self._reread(root))
+        self.assertIn(".code-intel already present (AGENTS=claude)", out)
+        self.assertEqual(
+            Path(os.path.join(root, ".code-intel")).read_bytes(), before
+        )
+
+    def test_applying_a_different_agent_rewrites_the_record(self):
+        root = self._root()
+        self._apply(root, "claude")
+        out = self._apply(
+            root, "both", context=self._reread(root), agent_explicit=True
+        )
+        self.assertIn("updated .code-intel (AGENTS=both, was claude)", out)
+        self.assertEqual(project.read_code_intel(root).agents, "both")
+
+    def test_the_recorded_value_drives_a_later_run_without_the_flag(self):
+        root = self._root()
+        self._apply(root, "claude")
+        out = self._apply(root, "both", context=self._reread(root))
+        self.assertIn("Agents:    claude (from .code-intel)", out)
+        self.assertEqual(project.read_code_intel(root).agents, "claude")
+
+    def test_a_schema_1_project_is_upgraded_by_the_next_apply(self):
+        root = self._root()
+        with open(os.path.join(root, ".code-intel"), "w") as handle:
+            handle.write(
+                "SCHEMA=1\nWORKSPACE=demo\nPROJECT=%s\n" % os.path.basename(root)
+            )
+        out = self._apply(root, "claude", context=self._reread(root))
+        self.assertIn("updated .code-intel (AGENTS=claude, was unrecorded)", out)
+        self.assertEqual(project.read_code_intel(root).agents, "claude")
+
+
 if __name__ == "__main__":
     unittest.main()

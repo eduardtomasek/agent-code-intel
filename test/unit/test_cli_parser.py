@@ -121,6 +121,7 @@ class Options_(unittest.TestCase):
         self.assertFalse(o.root_explicit)
         self.assertIsNone(o.workspace)
         self.assertEqual(o.agent_target, "both")
+        self.assertFalse(o.agent_explicit)
         for name in ("bootstrap", "do_git", "start_watch", "run_analyze", "write_docs",
                      "write_hook", "write_perms", "do_grepai", "do_gitnexus"):
             self.assertTrue(getattr(o, name), name)
@@ -172,6 +173,14 @@ class Options_(unittest.TestCase):
     def test_agent_enum_accepts_all_three(self):
         for who in ("claude", "codex", "both"):
             self.assertEqual(parse_args(["--agent", who], default_root="/w").agent_target, who)
+
+    def test_agent_records_that_it_was_given(self):
+        """The default and an explicit `--agent both` are different answers:
+        only the second one may override what `.code-intel` records."""
+        for who in ("claude", "codex", "both"):
+            self.assertTrue(
+                parse_args(["--agent", who], default_root="/w").agent_explicit, who
+            )
 
     def test_last_mode_switch_wins_no_mutual_exclusivity(self):
         self.assertEqual(parse_args(["--status", "--remove"], default_root="/w").mode, "remove")

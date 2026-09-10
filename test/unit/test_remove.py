@@ -1,5 +1,6 @@
 """The ``remove`` mode (issue #56): planning, ownership guards and ordering."""
 
+import dataclasses
 import hashlib
 import io
 import os
@@ -307,6 +308,59 @@ class RemoveMode(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(Path(os.path.join(root, "CLAUDE.md")).read_text(), "user\n<!-- code-intel:start -->\n")
+
+
+class RecordedAgents(unittest.TestCase):
+    """Removal tears out what was set up here, which is what ``.code-intel``
+    recorded — not whatever the default is on the machine doing the removing."""
+
+    def _project(self):
+        root = _mkrepo()
+        _seed_project(root)
+        registry = os.path.join(tempfile.mkdtemp(prefix="aci-remove-reg-"), "projects")
+        with open(registry, "w") as handle:
+            handle.write("remove-ws\t%s\n" % root)
+        stack = _Stack()
+        stack.root = root
+        return root, registry, stack
+
+    def test_the_plan_follows_the_recorded_agents(self):
+        root, registry, stack = self._project()
+        context = dataclasses.replace(_context(root), ident_agents="claude")
+        out, err = io.StringIO(), io.StringIO()
+        commands.run_remove(
+            apply=False,
+            as_json=False,
+            purge_collection=False,
+            agent_target="both",
+            context=context,
+            loaded=_loaded(registry),
+            conf_dir=os.path.dirname(registry),
+            stdout=out,
+            stderr=err,
+            stack=stack,
+        )
+        self.assertIn("Agents:    claude (from .code-intel)", out.getvalue())
+        self.assertNotIn("codex mcp remove", out.getvalue())
+
+    def test_an_explicit_flag_still_wins(self):
+        root, registry, stack = self._project()
+        context = dataclasses.replace(_context(root), ident_agents="claude")
+        out, err = io.StringIO(), io.StringIO()
+        commands.run_remove(
+            apply=False,
+            as_json=False,
+            purge_collection=False,
+            agent_target="codex",
+            agent_explicit=True,
+            context=context,
+            loaded=_loaded(registry),
+            conf_dir=os.path.dirname(registry),
+            stdout=out,
+            stderr=err,
+            stack=stack,
+        )
+        self.assertIn("Agents:    codex (--agent)", out.getvalue())
 
 
 if __name__ == "__main__":

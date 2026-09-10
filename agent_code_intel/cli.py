@@ -43,6 +43,7 @@ class Options:
     workspace: str | None = None
     workspace_explicit: bool = False
     agent_target: str = "both"
+    agent_explicit: bool = False
     apply: bool = False
     bootstrap: bool = True
     do_git: bool = True
@@ -88,7 +89,8 @@ Options:
   --path DIR        Project directory (default: current directory). With
                     --refresh: an explicit override that skips the git-root
                     search below.
-  --agent WHO       claude | codex | both        (default: both)
+  --agent WHO       claude | codex | both        (default: AGENTS from
+                    .code-intel, or both for a project that has none)
   --no-bootstrap    Do not start qdrant / ollama; only check them
   --no-git          Do not run `git init` or touch .gitignore
   --no-watch        Do not start the GrepAI watcher
@@ -202,6 +204,7 @@ def parse_args(argv: Sequence[str], default_root: str) -> Options:
                     "--agent must be claude, codex or both (got '%s')" % value
                 )
             fields["agent_target"] = value
+            fields["agent_explicit"] = True
             i += 2
             continue
 
@@ -314,6 +317,7 @@ def main(
                 do_grepai=opts.do_grepai,
                 do_gitnexus=opts.do_gitnexus,
                 agent_target=opts.agent_target,
+                agent_explicit=opts.agent_explicit,
                 context=context,
                 loaded=loaded,
                 stdout=stdout,
@@ -328,6 +332,7 @@ def main(
                 as_json=opts.as_json,
                 status_all=opts.status_all,
                 agent_target=opts.agent_target,
+                agent_explicit=opts.agent_explicit,
                 context=context,
                 loaded=loaded,
                 conf_dir=_conf_dir(environ),
@@ -347,6 +352,7 @@ def main(
                 write_hook=opts.write_hook,
                 force_docs=opts.force_docs,
                 agent_target=opts.agent_target,
+                agent_explicit=opts.agent_explicit,
                 context=context,
                 loaded=loaded,
                 conf_dir=_conf_dir(environ),
@@ -360,6 +366,7 @@ def main(
                 as_json=opts.as_json,
                 purge_collection=opts.purge_collection,
                 agent_target=opts.agent_target,
+                agent_explicit=opts.agent_explicit,
                 context=context,
                 loaded=loaded,
                 conf_dir=_conf_dir(environ),

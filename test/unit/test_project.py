@@ -88,8 +88,8 @@ class ReadCodeIntel(unittest.TestCase):
 
     def test_unsupported_schema(self):
         root = _mkrepo("widget")
-        _write_code_intel(root, "SCHEMA=2", "WORKSPACE=t", "PROJECT=widget")
-        self.assertIn("unsupported SCHEMA=2", project.read_code_intel(root).message)
+        _write_code_intel(root, "SCHEMA=3", "WORKSPACE=t", "PROJECT=widget")
+        self.assertIn("unsupported SCHEMA=3", project.read_code_intel(root).message)
 
     def test_project_must_match_the_directory_name(self):
         root = _mkrepo("widget")
@@ -314,6 +314,116 @@ class Legacy(unittest.TestCase):
             project.adopt_legacy_workspace("legacyws", True, "legacyws", "/x/refresh-intel.sh"),
             "legacyws",
         )
+
+
+class AgentsKey(unittest.TestCase):
+    """``AGENTS`` in ``.code-intel`` (schema 2) and the schema-1 files that
+    predate it. The key is what makes a project answer for itself instead of
+    being audited against whatever default the command line carries."""
+
+    def test_schema_2_records_the_agents(self):
+        root = _mkrepo("widget")
+        _write_code_intel(
+            root, "SCHEMA=2", "WORKSPACE=team", "PROJECT=widget", "AGENTS=claude"
+        )
+        ident = project.read_code_intel(root)
+        self.assertEqual(ident.status, "OK")
+        self.assertEqual(ident.agents, "claude")
+
+    def test_schema_1_stays_readable_and_says_nothing(self):
+        root = _mkrepo("widget")
+        _write_code_intel(root, "SCHEMA=1", "WORKSPACE=team", "PROJECT=widget")
+        ident = project.read_code_intel(root)
+        self.assertEqual(ident.status, "OK")
+        self.assertIsNone(ident.agents)
+
+    def test_schema_2_without_agents_is_an_error(self):
+        root = _mkrepo("widget")
+        _write_code_intel(root, "SCHEMA=2", "WORKSPACE=team", "PROJECT=widget")
+        self.assertIn(
+            "missing required key AGENTS", project.read_code_intel(root).message
+        )
+
+    def test_unknown_agent_value_is_an_error(self):
+        root = _mkrepo("widget")
+        _write_code_intel(
+            root, "SCHEMA=2", "WORKSPACE=team", "PROJECT=widget", "AGENTS=emacs"
+        )
+        self.assertIn("AGENTS=emacs is not one of", project.read_code_intel(root).message)
+
+    def test_agents_is_honoured_under_schema_1_too(self):
+        """A hand-written key is read, not rejected: the value is what matters,
+        and refusing it would only send the user to edit the file again."""
+        root = _mkrepo("widget")
+        _write_code_intel(
+            root, "SCHEMA=1", "WORKSPACE=team", "PROJECT=widget", "AGENTS=codex"
+        )
+        self.assertEqual(project.read_code_intel(root).agents, "codex")
+
+
+class WriteIdentity(unittest.TestCase):
+    def test_written_file_reads_back_at_the_current_schema(self):
+        root = _mkrepo("widget")
+        project.write_identity(root, "team", "widget", "claude")
+        ident = project.read_code_intel(root)
+        self.assertEqual((ident.status, ident.workspace, ident.agents),
+                         ("OK", "team", "claude"))
+        with open(os.path.join(root, ".code-intel")) as handle:
+            body = handle.read()
+        self.assertIn("SCHEMA=2\n", body)
+        self.assertIn("AGENTS=claude\n", body)
+        self.assertTrue(body.startswith("# agent-code-intel"))
+
+    def test_rewriting_replaces_the_recorded_agents(self):
+        root = _mkrepo("widget")
+        project.write_identity(root, "team", "widget", "both")
+        project.write_identity(root, "team", "widget", "claude")
+        self.assertEqual(project.read_code_intel(root).agents, "claude")
+
+    def test_an_unknown_value_is_refused_before_it_reaches_the_file(self):
+        root = _mkrepo("widget")
+        with self.assertRaises(CliError):
+            project.write_identity(root, "team", "widget", "emacs")
+        self.assertFalse(os.path.exists(os.path.join(root, ".code-intel")))
+
+
+class EffectiveAgents(unittest.TestCase):
+    def test_the_recorded_value_wins_over_the_default(self):
+        self.assertEqual(project.effective_agents("claude", "both", False), "claude")
+
+    def test_an_explicit_flag_wins_over_the_recorded_value(self):
+        self.assertEqual(project.effective_agents("claude", "codex", True), "codex")
+
+    def test_an_unrecorded_project_keeps_the_command_line_default(self):
+        self.assertEqual(project.effective_agents(None, "both", False), "both")
+
+
+class IdentityCurrent(unittest.TestCase):
+    def _context(self, root, agents):
+        return project.ProjectContext(
+            root=root,
+            workspace="team",
+            proj_name=os.path.basename(root),
+            grepai_cfg="",
+            mcp_json="",
+            refresh_script="",
+            ident_status="OK",
+            ident_workspace="team",
+            ident_project=os.path.basename(root),
+            ident_agents=agents,
+        )
+
+    def test_matching_agents_is_current(self):
+        context = self._context("/x/widget", "claude")
+        self.assertTrue(project.identity_current(context, "claude"))
+
+    def test_different_agents_is_not_current(self):
+        context = self._context("/x/widget", "claude")
+        self.assertFalse(project.identity_current(context, "both"))
+
+    def test_a_schema_1_file_is_never_current(self):
+        context = self._context("/x/widget", None)
+        self.assertFalse(project.identity_current(context, "both"))
 
 
 if __name__ == "__main__":
