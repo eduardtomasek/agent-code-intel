@@ -1803,9 +1803,7 @@ def _refresh_preflight(
         needs.append(_Need(what, fix))
         reporter.row("MISSING", what)
 
-    # Keep the established no-stack path when both refresh sides are disabled.
-    if do_grepai or do_gitnexus:
-        _report_code_context_tools(reporter, stack)
+    _report_code_context_tools(reporter, stack)
 
     if do_grepai:
         if stack.have("grepai"):
