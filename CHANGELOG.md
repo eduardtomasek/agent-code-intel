@@ -5,6 +5,23 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
 
 ## [Unreleased]
 
+### Změněno
+
+- Minimální verze Node.js je **24.11.0** a bere se z toho, co si žádá GitNexus,
+  ne z hádání podle jedné funkce. Preflight dosud testoval přítomnost
+  `module.registerHooks`, která přibyla v řadě 22.15 — gitnexus 1.6.11 ale
+  deklaruje `engines: ^22.18.0 || >=24.11.0`, takže Node mezi 22.15 a 22.18
+  kontrolou prošel, i když ho GitNexus nepodporuje. Z deklarovaného rozsahu
+  bereme horní větev jako jedno minimum; je to o něco přísnější, než co GitNexus
+  připouští, ale je to jedno číslo místo dvou rozsahů. Hláška teď říká
+  `node vX is below the 24.11.0 that gitnexus requires`.
+- `--status --json` má u `tool.node` dva nové klíče: `version_ok` (proti čemu se
+  rozhoduje) a `version_min`. `register_hooks` zůstává, protože pojmenovává
+  přesný projev indexu postaveného pod starým Nodem. `code-intel-dash` svůj
+  verdikt bere z `version_ok`.
+- README uvádí minimum 24.11.0 v přehledu součástí, v seznamu požadavků, v tabulce
+  tří úrovní závislostí, v kapitole 7 a v popisu dashboardu.
+
 ## [6.0.0] - 2026-09-10
 
 `.code-intel` si pamatuje, pro které agenty byl projekt zapojený. Hlavní verze

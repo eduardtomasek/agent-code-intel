@@ -404,6 +404,12 @@ class Stack:
             '"function" ? 0 : 1)',
         )
 
+    def node_version_ok(self) -> bool:
+        """Whether this machine's node meets :data:`NODE_MIN`."""
+        if not self.have("node"):
+            return False
+        return node_version_ok(self.first_line("node", "--version"))
+
     # -- gitnexus -----------------------------------------------------------
 
     def gitnexus_runs(self) -> bool:
@@ -439,6 +445,56 @@ class Stack:
         ``--refresh`` does not redirect this — the reference lets it write
         straight to the user; the port captures it and the mode replays it."""
         return self._run(("grepai", "watch", "--workspace", workspace, "--background"))
+
+
+# The Node this tool requires. GitNexus owns the real constraint — it is the
+# thing that breaks — so the gate follows its published `engines`, not a probe
+# for one API. gitnexus 1.6.11 declares `^22.18.0 || >=24.11.0`; we take the
+# upper branch as a single minimum, which is stricter on purpose: one number to
+# state, and no Node on the 22 line to keep explaining.
+NODE_MIN: tuple[int, int, int] = (24, 11, 0)
+
+
+def node_version(version_output: str) -> tuple[int, int, int] | None:
+    """``(major, minor, patch)`` from ``node --version``, or ``None``.
+
+    ``node --version`` prints ``v24.14.0``; a nightly appends a suffix to the
+    patch, so each field is read up to its first non-digit.
+    """
+
+    text = version_output.strip().lstrip("vV")
+    parts = text.split(".")
+    if len(parts) < 3:
+        return None
+    numbers = []
+    for part in parts[:3]:
+        digits = ""
+        for char in part:
+            if not char.isdigit():
+                break
+            digits += char
+        if not digits:
+            return None
+        numbers.append(int(digits))
+    return (numbers[0], numbers[1], numbers[2])
+
+
+def node_version_ok(version_output: str) -> bool:
+    """Whether ``node --version`` output meets :data:`NODE_MIN`.
+
+    An unparseable version is **not** ok: this only ever drives a warning, and
+    saying so with the string we could not read beats staying silent about a
+    Node nobody can identify.
+    """
+
+    parsed = node_version(version_output)
+    return parsed is not None and parsed >= NODE_MIN
+
+
+def node_min_text() -> str:
+    """``NODE_MIN`` as it is written in messages and documentation."""
+
+    return "%d.%d.%d" % NODE_MIN
 
 
 # -- pure parsers (given a tool's captured output) -----------------------------

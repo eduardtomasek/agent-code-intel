@@ -31,8 +31,9 @@ LIVENESS IS NOT CORRECTNESS
         GrepAI      run a real query against a real workspace
         GitNexus    read .gitnexus/meta.json: node/edge counts, indexed
                     commit vs HEAD, and the Node version the index was
-                    BUILT with — an index built under a Node without
-                    module.registerHooks is the trap that costs an afternoon
+                    BUILT with — an index built under a Node below the
+                    minimum gitnexus declares is the trap that costs an
+                    afternoon
         watcher     tail its log; a running watcher with no log activity
                     since a code change is the silent-staleness failure
 
@@ -896,16 +897,22 @@ function renderStack(d){
     ], o.error,
     overflow ? `chunk ${meta.chunk_size} overflows the ${o.context_length}-token window — files will drop out of the index silently` : null);
 
-  h += card("Node.js", nd.present?(nd.register_hooks?"ok":"bad"):"bad", nd.path||"", [
-      row("version", nd.version||"—"),
+  /* The verdict follows `version_ok`, the same gate the CLI warns on, which
+     follows gitnexus's published `engines`. `registerHooks` stays as a row
+     because it names the exact symptom of an index built under an old Node. */
+  const nodeBad = nd.present && nd.version_ok === false;
+  h += card("Node.js", nd.present?(nd.version_ok===false?"bad":"ok"):"bad", nd.path||"", [
+      row("version", nd.version||"—", cls(nd.version_ok !== false)),
+      row("minimum", nd.version_min ? (nd.version_min+" (gitnexus engines)") : "—",
+          cls(nd.version_ok !== false)),
       row("registerHooks", nd.register_hooks?"function":"MISSING", cls(!!nd.register_hooks)),
       row("gitnexus", (tool.gitnexus||{}).runs?((tool.gitnexus||{}).version||"ok"):"will not run",
           cls(!!(tool.gitnexus||{}).runs)),
       row("grepai", ((tool.grepai||{}).version||"—").replace("grepai version ",""),
           cls(!!(tool.grepai||{}).present)),
     ],
-    (nd.present && !nd.register_hooks) ? "gitnexus --version passes, but analyze dies on registerHooks." : null,
-    (nd.present && !nd.register_hooks) ? "Needs Node 22.15+ / 23.5+. See chapter 7 of the manual." : null);
+    nodeBad ? "gitnexus --version may still pass, but analyze is not supported on this Node." : null,
+    nodeBad ? ("Needs Node "+(nd.version_min||"24.11.0")+" or newer: brew upgrade node && npm i -g gitnexus.") : null);
 
   /* MCP servers: a server started before the package was upgraded is still
      running the old code and will reject the newer index. */

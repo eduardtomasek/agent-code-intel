@@ -488,8 +488,15 @@ def _init_preflight(
     if stack.have("gitnexus"):
         if stack.gitnexus_runs():
             reporter.row("ok", "gitnexus %s runs" % stack.first_line("gitnexus", "--version"))
-            if stack.have("node") and not stack.node_has_register_hooks():
-                reporter.row("warn", "node %s is too old for 'gitnexus analyze'" % stack.first_line("node", "--version"))
+            if stack.have("node") and not stack.node_version_ok():
+                reporter.row(
+                    "warn",
+                    "node %s is below the %s that gitnexus requires"
+                    % (
+                        stack.first_line("node", "--version"),
+                        integrations.node_min_text(),
+                    ),
+                )
         else:
             need(
                 "gitnexus is on PATH but does not run",
@@ -1769,6 +1776,8 @@ def _json_tools(stack: integrations.Stack) -> dict[str, object]:
             "version": stack.first_line("node", "--version"),
             "path": stack.which("node"),
             "register_hooks": stack.node_has_register_hooks(),
+            "version_ok": stack.node_version_ok(),
+            "version_min": integrations.node_min_text(),
         }
     else:
         tools["node"] = {"present": False}
@@ -2160,10 +2169,13 @@ def _do_refresh(
         if not _reindex(reporter, stack, context):
             bad = True
             reporter.say("gitnexus analyze failed")
-            if stack.have("node") and not stack.node_has_register_hooks():
+            if stack.have("node") and not stack.node_version_ok():
                 reporter.say(
-                    "  node %s is too old for 'gitnexus analyze'"
-                    % stack.first_line("node", "--version")
+                    "  node %s is below the %s that gitnexus requires"
+                    % (
+                        stack.first_line("node", "--version"),
+                        integrations.node_min_text(),
+                    )
                 )
                 reporter.say("  fix: brew upgrade node && npm i -g gitnexus")
 
