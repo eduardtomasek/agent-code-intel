@@ -573,27 +573,33 @@ def _preview_init(
                 plan("BROKEN", "%s has unbalanced code-intel markers — fix by hand" % name)
             else:
                 plan("WRITE", "%s code-intel block" % name)
-        for agent, details in agent_skills.status(context.root, agent_target).items():
-            skill_state = details["state"]
-            relative = details["path"]
-            if skill_state == "current":
-                plan("keep", "%s routing skill at %s" % (agent, relative))
-            elif skill_state == "missing":
-                plan("WRITE", "%s routing skill at %s" % (agent, relative))
-            elif skill_state == "managed-drift":
-                plan("UPDATE", "%s routing skill at %s" % (agent, relative))
-            elif skill_state == "foreign" and force_docs:
-                plan(
-                    "REPLACE",
-                    "%s foreign routing skill at %s (--force-docs)"
-                    % (agent, relative),
+        for agent, skills in agent_skills.status(context.root, agent_target).items():
+            for skill_name, details in skills.items():
+                skill_state = details["state"]
+                relative = details["path"]
+                label = (
+                    "routing skill"
+                    if skill_name == agent_skills.SKILL_NAME
+                    else "%s skill" % skill_name
                 )
-            else:
-                plan(
-                    "CONFLICT",
-                    "%s routing skill at %s is %s"
-                    % (agent, relative, skill_state),
-                )
+                if skill_state == "current":
+                    plan("keep", "%s %s at %s" % (agent, label, relative))
+                elif skill_state == "missing":
+                    plan("WRITE", "%s %s at %s" % (agent, label, relative))
+                elif skill_state == "managed-drift":
+                    plan("UPDATE", "%s %s at %s" % (agent, label, relative))
+                elif skill_state == "foreign" and force_docs:
+                    plan(
+                        "REPLACE",
+                        "%s foreign %s at %s (--force-docs)"
+                        % (agent, label, relative),
+                    )
+                else:
+                    plan(
+                        "CONFLICT",
+                        "%s %s at %s is %s"
+                        % (agent, label, relative, skill_state),
+                    )
     else:
         plan("skip", "agent documents and routing skills (--no-docs)")
 
@@ -789,12 +795,19 @@ def _apply_init(
             _write_doc(reporter, os.path.join(context.root, "CLAUDE.md"), force_docs)
         if agent_target in ("codex", "both"):
             _write_doc(reporter, os.path.join(context.root, "AGENTS.md"), force_docs)
-        for agent, outcome in agent_skills.install_targets(
+        for skill_name, agent, outcome in agent_skills.install_targets(
             context.root, agent_target, force_docs
         ):
             reporter.say(
-                "%s: routing skill %s at %s"
-                % (agent, outcome, agent_skills.relative_path(agent))
+                "%s: %s %s at %s"
+                % (
+                    agent,
+                    "routing skill"
+                    if skill_name == agent_skills.SKILL_NAME
+                    else "%s skill" % skill_name,
+                    outcome,
+                    agent_skills.relative_path(agent, skill_name),
+                )
             )
     else:
         reporter.say("skipped agent documents and routing skills (--no-docs)")
@@ -953,11 +966,17 @@ def run_remove(
             if project.doc_state(os.path.join(context.root, name)) == "present":
                 reporter.row(verb, "strip code-intel block from %s" % name)
                 actions += 1
-        for agent, path in agent_skills.managed_targets(context.root):
+        for skill_name, agent, path in agent_skills.managed_targets(context.root):
             reporter.row(
                 verb,
-                "rm %s routing skill at %s"
-                % (agent, os.path.relpath(path, context.root)),
+                "rm %s %s at %s"
+                % (
+                    agent,
+                    "routing skill"
+                    if skill_name == agent_skills.SKILL_NAME
+                    else "%s skill" % skill_name,
+                    os.path.relpath(path, context.root),
+                ),
             )
             actions += 1
         if purge_collection:
@@ -1027,10 +1046,16 @@ def run_remove(
         elif result == "stripped":
             reporter.say("stripped the code-intel block from %s" % name)
 
-    for agent, path in agent_skills.remove_managed_targets(context.root):
+    for skill_name, agent, path in agent_skills.remove_managed_targets(context.root):
         reporter.say(
-            "removed %s routing skill at %s"
-            % (agent, os.path.relpath(path, context.root))
+            "removed %s %s at %s"
+            % (
+                agent,
+                "routing skill"
+                if skill_name == agent_skills.SKILL_NAME
+                else "%s skill" % skill_name,
+                os.path.relpath(path, context.root),
+            )
         )
 
     if purge_collection:
@@ -1172,18 +1197,24 @@ def _report_routing_status(
 ) -> bool:
     """Render selected routing skills and return whether any has drift."""
     bad = False
-    for agent, details in agent_skills.status(root, agent_target).items():
-        skill_state = str(details["state"])
-        relative = str(details["path"])
-        if skill_state == "current":
-            reporter.row("", "  %s routing skill current at %s" % (agent, relative))
-            continue
-        bad = True
-        reporter.row(
-            "",
-            "  %s routing skill is %s at %s"
-            % (agent, skill_state, relative),
-        )
+    for agent, skills in agent_skills.status(root, agent_target).items():
+        for skill_name, details in skills.items():
+            skill_state = str(details["state"])
+            relative = str(details["path"])
+            label = (
+                "routing skill"
+                if skill_name == agent_skills.SKILL_NAME
+                else "%s skill" % skill_name
+            )
+            if skill_state == "current":
+                reporter.row("", "  %s %s current at %s" % (agent, label, relative))
+                continue
+            bad = True
+            reporter.row(
+                "",
+                "  %s %s is %s at %s"
+                % (agent, label, skill_state, relative),
+            )
     return bad
 
 
@@ -1539,7 +1570,11 @@ def _json_projects(
 
         routing_skills = agent_skills.status(root, agent_target)
         entry["routing_skills"] = routing_skills
-        if not all(bool(details["ok"]) for details in routing_skills.values()):
+        if not all(
+            bool(details["ok"])
+            for skills in routing_skills.values()
+            for details in skills.values()
+        ):
             bad = True
 
         entry["gob_leftover"] = os.path.isfile(

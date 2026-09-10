@@ -201,8 +201,9 @@ class Init(unittest.TestCase):
 
                 self.assertEqual(code, 0)
                 for agent, doc in (("claude", "CLAUDE.md"), ("codex", "AGENTS.md")):
-                    skill = agent_skills.target_paths(root, agent)[0][1]
-                    self.assertEqual(os.path.isfile(skill), agent in expected)
+                    for skill_name in agent_skills.SKILLS:
+                        skill = agent_skills.target_paths(root, agent, skill_name)[0][1]
+                        self.assertEqual(os.path.isfile(skill), agent in expected)
                     self.assertEqual(
                         os.path.isfile(os.path.join(root, doc)), agent in expected
                     )
@@ -311,8 +312,10 @@ class Init(unittest.TestCase):
         self.assertIn("skipped git (--no-git)", out.getvalue())
         self.assertFalse(os.path.exists(os.path.join(root, "CLAUDE.md")))
         self.assertFalse(os.path.exists(os.path.join(root, "AGENTS.md")))
-        self.assertEqual(agent_skills.status(root, "both")["claude"]["state"], "missing")
-        self.assertEqual(agent_skills.status(root, "both")["codex"]["state"], "missing")
+        statuses = agent_skills.status(root, "both")
+        for agent in ("claude", "codex"):
+            for skill in agent_skills.SKILLS:
+                self.assertEqual(statuses[agent][skill]["state"], "missing")
         self.assertEqual(err.getvalue(), "")
 
     def test_apply_fails_if_watcher_start_fails(self):

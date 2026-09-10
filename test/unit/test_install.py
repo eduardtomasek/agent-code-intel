@@ -74,6 +74,21 @@ class LibStep(Base):
                 "SKILL.md",
             ).read_bytes(),
         )
+        self.assertEqual(
+            Path(
+                self.lib,
+                "agent_code_intel",
+                "assets",
+                "code-context",
+                "SKILL.md",
+            ).read_bytes(),
+            Path(
+                install._source_package(),
+                "assets",
+                "code-context",
+                "SKILL.md",
+            ).read_bytes(),
+        )
 
     def test_clean_install_bundles_the_dashboard(self):
         self.assertIs(install._install_lib(self.lib), True)

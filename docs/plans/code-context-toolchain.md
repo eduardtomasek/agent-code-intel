@@ -309,8 +309,8 @@ proti osmi, a Graft neuspěje ani na souboru v repozitáři, který indexoval.
 
 ## 4. Zamýšlený skill
 
-Návrh je v `docs/plans/code-context-SKILL.draft.md` (229 řádků, 9,3 kB).
-Není nikam zapojený — je to podklad k revizi.
+Kanonický skill je v `agent_code_intel/assets/code-context/SKILL.md`.
+Distribuuje se do agentních projektových adresářů jako spravovaný obsah.
 
 Je psaný jako **schopnostní příručka**, ne jako seznam náhrad. Otevírá
 tabulkou „co umí jen tenhle nástroj", protože to je rozhodnutí, které agent
@@ -1054,4 +1054,4 @@ a s absolutními cestami; se subshellem nesouvisely.
 - `burntsushi/ripgrep`; Universal Ctags 6.2.1; ast-grep 0.45.3;
   fd 10.5.0; tokei 15.0.0; scc 4.1.0; ripgrep-all 0.10.10
 - `docs/plans/graft-integration-analysis.md` — předchozí analýza a stanovisko
-- `docs/plans/code-context-SKILL.draft.md` — návrh skillu
+- `agent_code_intel/assets/code-context/SKILL.md` — kanonický skill

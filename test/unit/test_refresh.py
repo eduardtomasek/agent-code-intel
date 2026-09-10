@@ -417,6 +417,17 @@ class Shape(unittest.TestCase):
         self.assertIn("codex routing skill is missing", out)
         self.assertIn("Code intelligence has drift or errors above.", out)
 
+    def test_refresh_reports_each_managed_skill_separately(self):
+        code, out, err = _run(
+            stack=_Stack(present=()),
+            do_grepai=False,
+            do_gitnexus=False,
+        )
+        self.assertEqual((code, err), (0, ""))
+        for agent in ("claude", "codex"):
+            self.assertIn("%s routing skill current" % agent, out)
+            self.assertIn("%s code-context skill current" % agent, out)
+
     def test_only_gitnexus_side_runs_when_grepai_is_off(self):
         stack = _Stack()
         _, out, _ = _run(stack=stack, do_grepai=False)

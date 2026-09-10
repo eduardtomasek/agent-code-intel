@@ -73,13 +73,15 @@ write_modified_refresh_script() {
 }
 
 write_routing_skills() {
-  local root="$1" source
-  source="$HERE/../agent_code_intel/assets/agent-code-intel-routing/SKILL.md"
-  mkdir -p \
-    "$root/.claude/skills/agent-code-intel-routing" \
-    "$root/.agents/skills/agent-code-intel-routing"
-  cp "$source" "$root/.claude/skills/agent-code-intel-routing/SKILL.md"
-  cp "$source" "$root/.agents/skills/agent-code-intel-routing/SKILL.md"
+  local root="$1" skill source
+  for skill in agent-code-intel-routing code-context; do
+    source="$HERE/../agent_code_intel/assets/$skill/SKILL.md"
+    mkdir -p \
+      "$root/.claude/skills/$skill" \
+      "$root/.agents/skills/$skill"
+    cp "$source" "$root/.claude/skills/$skill/SKILL.md"
+    cp "$source" "$root/.agents/skills/$skill/SKILL.md"
+  done
 }
 
 fail() { FAIL=$((FAIL+1)); FAILED_NAMES+=("$CURRENT"); printf '  FAIL  %s\n        %s\n' "$CURRENT" "$1"; }

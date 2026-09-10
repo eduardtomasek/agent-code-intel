@@ -442,14 +442,28 @@ class JsonDocument(unittest.TestCase):
             entry["routing_skills"],
             {
                 "claude": {
-                    "path": ".claude/skills/agent-code-intel-routing/SKILL.md",
-                    "state": "current",
-                    "ok": True,
+                    "agent-code-intel-routing": {
+                        "path": ".claude/skills/agent-code-intel-routing/SKILL.md",
+                        "state": "current",
+                        "ok": True,
+                    },
+                    "code-context": {
+                        "path": ".claude/skills/code-context/SKILL.md",
+                        "state": "current",
+                        "ok": True,
+                    },
                 },
                 "codex": {
-                    "path": ".agents/skills/agent-code-intel-routing/SKILL.md",
-                    "state": "current",
-                    "ok": True,
+                    "agent-code-intel-routing": {
+                        "path": ".agents/skills/agent-code-intel-routing/SKILL.md",
+                        "state": "current",
+                        "ok": True,
+                    },
+                    "code-context": {
+                        "path": ".agents/skills/code-context/SKILL.md",
+                        "state": "current",
+                        "ok": True,
+                    },
                 },
             },
         )
@@ -476,8 +490,21 @@ class JsonDocument(unittest.TestCase):
             ),
         )
         entry = json.loads(out)["projects"][0]
-        self.assertIs(entry["routing_skills"]["claude"]["ok"], True)
-        self.assertEqual(entry["routing_skills"]["codex"]["state"], "missing")
+        self.assertIs(
+            entry["routing_skills"]["claude"]["agent-code-intel-routing"]["ok"],
+            True,
+        )
+        self.assertIs(
+            entry["routing_skills"]["claude"]["code-context"]["ok"], True
+        )
+        self.assertEqual(
+            entry["routing_skills"]["codex"]["agent-code-intel-routing"]["state"],
+            "missing",
+        )
+        self.assertEqual(
+            entry["routing_skills"]["codex"]["code-context"]["state"],
+            "missing",
+        )
         self.assertIs(entry["ok"], False)
 
     def test_broken_project_entry_is_the_short_shape(self):  # JSON-6
@@ -509,7 +536,12 @@ class JsonDocument(unittest.TestCase):
         )
         self.assertIs(entry["exists"], False)
         self.assertEqual(
-            entry["routing_skills"]["codex"]["state"], "missing"
+            entry["routing_skills"]["codex"]["agent-code-intel-routing"]["state"],
+            "missing",
+        )
+        self.assertEqual(
+            entry["routing_skills"]["codex"]["code-context"]["state"],
+            "missing",
         )
         self.assertIs(entry["ok"], False)
 
