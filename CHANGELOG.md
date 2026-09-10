@@ -5,6 +5,18 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
 
 ## [Unreleased]
 
+### Změněno
+
+- `--apply` přidává do `.gitignore` vedle `.grepai/` a `.gitnexus/` i
+  `.DS_Store`. Projekty zapojené starší verzí to do prvního `--apply` hlásí
+  jako drift `.gitignore += …`; `_ensure_gitignore` přidává jen chybějící
+  řádky, takže ručně udržovaný `.gitignore` si zachová své pořadí i obsah.
+  Lze to vypnout přes `gitignore_entries` v `defaults.toml`.
+
+### Odstraněno
+
+- `docs/.DS_Store`, commitnutý omylem v `e87a298`.
+
 ## [5.0.0] - 2026-09-10
 
 Vydání vlastního code-context řetězce pro Claude a Codex: spravované skilly,

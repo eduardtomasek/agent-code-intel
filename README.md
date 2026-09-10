@@ -666,7 +666,7 @@ soubory:
 | Soubor                                     | K čemu je                                             | Kdo ho vytvoří                       |
 | ------------------------------------------ | ----------------------------------------------------- | ------------------------------------ |
 | `.git/`                                    | Verzovací systém, založí se automaticky               | agent-code-intel                     |
-| `.gitignore`                               | Aby se indexy nedostaly do gitu                       | agent-code-intel                     |
+| `.gitignore`                               | Aby se indexy a `.DS_Store` nedostaly do gitu         | agent-code-intel                     |
 | `.grepai/`                                 | Nastavení indexování pro tenhle projekt               | agent-code-intel                     |
 | `.mcp.json`                                | Napojení vyhledávání na tvého AI agenta               | agent-code-intel                     |
 | `CLAUDE.md`                                | Odkaz na routing a `code-context` skilly pro Claude  | agent-code-intel pro `claude`/`both` |
@@ -690,8 +690,8 @@ Umístění odpovídají oficiální dokumentaci pro
 [Claude Code](https://code.claude.com/docs/en/skills) a
 [Codex](https://learn.chatgpt.com/docs/build-skills).
 
-Routing skill je záměrně verzovatelný: `.gitignore` pokrývá `.grepai/` a
-`.gitnexus/`, ale ne `.claude/` ani `.agents/`. Tým tak dostane stejné
+Routing skill je záměrně verzovatelný: `.gitignore` pokrývá `.grepai/`,
+`.gitnexus/` a `.DS_Store`, ale ne `.claude/` ani `.agents/`. Tým tak dostane stejné
 rozhodování nástrojů. Výchozí GrepAI konfigurace obě agentní složky při
 indexování ignoruje.
 

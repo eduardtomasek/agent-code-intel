@@ -104,7 +104,14 @@ _DEFAULT_EXTRA_IGNORES: tuple[str, ...] = (
     ".agents",
     ".mcp.json",
 )
-_DEFAULT_GITIGNORE_ENTRIES: tuple[str, ...] = (".grepai/", ".gitnexus/")
+# Two index directories plus .DS_Store: Finder state macOS writes into any
+# browsed directory, which has no business in a repository and gets
+# committed by accident.
+_DEFAULT_GITIGNORE_ENTRIES: tuple[str, ...] = (
+    ".grepai/",
+    ".gitnexus/",
+    ".DS_Store",
+)
 
 # The 16 names the bash harvester presets and transfers back (issue #38 §2.2,
 # §3): 11 scalars + 2 arrays + the three config paths, minus VERSION.
