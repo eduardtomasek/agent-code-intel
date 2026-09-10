@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from agent_code_intel import agent_skills, commands, project
+from agent_code_intel import agent_skills, commands, hooks, project
 from agent_code_intel.config import ChildEnvironment, LoadedConfig, default_config
 from agent_code_intel.project import ProjectContext
 
@@ -94,6 +94,7 @@ def _mkrepo(name="proj"):
     root = os.path.join(tempfile.mkdtemp(prefix="aci-status-"), name)
     os.makedirs(root)
     subprocess.run(["git", "init", "-q", root], check=True)
+    hooks.install(root)
     return project.canon(root)
 
 
@@ -182,6 +183,25 @@ class TextTable(unittest.TestCase):
         self.assertIn("  DRIFT     ws  %s" % root, out)
         self.assertIn("  watcher not running", out)
         self.assertIn("Repair a project with:  agent-code-intel --path <dir> --apply", out)
+
+    def test_missing_session_start_hook_is_status_drift(self):
+        root = _mkrepo("hook-drift")
+        _code_intel(root, "team", "hook-drift")
+        _grepai_config(root)
+        hooks.remove(root)
+        stack = _Stack(
+            ws_exists=True,
+            show="  - hook-drift: %s\n  model nomic-embed-text-v2-moe\n" % root,
+            watch="running",
+        )
+        code, out, _ = _run(
+            as_json=False,
+            status_all=False,
+            context=_context(root),
+            stack=stack,
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("claude SessionStart hook is missing", out)
 
     def test_hr_rule_is_byte_length_of_the_heading(self):
         root = _mkrepo()
@@ -430,7 +450,7 @@ class JsonDocument(unittest.TestCase):
         self.assertEqual(list(entry), [
             "workspace", "path", "name", "exists", "workspace_exists", "mapped",
             "mapped_path", "embedder", "chunking_ok", "ignores_ok", "watcher",
-            "routing_skills", "gob_leftover", "collection", "ok",
+            "routing_skills", "session_start_hook", "gob_leftover", "collection", "ok",
         ])
         self.assertIs(entry["ok"], True)
         self.assertIs(entry["gob_leftover"], False)
@@ -518,7 +538,14 @@ class JsonDocument(unittest.TestCase):
         entry = doc["projects"][0]
         self.assertEqual(
             list(entry),
-            ["workspace", "path", "code_intel_error", "routing_skills", "ok"],
+            [
+                "workspace",
+                "path",
+                "code_intel_error",
+                "routing_skills",
+                "session_start_hook",
+                "ok",
+            ],
         )
         self.assertIs(entry["ok"], False)
         self.assertEqual(set(entry["routing_skills"]), {"claude", "codex"})
@@ -532,7 +559,15 @@ class JsonDocument(unittest.TestCase):
         entry = doc["projects"][0]
         self.assertEqual(
             list(entry),
-            ["workspace", "path", "name", "exists", "routing_skills", "ok"],
+            [
+                "workspace",
+                "path",
+                "name",
+                "exists",
+                "routing_skills",
+                "session_start_hook",
+                "ok",
+            ],
         )
         self.assertIs(entry["exists"], False)
         self.assertEqual(

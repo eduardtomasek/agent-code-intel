@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from agent_code_intel import agent_skills, commands, integrations, project
+from agent_code_intel import agent_skills, commands, hooks, integrations, project
 from agent_code_intel.config import ChildEnvironment, LoadedConfig, default_config
 from agent_code_intel.project import ProjectContext
 
@@ -207,6 +207,33 @@ class Init(unittest.TestCase):
                     self.assertEqual(
                         os.path.isfile(os.path.join(root, doc)), agent in expected
                     )
+                self.assertEqual(
+                    os.path.isfile(os.path.join(root, hooks.SCRIPT_RELATIVE)),
+                    "claude" in expected,
+                )
+
+    def test_no_hook_skips_repo_local_hook(self):
+        root = tempfile.mkdtemp(prefix="aci-init-no-hook-")
+        code = commands.run_init(
+            apply=True,
+            bootstrap=False,
+            do_git=False,
+            start_watch=False,
+            run_analyze=False,
+            write_docs=False,
+            write_hook=False,
+            force_docs=False,
+            agent_target="both",
+            context=make_context(root),
+            loaded=loaded(),
+            conf_dir=os.path.join(root, "config"),
+            stdout=io.StringIO(),
+            stderr=io.StringIO(),
+            stack=FakeStack(),
+        )
+        self.assertEqual(code, 0)
+        self.assertFalse(os.path.exists(os.path.join(root, hooks.SCRIPT_RELATIVE)))
+        self.assertFalse(os.path.exists(os.path.join(root, hooks.SETTINGS_RELATIVE)))
 
     def test_foreign_routing_skill_blocks_apply_before_project_mutation(self):
         root = tempfile.mkdtemp(prefix="aci-init-foreign-skill-")

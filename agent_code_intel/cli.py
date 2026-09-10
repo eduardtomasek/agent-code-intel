@@ -49,6 +49,7 @@ class Options:
     start_watch: bool = True
     run_analyze: bool = True
     write_docs: bool = True
+    write_hook: bool = True
     force_docs: bool = False
     status_all: bool = False
     as_json: bool = False
@@ -91,6 +92,7 @@ Options:
   --no-watch        Do not start the GrepAI watcher
   --no-analyze      Skip the initial GitNexus analyze (slow on big repos)
   --no-docs         Do not touch agent documents or routing skills
+  --no-hook         Do not install the repo-local SessionStart hook
   --force-docs      Rewrite managed docs and adopt a foreign routing skill
   --no-grepai       With --refresh: skip the GrepAI watcher check/start
   --no-gitnexus     With --refresh: skip the GitNexus re-index
@@ -146,6 +148,7 @@ _BOOL_FLAGS = {
     "--no-watch": ("start_watch", False),
     "--no-analyze": ("run_analyze", False),
     "--no-docs": ("write_docs", False),
+    "--no-hook": ("write_hook", False),
     "--force-docs": ("force_docs", True),
     "--no-grepai": ("do_grepai", False),
     "--no-gitnexus": ("do_gitnexus", False),
@@ -322,6 +325,7 @@ def main(
                 start_watch=opts.start_watch,
                 run_analyze=opts.run_analyze,
                 write_docs=opts.write_docs,
+                write_hook=opts.write_hook,
                 force_docs=opts.force_docs,
                 agent_target=opts.agent_target,
                 context=context,

@@ -1,6 +1,6 @@
 """Import purity — issue #48, decision 43 / issue #50 acceptance criterion 4.
 
-Importing any of the six modules must do no I/O, read no config, print
+Importing any of the seven modules must do no I/O, read no config, print
 nothing and start no service. Each import runs in a fresh subprocess with the
 CWD set to a scratch directory; the test fails if the module writes to that
 directory, prints anything, or raises.
@@ -20,6 +20,7 @@ MODULES = (
     "project",
     "integrations",
     "commands",
+    "hooks",
     "install",
 )
 
