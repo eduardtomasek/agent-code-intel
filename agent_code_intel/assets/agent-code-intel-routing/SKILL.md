@@ -12,6 +12,16 @@ Choose the smallest tool that answers the current question; combine tools only
 when the task crosses their boundaries. Preserve repository safety rules such
 as required GitNexus impact analysis, graph-aware renames, and change detection.
 
+## Code-context rules
+
+Before reading a source file, use the repo-scoped `code-context` skill.
+
+These rules apply regardless of the rest of this routing:
+
+- Exhaustive reference lists for cross-module calls belong to `rg`/`ast-grep`,
+  not the knowledge graphs.
+- Derive the exact definition range; never guess it or truncate it.
+
 ## Tool roles
 
 ### GrepAI

@@ -132,6 +132,21 @@ class ManagedDocs(unittest.TestCase):
         self.assertEqual((message, changed), ("code-intel block already present", False))
         self.assertEqual(os.stat(path).st_mtime_ns, before)
 
+    def test_current_block_preserves_a_foreign_block(self):
+        root = tempfile.mkdtemp(prefix="aci-doc-foreign-")
+        path = os.path.join(root, "AGENTS.md")
+        foreign = "<!-- other-tool:start -->foreign<!-- other-tool:end -->"
+        current = "<!-- code-intel:start -->current<!-- code-intel:end -->"
+        expected = "before\n" + foreign + "\n" + current + "\nafter\n"
+        Path(path).write_text(expected)
+
+        before = os.stat(path).st_mtime_ns
+        message, changed = project.write_managed_doc(path, current, False)
+
+        self.assertEqual((message, changed), ("code-intel block already present", False))
+        self.assertEqual(Path(path).read_text(), expected)
+        self.assertEqual(os.stat(path).st_mtime_ns, before)
+
 
 class ResolveProject(unittest.TestCase):
     def _resolve(self, **kw):

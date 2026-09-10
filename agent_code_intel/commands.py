@@ -303,6 +303,10 @@ After a task changes code, run `agent-code-intel --refresh` from the project
 root. If the command or its local stack is unavailable, report that and
 continue; code intelligence is a navigation aid, not a correctness gate.
 Docs-only changes do not need a refresh.
+
+Before reading a source file, use the `code-context` skill: derive the exact
+definition range with `ctags` instead of guessing a line window, and use
+`rg`/`ast-grep` — not the knowledge graphs — for exhaustive reference lists.
 <!-- code-intel:end -->""",
     "AGENTS.md": """<!-- code-intel:start -->
 ## Code intelligence
@@ -321,6 +325,10 @@ After a task changes code, run `agent-code-intel --refresh` from the project
 root. If the command or its local stack is unavailable, report that and
 continue; code intelligence is a navigation aid, not a correctness gate.
 Docs-only changes do not need a refresh.
+
+Before reading a source file, use the `code-context` skill: derive the exact
+definition range with `ctags` instead of guessing a line window, and use
+`rg`/`ast-grep` — not the knowledge graphs — for exhaustive reference lists.
 <!-- code-intel:end -->""",
 }
 
