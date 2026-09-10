@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from agent_code_intel import agent_skills, commands, hooks, project
+from agent_code_intel import agent_skills, commands, hooks, integrations, project
 from agent_code_intel.config import ChildEnvironment, LoadedConfig, default_config
 from agent_code_intel.project import ProjectContext
 
@@ -61,10 +61,17 @@ class _Stack:
         return "/usr/bin/%s" % name if name in self._present else ""
 
     def first_line(self, *argv):
+        if argv == ("node", "--version"):
+            return "v24.11.0"
         return "%s 9.9.9" % argv[0]
 
     def gitnexus_runs(self):
         return "gitnexus" in self._present
+
+    def node_version_ok(self):
+        return "node" in self._present and integrations.node_version_ok(
+            self.first_line("node", "--version")
+        )
 
     def node_has_register_hooks(self):
         return "node" in self._present
@@ -480,6 +487,33 @@ class JsonDocument(unittest.TestCase):
         self.assertIs(doc["svc"]["container"]["daemon"], False)
         self.assertEqual(doc["svc"]["container"]["cli"], "")
         self.assertIs(doc["svc"]["ollama"]["present"], False)
+
+    def test_node_version_gate_is_reported_in_json(self):
+        root = _mkrepo()
+        _, out, _ = _run(
+            as_json=True,
+            status_all=False,
+            context=_context(root),
+            stack=_Stack(present=("node",)),
+        )
+        node = json.loads(out)["tool"]["node"]
+
+        self.assertIs(node["version_ok"], True)
+        self.assertEqual(node["version_min"], "24.11.0")
+
+    def test_old_node_is_reported_as_not_ok_in_json(self):
+        root = _mkrepo()
+        stack = _Stack(present=("node",))
+        stack.first_line = lambda *argv: (
+            "v20.0.0" if argv == ("node", "--version") else "x 9.9.9"
+        )
+        _, out, _ = _run(
+            as_json=True, status_all=False, context=_context(root), stack=stack
+        )
+        node = json.loads(out)["tool"]["node"]
+
+        self.assertIs(node["version_ok"], False)
+        self.assertEqual(node["version"], "v20.0.0")
 
     def test_code_context_tool_keys_are_stable(self):
         doc, _ = self._doc()

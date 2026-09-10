@@ -227,6 +227,9 @@ class StackProbes(unittest.TestCase):
     def test_node_register_hooks_false_without_node(self):
         self.assertFalse(self._stack({}).node_has_register_hooks())
 
+    def test_node_version_ok_false_without_node(self):
+        self.assertFalse(self._stack({}).node_version_ok())
+
     def test_watch_start_background_argv(self):  # issue #54
         seen = {}
 
@@ -296,6 +299,48 @@ class StackProbes(unittest.TestCase):
                 (("curl", "-s", "-X", "DELETE", "http://127.0.0.1:6333/collections/workspace_team"), None),
             ],
         )
+
+
+class NodeVersionGate(unittest.TestCase):
+    """The Node minimum follows gitnexus's published `engines`, so the gate is
+    a version comparison and not a probe for one API."""
+
+    def test_minimum_is_the_gitnexus_upper_branch(self):
+        self.assertEqual(integrations.NODE_MIN, (24, 11, 0))
+        self.assertEqual(integrations.node_min_text(), "24.11.0")
+
+    def test_the_minimum_itself_passes(self):
+        self.assertTrue(integrations.node_version_ok("v24.11.0"))
+
+    def test_newer_passes(self):
+        for text in ("v24.11.1", "v24.14.0", "v25.0.0"):
+            self.assertTrue(integrations.node_version_ok(text), text)
+
+    def test_one_patch_below_fails(self):
+        self.assertFalse(integrations.node_version_ok("v24.10.9"))
+
+    def test_versions_gitnexus_also_rejects_fail(self):
+        # 23.x and 24.0–24.10 are outside gitnexus's range as well.
+        for text in ("v23.11.0", "v24.0.0", "v24.10.0"):
+            self.assertFalse(integrations.node_version_ok(text), text)
+
+    def test_the_22_line_fails_although_gitnexus_allows_part_of_it(self):
+        # Deliberately stricter than `^22.18.0 || >=24.11.0`: one number to
+        # state beats two ranges to explain.
+        for text in ("v22.15.0", "v22.18.0", "v22.21.0"):
+            self.assertFalse(integrations.node_version_ok(text), text)
+
+    def test_a_nightly_suffix_is_read_as_its_numbers(self):
+        self.assertTrue(integrations.node_version_ok("v25.0.0-nightly20260101"))
+        self.assertEqual(integrations.node_version("v25.0.0-nightly1"), (25, 0, 0))
+
+    def test_unreadable_version_is_not_ok_rather_than_silently_fine(self):
+        for text in ("", "garbage", "v24.11", "v.24.11.0", "vX.Y.Z"):
+            self.assertFalse(integrations.node_version_ok(text), repr(text))
+            self.assertIsNone(integrations.node_version(text), repr(text))
+
+    def test_leading_v_is_optional(self):
+        self.assertEqual(integrations.node_version("24.11.0"), (24, 11, 0))
 
 
 if __name__ == "__main__":

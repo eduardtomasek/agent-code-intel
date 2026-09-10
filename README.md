@@ -193,7 +193,7 @@ a zároveň napíše tvému AI agentovi instrukce, kdy má co použít.
 | **OrbStack**         | Spouští kontejnery                  | Hostitel pro qdrant                     |
 | **GrepAI**           | Sémantické vyhledávání              | Řídí indexování a hledání               |
 | **GitNexus**         | Mapa vztahů v kódu                  | Odpovídá na „co se rozbije"             |
-| **Node.js**          | Běhové prostředí                    | GitNexus je v něm napsaný               |
+| **Node.js** 24.11+   | Běhové prostředí                    | GitNexus je v něm napsaný               |
 | **ripgrep (`rg`)**   | Přesné hledání a ověření            | Volitelný nástroj pro routing skill     |
 | **Homebrew**         | Správce balíčků                     | Instaluje většinu z výše uvedeného      |
 | **agent-code-intel** | Propojí to všechno                  | Aby to byl jeden příkaz, ne patnáct     |
@@ -209,6 +209,8 @@ na stahování.
 - Od verze 5.0.0 Python 3.11 nebo novější; po instalaci ověřte, že
   `python3 --version` vypíše alespoň 3.11. Python 3.9 a starší skončí
   srozumitelnou chybou bez tracebacku
+- Node.js 24.11.0 nebo novější — požadavek si určuje GitNexus; preflight nižší
+  verzi vypíše jako `warn`, viz [kapitola 7](#7-nodejs)
 - Připojení k internetu
 - Heslo ke svému účtu na Macu, jednou při instalaci Homebrew
 - Claude Code, VS Code nebo jiný agent, který umí MCP
@@ -223,7 +225,7 @@ spolehlivý náhradní postup a co rozšiřuje schopnosti agenta:
 
 | Úroveň | Nástroje | Když chybí |
 | --- | --- | --- |
-| **Povinné** | `git`, `curl`, Python 3.11+, Node.js, Docker/OrbStack, Ollama, `grepai`, `gitnexus` | preflight může práci zablokovat; `grepai` a `gitnexus` nejsou v Homebrew |
+| **Povinné** | `git`, `curl`, Python 3.11+, Node.js 24.11+, Docker/OrbStack, Ollama, `grepai`, `gitnexus` | preflight může práci zablokovat; `grepai` a `gitnexus` nejsou v Homebrew |
 | **Doporučené s fallbackem** | `rg`, `ctags` (`universal-ctags`) | preflight vypíše `warn`; pro hledání lze použít `grep` a pro rozsahy Pythonu stdlib `ast`, případně `ast-grep` |
 | **Silně doporučené** | `ast-grep`, `fd`, `rga`, `tokei`, `scc` | `warn`; agent přijde jen o strukturální dotazy, výběr podle vlastností, čtení archivů nebo přehled/složitost |
 
@@ -402,18 +404,30 @@ npm --version
 
 Obojí musí vypsat verzi.
 
-### Verze Node.js musí být dost nová
+### Verze Node.js musí být alespoň 24.11.0
 
 Tohle je zrádné, protože stará verze se neprojeví hned. GitNexus se
 nainstaluje, `gitnexus --version` bez potíží vypíše číslo, a teprve při
-skutečném indexování to spadne na hlášce o `registerHooks`. Ověř si to rovnou:
+skutečném indexování to spadne.
+
+Požadavek si určuje GitNexus sám — verze 1.6.11 deklaruje
+`engines: ^22.18.0 || >=24.11.0`. `agent-code-intel` z toho bere **horní
+větev jako jedno minimum: 24.11.0**. Je to o něco přísnější, než co GitNexus
+připouští, ale je to jedno číslo místo dvou rozsahů, a žádný Node na řadě 22
+není potřeba vysvětlovat.
 
 ```
-node -e 'console.log(typeof require("node:module").registerHooks)'
+node --version
 ```
 
-Musí to vypsat `function`. Když vypíše `undefined`, je tvůj Node starý —
-potřebná funkce přibyla v Node 22.15 a 23.5. Zjisti, odkud se ti Node bere:
+Když to vypíše `v24.11.0` nebo víc, jsi v pořádku. Preflight si to kontroluje
+sám a při nižší verzi napíše:
+
+```
+  warn      node v20.0.0 is below the 24.11.0 that gitnexus requires
+```
+
+Pokud verzi potřebuješ zvednout, zjisti nejdřív, odkud se ti Node bere:
 
 ```
 which node
@@ -967,7 +981,7 @@ Nahoře **stack**, tedy věci společné všem projektům:
 | docker      | běží daemon, běží kontejner, publikuje **oba** porty 6333 i 6334            |
 | qdrant      | HTTP odpovídá, gRPC port je otevřený, kolik má kolekcí, jak rychle odpovídá |
 | ollama      | server žije, model je stažený a načtený, **a skutečně vrátí vektor**        |
-| Node.js     | verze, `registerHooks`, a jestli se gitnexus vůbec spustí                   |
+| Node.js     | verze proti minimu 24.11.0, `registerHooks`, a jestli se gitnexus spustí    |
 | MCP servers | jestli běžící `gitnexus mcp` není starší než index — viz níže               |
 
 Dole každý **projekt** ve čtyřech záložkách. Rozhraní dashboardu je anglicky:
@@ -1063,9 +1077,10 @@ Správný tvar je `grepai version`, bez pomlček.
 
 ### `does not provide an export named 'registerHooks'`
 
-Tvůj Node.js je starý na to, co GitNexus potřebuje. Zákeřné na tom je, že
-`gitnexus --version` funguje — rozbije se až samotné indexování. GrepAI to
-neovlivňuje, sémantické hledání ti mezitím funguje dál.
+Tvůj Node.js je starý na to, co GitNexus potřebuje — typický projev Node pod
+**24.11.0**. Zákeřné na tom je, že `gitnexus --version` funguje — rozbije se až
+samotné indexování. GrepAI to neovlivňuje, sémantické hledání ti mezitím
+funguje dál.
 
 Nejdřív zjisti, odkud se ti Node bere, protože oprava se podle toho liší:
 
@@ -1074,7 +1089,8 @@ which node
 brew list --versions node
 ```
 
-Pak postupuj podle **kapitoly 7**, sekce „Verze Node.js musí být dost nová" —
+Pak postupuj podle **kapitoly 7**, sekce „Verze Node.js musí být alespoň
+24.11.0" —
 jsou tam popsané všechny tři případy. Pozor hlavně na ten nejčastější: když
 `which node` ukazuje do `/usr/local/bin` a `brew list --versions node` mlčí,
 je Node z instalátoru z nodejs.org a `brew upgrade node` selže na

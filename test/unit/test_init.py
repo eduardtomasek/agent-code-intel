@@ -32,6 +32,8 @@ class FakeStack:
         return "ctags" in self.present and self.universal_ctags
 
     def first_line(self, *argv):
+        if argv == ("node", "--version"):
+            return "v24.11.0"
         return "gitnexus 9.9.9"
 
     def gitnexus_runs(self):
@@ -39,6 +41,13 @@ class FakeStack:
 
     def node_has_register_hooks(self):
         return True
+
+    def node_version_ok(self):
+        # The real gate over the faked `node --version`, so a stack that fakes
+        # an old node reports what production would report.
+        return "node" in self.present and integrations.node_version_ok(
+            self.first_line("node", "--version")
+        )
 
     def qdrant_http_ok(self, url):
         return True
@@ -343,7 +352,10 @@ class Init(unittest.TestCase):
             stack=stack,
         )
 
-        self.assertIn("  warn      node v20.0.0 is too old for 'gitnexus analyze'", out.getvalue())
+        self.assertIn(
+            "  warn      node v20.0.0 is below the 24.11.0 that gitnexus requires",
+            out.getvalue(),
+        )
         self.assertNotIn("MISSING   node", out.getvalue())
         self.assertEqual(err.getvalue(), "")
 

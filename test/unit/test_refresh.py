@@ -69,6 +69,8 @@ class _Stack:
         return "/usr/bin/%s" % name if name in self._present else ""
 
     def first_line(self, *argv):
+        if argv == ("node", "--version"):
+            return "v24.11.0"
         return "%s 9.9.9" % argv[0]
 
     # -- preflight probes --
@@ -99,6 +101,11 @@ class _Stack:
     def watch_status(self, ws):
         self.calls.append(("watch_status", ws))
         return self._watch
+
+    def node_version_ok(self):
+        return "node" in self._present and integrations.node_version_ok(
+            self.first_line("node", "--version")
+        )
 
     def node_has_register_hooks(self):
         return "node" in self._present
