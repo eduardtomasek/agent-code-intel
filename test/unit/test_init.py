@@ -209,7 +209,15 @@ class Init(unittest.TestCase):
                     )
                 self.assertEqual(
                     os.path.isfile(os.path.join(root, hooks.SCRIPT_RELATIVE)),
+                    bool(expected),
+                )
+                self.assertEqual(
+                    os.path.isfile(os.path.join(root, hooks.SETTINGS_RELATIVE)),
                     "claude" in expected,
+                )
+                self.assertEqual(
+                    os.path.isfile(os.path.join(root, hooks.CODEX_SETTINGS_RELATIVE)),
+                    "codex" in expected,
                 )
 
     def test_no_hook_skips_repo_local_hook(self):
@@ -234,6 +242,55 @@ class Init(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertFalse(os.path.exists(os.path.join(root, hooks.SCRIPT_RELATIVE)))
         self.assertFalse(os.path.exists(os.path.join(root, hooks.SETTINGS_RELATIVE)))
+        self.assertFalse(
+            os.path.exists(os.path.join(root, hooks.CODEX_SETTINGS_RELATIVE))
+        )
+
+    def test_codex_hook_notice_only_appears_when_registration_changes(self):
+        root = tempfile.mkdtemp(prefix="aci-init-codex-hook-")
+
+        def apply_once():
+            out, err = io.StringIO(), io.StringIO()
+            code = commands.run_init(
+                apply=True,
+                bootstrap=False,
+                do_git=False,
+                start_watch=False,
+                run_analyze=False,
+                write_docs=False,
+                write_hook=True,
+                force_docs=False,
+                agent_target="codex",
+                context=make_context(root),
+                loaded=loaded(),
+                conf_dir=os.path.join(root, "config"),
+                stdout=out,
+                stderr=err,
+                stack=FakeStack(),
+            )
+            return code, out.getvalue(), err.getvalue()
+
+        code, out, err = apply_once()
+
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("codex: zapsán .codex/hooks.json", out)
+        self.assertIn(
+            "1) ověř, že v ~/.codex/config.toml NENÍ [features] hooks = false", out
+        )
+        self.assertIn("2) otevři projekt v Codexu a potvrď důvěru projektu", out)
+        self.assertIn("3) spusť /hooks a hook schval", out)
+        self.assertNotIn(".claude/settings.json", out)
+        self.assertFalse(os.path.exists(os.path.join(root, hooks.SETTINGS_RELATIVE)))
+
+        _, second_out, second_err = apply_once()
+        self.assertEqual(second_err, "")
+        self.assertNotIn("codex: zapsán .codex/hooks.json", second_out)
+        self.assertNotIn("1) ověř, že v ~/.codex/config.toml NENÍ", second_out)
+
+        Path(root, hooks.SCRIPT_RELATIVE).write_text("script changed\n")
+        _, script_out, script_err = apply_once()
+        self.assertEqual(script_err, "")
+        self.assertNotIn("codex: zapsán .codex/hooks.json", script_out)
 
     def test_foreign_routing_skill_blocks_apply_before_project_mutation(self):
         root = tempfile.mkdtemp(prefix="aci-init-foreign-skill-")

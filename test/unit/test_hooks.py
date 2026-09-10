@@ -1,4 +1,4 @@
-"""Repo-local Claude SessionStart hook lifecycle (issue #82)."""
+"""Repo-local Claude and Codex SessionStart hook lifecycle (issues #82/#83)."""
 
 import json
 import os
@@ -39,6 +39,101 @@ class HookLifecycle(unittest.TestCase):
         self.assertEqual(session[0], foreign["hooks"]["SessionStart"][0])
         self.assertEqual(session[-1], hooks.CLAUDE_HOOK_GROUP)
         self.assertNotIn("statusLine", settings)
+
+    def test_codex_install_writes_exact_portable_registration(self):
+        expected = (
+            '{\n'
+            '  "hooks": {\n'
+            '    "SessionStart": [\n'
+            '      {\n'
+            '        "hooks": [\n'
+            '          {\n'
+            '            "type": "command",\n'
+            '            "command": "/usr/bin/env python3 \\\"$(git rev-parse --show-toplevel)/.claude/helpers/code-context-hint.py\\\"",\n'
+            '            "timeout": 5\n'
+            '          }\n'
+            '        ]\n'
+            '      }\n'
+            '    ]\n'
+            '  }\n'
+            '}\n'
+        )
+
+        result = hooks.install(self.root, "codex")
+
+        self.assertTrue(result.changed)
+        self.assertTrue(result.registration_changed)
+        self.assertEqual(
+            Path(self.root, hooks.CODEX_SETTINGS_RELATIVE).read_text(), expected
+        )
+        self.assertEqual(
+            Path(self.root, hooks.SCRIPT_RELATIVE).read_text(), hooks.source_text()
+        )
+
+    def test_codex_install_is_idempotent(self):
+        hooks.install(self.root, "codex")
+        script = Path(self.root, hooks.SCRIPT_RELATIVE)
+        settings = Path(self.root, hooks.CODEX_SETTINGS_RELATIVE)
+        before = (script.stat().st_mtime_ns, settings.stat().st_mtime_ns)
+
+        result = hooks.install(self.root, "codex")
+
+        self.assertFalse(result.changed)
+        self.assertFalse(result.registration_changed)
+        self.assertEqual(
+            (script.stat().st_mtime_ns, settings.stat().st_mtime_ns), before
+        )
+
+    def test_codex_install_merges_foreign_settings(self):
+        settings_path = Path(self.root, hooks.CODEX_SETTINGS_RELATIVE)
+        settings_path.parent.mkdir(parents=True)
+        foreign = {
+            "hooks": {
+                "SessionStart": [
+                    {"hooks": [{"type": "command", "command": "foreign"}]}
+                ],
+                "Stop": [{"hooks": [{"type": "command", "command": "stop"}]}],
+            },
+            "notify": {"enabled": True},
+        }
+        settings_path.write_text(json.dumps(foreign, indent=2) + "\n")
+
+        hooks.install(self.root, "codex")
+
+        settings = json.loads(settings_path.read_text())
+        self.assertEqual(settings["notify"], foreign["notify"])
+        self.assertEqual(settings["hooks"]["Stop"], foreign["hooks"]["Stop"])
+        self.assertEqual(
+            settings["hooks"]["SessionStart"][0],
+            foreign["hooks"]["SessionStart"][0],
+        )
+        self.assertEqual(
+            settings["hooks"]["SessionStart"][-1], hooks.CODEX_HOOK_GROUP
+        )
+
+    def test_codex_remove_preserves_shared_script_used_by_claude(self):
+        hooks.install(self.root, "both")
+
+        result = hooks.remove(self.root, "codex")
+
+        self.assertIn(hooks.CODEX_SETTINGS_RELATIVE, result.removed)
+        self.assertTrue(Path(self.root, hooks.SCRIPT_RELATIVE).exists())
+        self.assertTrue(Path(self.root, hooks.SETTINGS_RELATIVE).exists())
+        self.assertFalse(Path(self.root, hooks.CODEX_SETTINGS_RELATIVE).exists())
+
+        hooks.remove(self.root, "claude")
+        self.assertFalse(Path(self.root, hooks.SCRIPT_RELATIVE).exists())
+
+    def test_both_status_reports_each_registration(self):
+        hooks.install(self.root, "both")
+
+        status = hooks.status(self.root, "both")
+
+        self.assertTrue(status["ok"])
+        self.assertEqual(set(status["agents"]), {"claude", "codex"})
+        self.assertEqual(
+            status["agents"]["codex"]["settings_path"], hooks.CODEX_SETTINGS_RELATIVE
+        )
 
     def test_install_is_idempotent(self):
         hooks.install(self.root)

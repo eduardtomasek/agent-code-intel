@@ -607,22 +607,24 @@ def _preview_init(
     else:
         plan("skip", "agent documents and routing skills (--no-docs)")
 
-    if write_hook and agent_target in ("claude", "both"):
-        hook_state = str(hooks.status(context.root)["state"])
-        if hook_state == "current":
-            plan("keep", "claude SessionStart hook current")
-        elif hook_state == "missing":
-            plan("WRITE", "claude SessionStart hook")
-        elif hook_state == "managed-drift":
-            plan("UPDATE", "claude SessionStart hook")
-        else:
-            plan("CONFLICT", "claude SessionStart hook is %s" % hook_state)
+    if write_hook:
+        for agent in hooks.target_names(agent_target):
+            hook_state = str(hooks.status(context.root, agent)["state"])
+            if hook_state == "current":
+                plan("keep", "%s SessionStart hook current" % agent)
+            elif hook_state == "missing":
+                plan("WRITE", "%s SessionStart hook" % agent)
+            elif hook_state == "managed-drift":
+                plan("UPDATE", "%s SessionStart hook" % agent)
+            else:
+                plan(
+                    "CONFLICT",
+                    "%s SessionStart hook is %s" % (agent, hook_state),
+                )
     else:
         plan(
             "skip",
-            "SessionStart hook (--no-hook)"
-            if not write_hook
-            else "SessionStart hook (claude not selected)",
+            "SessionStart hook (--no-hook)",
         )
 
     if start_watch:
@@ -836,19 +838,31 @@ def _apply_init(
         reporter.say("skipped agent documents and routing skills (--no-docs)")
     reporter.say("")
 
-    if write_hook and agent_target in ("claude", "both"):
-        result = hooks.install(context.root)
-        reporter.say(
-            "claude: SessionStart hook %s at %s"
-            % ("updated" if result.changed else "current", hooks.SCRIPT_RELATIVE)
-        )
-        if result.warning:
-            reporter.emit_err("WARNING: %s" % result.warning)
+    if write_hook:
+        for agent in hooks.target_names(agent_target):
+            result = hooks.install(context.root, agent)
+            if agent == "claude":
+                reporter.say(
+                    "claude: SessionStart hook %s at %s"
+                    % ("updated" if result.changed else "current", hooks.SCRIPT_RELATIVE)
+                )
+            elif result.registration_changed:
+                reporter.say("codex: zapsán %s" % hooks.CODEX_SETTINGS_RELATIVE)
+                reporter.say("")
+                reporter.say("  Hook je neaktivní, dokud neuděláš tohle:")
+                reporter.say(
+                    "  1) ověř, že v ~/.codex/config.toml NENÍ [features] hooks = false"
+                )
+                reporter.say("  2) otevři projekt v Codexu a potvrď důvěru projektu")
+                reporter.say("  3) spusť /hooks a hook schval")
+                reporter.say("")
+                reporter.say(
+                    "  Stačí jednou. Další upgrady agent-code-intel schválení neruší."
+                )
+            if result.warning:
+                reporter.emit_err("WARNING: %s" % result.warning)
     else:
-        reporter.say(
-            "skipped SessionStart hook (%s)"
-            % ("--no-hook" if not write_hook else "claude not selected")
-        )
+        reporter.say("skipped SessionStart hook (--no-hook)")
     reporter.say("")
 
     if start_watch:
@@ -1017,9 +1031,13 @@ def run_remove(
                 ),
             )
             actions += 1
-        if hooks.status(context.root)["state"] in ("current", "managed-drift"):
-            reporter.row(verb, "rm Claude SessionStart hook")
-            actions += 1
+        for agent in hooks.target_names(agent_target):
+            if hooks.status(context.root, agent)["state"] in (
+                "current",
+                "managed-drift",
+            ):
+                reporter.row(verb, "rm %s SessionStart hook" % agent)
+                actions += 1
         if purge_collection:
             reporter.row(
                 verb,
@@ -1099,9 +1117,9 @@ def run_remove(
             )
         )
 
-    hook_result = hooks.remove(context.root)
+    hook_result = hooks.remove(context.root, agent_target)
     for path in hook_result.removed:
-        reporter.say("removed Claude SessionStart hook at %s" % path)
+        reporter.say("removed SessionStart hook at %s" % path)
     if hook_result.warning:
         reporter.emit_err("WARNING: %s" % hook_result.warning)
 
@@ -1265,18 +1283,25 @@ def _report_routing_status(
     return bad
 
 
-def _report_hook_status(reporter: Reporter, root: str) -> bool:
-    details = hooks.status(root)
-    state = str(details["state"])
-    if state == "current":
-        reporter.row("", "  claude SessionStart hook current at %s" % details["path"])
-        return False
-    reporter.row(
-        "",
-        "  claude SessionStart hook is %s at %s"
-        % (state, details["path"]),
-    )
-    return True
+def _report_hook_status_for_agents(
+    reporter: Reporter, root: str, agent_target: str
+) -> bool:
+    bad = False
+    for agent in hooks.target_names(agent_target):
+        details = hooks.status(root, agent)
+        state = str(details["state"])
+        if state == "current":
+            reporter.row(
+                "", "  %s SessionStart hook current at %s" % (agent, details["path"])
+            )
+        else:
+            reporter.row(
+                "",
+                "  %s SessionStart hook is %s at %s"
+                % (agent, state, details["path"]),
+            )
+            bad = True
+    return bad
 
 
 # ---------------------------------------------------------------- text table --
@@ -1345,8 +1370,7 @@ def _status_one(
         reporter.row("", "  %s" % identity.message)
         if agent_target is not None:
             bad = _report_routing_status(reporter, root, agent_target)
-            if agent_target in ("claude", "both"):
-                bad = _report_hook_status(reporter, root) or bad
+            bad = _report_hook_status_for_agents(reporter, root, agent_target) or bad
             return bad
         return True
 
@@ -1360,8 +1384,7 @@ def _status_one(
         )
         if agent_target is not None:
             bad = _report_routing_status(reporter, root, agent_target)
-            if agent_target in ("claude", "both"):
-                bad = _report_hook_status(reporter, root) or bad
+            bad = _report_hook_status_for_agents(reporter, root, agent_target) or bad
             return bad
         return True
 
@@ -1371,8 +1394,8 @@ def _status_one(
         else False
     )
     hook_bad = (
-        _report_hook_status(reporter, root)
-        if agent_target in ("claude", "both")
+        _report_hook_status_for_agents(reporter, root, agent_target)
+        if agent_target is not None
         else False
     )
 
@@ -1573,8 +1596,7 @@ def _json_projects(
             entry["path"] = root
             entry["code_intel_error"] = identity.message
             entry["routing_skills"] = agent_skills.status(root, agent_target)
-            if agent_target in ("claude", "both"):
-                entry["session_start_hook"] = hooks.status(root)
+            entry["session_start_hook"] = hooks.status(root, agent_target)
             entry["ok"] = False
             projects.append(entry)
             continue
@@ -1592,8 +1614,7 @@ def _json_projects(
         if not os.path.isdir(root):
             entry["exists"] = False
             entry["routing_skills"] = agent_skills.status(root, agent_target)
-            if agent_target in ("claude", "both"):
-                entry["session_start_hook"] = hooks.status(root)
+            entry["session_start_hook"] = hooks.status(root, agent_target)
             entry["ok"] = False
             projects.append(entry)
             continue
@@ -1653,11 +1674,10 @@ def _json_projects(
         ):
             bad = True
 
-        if agent_target in ("claude", "both"):
-            hook_status = hooks.status(root)
-            entry["session_start_hook"] = hook_status
-            if not bool(hook_status["ok"]):
-                bad = True
+        hook_status = hooks.status(root, agent_target)
+        entry["session_start_hook"] = hook_status
+        if not bool(hook_status["ok"]):
+            bad = True
 
         entry["gob_leftover"] = os.path.isfile(
             os.path.join(root, ".grepai", "index.gob")

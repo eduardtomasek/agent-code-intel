@@ -1,4 +1,4 @@
-"""Repo-local Claude SessionStart hook lifecycle."""
+"""Repo-local SessionStart hook lifecycle for Claude and Codex."""
 
 from __future__ import annotations
 
@@ -11,8 +11,12 @@ from .config import CliError
 
 SCRIPT_RELATIVE = os.path.join(".claude", "helpers", "code-context-hint.py")
 SETTINGS_RELATIVE = os.path.join(".claude", "settings.json")
+CODEX_SETTINGS_RELATIVE = os.path.join(".codex", "hooks.json")
 CLAUDE_HOOK_COMMAND = (
     'python3 "${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/code-context-hint.py"'
+)
+CODEX_HOOK_COMMAND = (
+    '/usr/bin/env python3 "$(git rev-parse --show-toplevel)/.claude/helpers/code-context-hint.py"'
 )
 CLAUDE_HOOK_GROUP = {
     "hooks": [
@@ -23,12 +27,27 @@ CLAUDE_HOOK_GROUP = {
         }
     ]
 }
+CODEX_HOOK_GROUP = {
+    "hooks": [
+        {
+            "type": "command",
+            "command": CODEX_HOOK_COMMAND,
+            "timeout": 5,
+        }
+    ]
+}
+
+_HOOK_SPECS = {
+    "claude": (SETTINGS_RELATIVE, CLAUDE_HOOK_COMMAND, 5000),
+    "codex": (CODEX_SETTINGS_RELATIVE, CODEX_HOOK_COMMAND, 5),
+}
 
 
 @dataclass(frozen=True)
 class InstallResult:
     changed: bool
     warning: str = ""
+    registration_changed: bool = False
 
 
 @dataclass(frozen=True)
@@ -51,19 +70,30 @@ def source_text() -> str:
         raise CliError("could not read SessionStart hook asset: %s" % exc)
 
 
-def _paths(root: str) -> tuple[str, str]:
-    return os.path.join(root, SCRIPT_RELATIVE), os.path.join(root, SETTINGS_RELATIVE)
+def target_names(agent_target: str) -> tuple[str, ...]:
+    if agent_target == "both":
+        return ("claude", "codex")
+    if agent_target in _HOOK_SPECS:
+        return (agent_target,)
+    raise ValueError("unknown agent target: %s" % agent_target)
 
 
-def _canonical_group() -> dict[str, object]:
-    return {"hooks": [{"type": "command", "command": CLAUDE_HOOK_COMMAND, "timeout": 5000}]}
+def _paths(root: str, agent_target: str = "claude") -> tuple[str, str]:
+    settings_relative, _, _ = _HOOK_SPECS[agent_target]
+    return os.path.join(root, SCRIPT_RELATIVE), os.path.join(root, settings_relative)
 
 
-def _is_owned_hook(value: object) -> bool:
+def _canonical_group(agent_target: str = "claude") -> dict[str, object]:
+    _, command, timeout = _HOOK_SPECS[agent_target]
+    return {"hooks": [{"type": "command", "command": command, "timeout": timeout}]}
+
+
+def _is_owned_hook(value: object, agent_target: str = "claude") -> bool:
+    _, command, _ = _HOOK_SPECS[agent_target]
     return (
         isinstance(value, dict)
         and value.get("type") == "command"
-        and value.get("command") == CLAUDE_HOOK_COMMAND
+        and value.get("command") == command
     )
 
 
@@ -94,20 +124,24 @@ def _session_hooks(settings: dict[str, object]) -> list[object]:
     return session
 
 
-def _has_owned_hook(settings: dict[str, object]) -> bool:
+def _has_owned_hook(
+    settings: dict[str, object], agent_target: str = "claude"
+) -> bool:
     for group in _session_hooks(settings):
         if isinstance(group, dict) and isinstance(group.get("hooks", []), list):
-            if any(_is_owned_hook(hook) for hook in group["hooks"]):
+            if any(_is_owned_hook(hook, agent_target) for hook in group["hooks"]):
                 return True
     return False
 
 
-def _has_current_hook(settings: dict[str, object]) -> bool:
-    return _canonical_group() in _session_hooks(settings)
+def _has_current_hook(
+    settings: dict[str, object], agent_target: str = "claude"
+) -> bool:
+    return _canonical_group(agent_target) in _session_hooks(settings)
 
 
-def _merge_hook(settings: dict[str, object]) -> bool:
-    if _has_current_hook(settings):
+def _merge_hook(settings: dict[str, object], agent_target: str = "claude") -> bool:
+    if _has_current_hook(settings, agent_target):
         return False
 
     hooks = settings.setdefault("hooks", {})
@@ -123,7 +157,9 @@ def _merge_hook(settings: dict[str, object]) -> bool:
             kept_groups.append(group)
             continue
         foreign_hooks = [
-            hook for hook in group["hooks"] if not _is_owned_hook(hook)
+            hook
+            for hook in group["hooks"]
+            if not _is_owned_hook(hook, agent_target)
         ]
         if len(foreign_hooks) != len(group["hooks"]):
             group = dict(group)
@@ -133,12 +169,12 @@ def _merge_hook(settings: dict[str, object]) -> bool:
                 continue
         kept_groups.append(group)
 
-    kept_groups.append(_canonical_group())
+    kept_groups.append(_canonical_group(agent_target))
     hooks["SessionStart"] = kept_groups
     return True
 
 
-def _remove_hook(settings: dict[str, object]) -> bool:
+def _remove_hook(settings: dict[str, object], agent_target: str = "claude") -> bool:
     hooks = settings.get("hooks")
     if not isinstance(hooks, dict):
         return False
@@ -153,7 +189,9 @@ def _remove_hook(settings: dict[str, object]) -> bool:
             kept_groups.append(group)
             continue
         foreign_hooks = [
-            hook for hook in group["hooks"] if not _is_owned_hook(hook)
+            hook
+            for hook in group["hooks"]
+            if not _is_owned_hook(hook, agent_target)
         ]
         if len(foreign_hooks) != len(group["hooks"]):
             removed = True
@@ -210,22 +248,33 @@ def _write_settings(path: str, settings: dict[str, object]) -> bool:
     return _write_atomic(path, json.dumps(settings, indent=2, ensure_ascii=False) + "\n")
 
 
-def install(root: str) -> InstallResult:
-    script_path, settings_path = _paths(root)
+def install(root: str, agent_target: str = "claude") -> InstallResult:
+    script_path = os.path.join(root, SCRIPT_RELATIVE)
     changed = _write_atomic(script_path, source_text())
-    settings, state = _settings_data(settings_path)
-    if settings is None:
-        return InstallResult(changed, "settings.json is %s; left untouched" % state)
+    warnings: list[str] = []
+    registration_changed = False
+    for target in target_names(agent_target):
+        _, settings_path = _paths(root, target)
+        settings, state = _settings_data(settings_path)
+        settings_name = os.path.basename(settings_path)
+        if settings is None:
+            warnings.append(
+                "%s is %s; left untouched" % (settings_name, state)
+            )
+            continue
 
-    try:
-        settings_changed = _merge_hook(settings)
-    except ValueError as exc:
-        return InstallResult(
-            changed, "settings.json is unreadable: %s; left untouched" % exc
-        )
-    if settings_changed:
-        changed = _write_settings(settings_path, settings) or changed
-    return InstallResult(changed)
+        try:
+            settings_changed = _merge_hook(settings, target)
+        except ValueError as exc:
+            warnings.append(
+                "%s is unreadable: %s; left untouched" % (settings_name, exc)
+            )
+            continue
+        if settings_changed:
+            wrote = _write_settings(settings_path, settings)
+            registration_changed = wrote or registration_changed
+            changed = wrote or changed
+    return InstallResult(changed, "; ".join(warnings), registration_changed)
 
 
 def _file_state(path: str, desired: str) -> str:
@@ -241,18 +290,18 @@ def _file_state(path: str, desired: str) -> str:
     return "current" if current == desired else "foreign"
 
 
-def status(root: str) -> dict[str, object]:
-    script_path, settings_path = _paths(root)
+def _status_one(root: str, agent_target: str) -> dict[str, object]:
+    script_path, settings_path = _paths(root, agent_target)
     settings, _ = _settings_data(settings_path)
     if settings is None:
         settings_state = "unsafe"
         owned = False
     else:
         try:
-            owned = _has_owned_hook(settings)
+            owned = _has_owned_hook(settings, agent_target)
             settings_state = (
                 "current"
-                if _has_current_hook(settings)
+                if _has_current_hook(settings, agent_target)
                 else "managed-drift"
                 if owned
                 else "missing"
@@ -280,11 +329,36 @@ def status(root: str) -> dict[str, object]:
         overall = "managed-drift"
     return {
         "path": SCRIPT_RELATIVE,
-        "settings_path": SETTINGS_RELATIVE,
+        "settings_path": _HOOK_SPECS[agent_target][0],
         "script": script_state,
         "settings": settings_state,
         "state": overall,
         "ok": overall == "current",
+    }
+
+
+def _aggregate_state(states: tuple[str, ...]) -> str:
+    if "unsafe" in states:
+        return "unsafe"
+    if "foreign" in states and all(state == "foreign" for state in states):
+        return "foreign"
+    if all(state == "current" for state in states):
+        return "current"
+    if all(state == "missing" for state in states):
+        return "missing"
+    return "managed-drift"
+
+
+def status(root: str, agent_target: str = "claude") -> dict[str, object]:
+    targets = target_names(agent_target)
+    if len(targets) == 1:
+        return _status_one(root, targets[0])
+    agents = {target: _status_one(root, target) for target in targets}
+    states = tuple(str(details["state"]) for details in agents.values())
+    return {
+        "agents": agents,
+        "state": _aggregate_state(states),
+        "ok": all(bool(details["ok"]) for details in agents.values()),
     }
 
 
@@ -297,29 +371,46 @@ def _remove_empty_parents(path: str, root: str) -> None:
         path = os.path.dirname(path)
 
 
-def remove(root: str) -> RemoveResult:
-    script_path, settings_path = _paths(root)
+def _has_any_owned_hook(root: str) -> bool:
+    for target in _HOOK_SPECS:
+        _, settings_path = _paths(root, target)
+        settings, _ = _settings_data(settings_path)
+        if settings is not None and _has_owned_hook(settings, target):
+            return True
+    return False
+
+
+def remove(root: str, agent_target: str = "claude") -> RemoveResult:
+    script_path = os.path.join(root, SCRIPT_RELATIVE)
     removed: list[str] = []
-    settings, state = _settings_data(settings_path)
     warning = ""
     owned = False
-    if settings is not None:
-        try:
-            owned = _has_owned_hook(settings)
-            if _remove_hook(settings):
-                if settings:
-                    _write_settings(settings_path, settings)
-                else:
-                    os.unlink(settings_path)
-                    _remove_empty_parents(os.path.dirname(settings_path), root)
-                removed.append(SETTINGS_RELATIVE)
-        except (OSError, ValueError) as exc:
-            warning = "settings.json could not be updated: %s" % exc
-    elif os.path.lexists(settings_path):
-        warning = "settings.json is %s; left untouched" % state
+    for target in target_names(agent_target):
+        _, settings_path = _paths(root, target)
+        settings, state = _settings_data(settings_path)
+        if settings is not None:
+            try:
+                owned = _has_owned_hook(settings, target) or owned
+                if _remove_hook(settings, target):
+                    if settings:
+                        _write_settings(settings_path, settings)
+                    else:
+                        os.unlink(settings_path)
+                        _remove_empty_parents(os.path.dirname(settings_path), root)
+                    removed.append(_HOOK_SPECS[target][0])
+            except (OSError, ValueError) as exc:
+                warning = "%s could not be updated: %s" % (
+                    os.path.basename(settings_path),
+                    exc,
+                )
+        elif os.path.lexists(settings_path):
+            warning = "%s is %s; left untouched" % (
+                os.path.basename(settings_path),
+                state,
+            )
 
     script_state = _file_state(script_path, source_text())
-    if script_state == "current" or owned:
+    if (script_state == "current" or owned) and not _has_any_owned_hook(root):
         try:
             os.unlink(script_path)
             removed.append(SCRIPT_RELATIVE)

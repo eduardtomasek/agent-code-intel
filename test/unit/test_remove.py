@@ -118,7 +118,7 @@ def _seed_project(root, workspace="remove-ws"):
     with open(os.path.join(root, ".mcp.json"), "w") as handle:
         handle.write('{"mcpServers":{"grepai":{"args":["--workspace","%s"]}}}' % workspace)
     agent_skills.install_targets(root, "both", False)
-    hooks.install(root)
+    hooks.install(root, "both")
 
 
 class RemoveMode(unittest.TestCase):
