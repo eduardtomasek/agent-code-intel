@@ -1,4 +1,5 @@
 # agent-code-intel — identity of this repository. Generated, do not edit by hand.
-SCHEMA=1
+SCHEMA=2
 WORKSPACE=agent-code-intel
 PROJECT=agent-code-intel
+AGENTS=both
