@@ -36,6 +36,14 @@ class AgentSkills(unittest.TestCase):
             self.assertEqual(Path(paths[0]).read_bytes(), Path(paths[1]).read_bytes())
             self.assertEqual(Path(paths[0]).read_text(), agent_skills.source_text(skill))
 
+    def test_routing_skill_includes_code_context_rules(self):
+        source = agent_skills.source_text()
+        self.assertIn("## Code-context rules", source)
+        self.assertIn("cross-module calls belong to `rg`/`ast-grep`", source)
+        self.assertIn("not the knowledge graphs", source)
+        self.assertIn("Derive the exact definition range", source)
+        self.assertIn("never guess it or truncate it", source)
+
     def test_status_only_reports_selected_agents(self):
         agent_skills.install_targets(self.root, "claude", False)
         self.assertEqual(set(agent_skills.status(self.root, "claude")), {"claude"})

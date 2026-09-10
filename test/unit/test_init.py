@@ -488,6 +488,17 @@ class Init(unittest.TestCase):
             )
         )
 
+    def test_managed_doc_blocks_include_exact_code_context_instruction(self):
+        expected = (
+            "Before reading a source file, use the `code-context` skill: derive the exact\n"
+            "definition range with `ctags` instead of guessing a line window, and use\n"
+            "`rg`/`ast-grep` — not the knowledge graphs — for exhaustive reference lists."
+        )
+
+        self.assertEqual(set(commands._DOC_BLOCKS), {"CLAUDE.md", "AGENTS.md"})
+        for block in commands._DOC_BLOCKS.values():
+            self.assertEqual(block.count(expected), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
