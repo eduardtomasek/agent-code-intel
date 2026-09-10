@@ -22,7 +22,7 @@ import sys
 from collections.abc import Mapping
 from typing import Sequence, TextIO
 
-from . import __version__, commands, config, install, project
+from . import __version__, commands, config, install, integrations, project
 from .commands import Reporter
 from .config import CliError
 
@@ -57,6 +57,7 @@ class Options:
     write_perms: bool = True
     do_grepai: bool = True
     do_gitnexus: bool = True
+    no_install_deps: bool = False
 
 
 # Character-for-character the reference's ``usage()`` heredoc (``9406cce`` lines
@@ -71,6 +72,7 @@ Usage:
   agent-code-intel --status --all --json                     machine-readable
   agent-code-intel --remove [--apply] [--path DIR]           tear out
   agent-code-intel --install                                 self-install
+  agent-code-intel --install-deps                            check/install tools
 
 Preview exit codes:   0 = everything matches, 2 = drift, 1 = error.
 --refresh exit codes: 0 = ok, 1 = could not run (missing deps, or this
@@ -102,6 +104,7 @@ Options:
                     never starts anything. Feeds code-intel-dash.
   --purge-collection  With --remove: also delete the qdrant collection
   --no-perms        With --install: do not touch ~/.claude/settings.json
+  --no-install-deps With --install-deps: do not offer Homebrew installation
   -h, --help        This text
   --version         Print version
 
@@ -154,6 +157,7 @@ _BOOL_FLAGS = {
     "--no-gitnexus": ("do_gitnexus", False),
     "--purge-collection": ("purge_collection", True),
     "--no-perms": ("write_perms", False),
+    "--no-install-deps": ("no_install_deps", True),
 }
 
 # Mode-switch flags: flag → mode. "Last one wins" (decision 5); there is no
@@ -163,6 +167,7 @@ _MODE_FLAGS = {
     "--status": "status",
     "--remove": "remove",
     "--install": "install",
+    "--install-deps": "install_deps",
 }
 
 
@@ -270,7 +275,7 @@ def main(
             return 0
 
         if opts.mode == "install":
-            return install.run(
+            result = install.run(
                 home=_home(environ),
                 conf_dir=_conf_dir(environ),
                 config_source=loaded.source,
@@ -278,6 +283,20 @@ def main(
                 path=environ.get("PATH", ""),
                 source_launcher=_source_launcher(),
                 reporter=Reporter(stdout, stderr),
+            )
+            if result == 0:
+                commands.report_install_deps_hint(
+                    Reporter(stdout, stderr),
+                    integrations.Stack(loaded.child_env),
+                )
+            return result
+
+        if opts.mode == "install_deps":
+            return commands.run_install_deps(
+                no_install_deps=opts.no_install_deps,
+                stack=integrations.Stack(loaded.child_env),
+                stdout=stdout,
+                stderr=stderr,
             )
 
         context = project.resolve_project(
