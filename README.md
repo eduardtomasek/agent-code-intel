@@ -7,9 +7,7 @@
 Tato dokumentace popisuje instalaci celého stacku na Macu. Předpokládá pouze
 základní práci s aplikacemi; všechny potřebné kroky jsou vysvětlené.
 
-Text popisuje připravované vydání 5.0.0. Dokud nebude vydání uzavřené, může
-`agent-code-intel --version` vracet předchozí verzi 4.1.0; samotné vydání řeší
-issue #88.
+Text odpovídá vydání 5.0.0.
 
 Po dokončení se nové projekty nastavují takto:
 

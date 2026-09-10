@@ -1,9 +1,9 @@
 # Změna směru: vlastní nástrojový řetězec místo Graftu
 
-Stav: **návrh k odsouhlasení.** Navazuje na
+Stav: **ověřeno pro vydání 5.0.0.** Navazuje na
 `docs/plans/graft-integration-analysis.md`, který skončil stanoviskem Graft
 nepřidávat. Tento dokument popisuje, čím ho nahrazujeme, co je změřeno,
-jak vypadá zamýšlený skill a jak se otestuje, než se zapracuje do produktu.
+jak vypadá skill a jak byl ověřen před zapracováním do produktu.
 
 Datum měření: **2026-09-10.**
 

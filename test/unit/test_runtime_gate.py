@@ -60,7 +60,7 @@ class RuntimeGate(unittest.TestCase):
             [sys.executable, str(LAUNCHER), "--version"],
             capture_output=True, text=True, timeout=15,
         )
-        self.assertEqual((proc.returncode, proc.stdout), (0, "agent-code-intel 4.1.0\n"))
+        self.assertEqual((proc.returncode, proc.stdout), (0, "agent-code-intel 5.0.0\n"))
 
 
 if __name__ == "__main__":
