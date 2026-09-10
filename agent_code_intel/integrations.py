@@ -112,6 +112,25 @@ class Stack:
         """``command -v <name>`` (``9406cce`` :137)."""
         return shutil.which(name, path=self._path) is not None
 
+    def ctags_is_universal(self) -> bool:
+        """Whether the ``ctags`` on PATH is Universal Ctags (issue #99).
+
+        Presence says nothing for this one tool: macOS ships a BSD ``ctags``
+        at ``/usr/bin`` on every machine, and BSD ctags has neither
+        ``--_xformat`` nor ``%{end}`` — which is the whole of what the
+        ``code-context`` skill asks ``ctags`` for. Checked by the version
+        banner rather than by path, so a Universal Ctags installed anywhere
+        counts.
+
+        ``False`` when ``ctags`` is absent entirely: the callers that need to
+        tell the two apart check ``have`` as well. Safe to call either way —
+        BSD ctags rejects ``--version`` with usage text on *stderr* and an
+        empty stdout, so the marker simply is not there.
+        """
+        if not self.have("ctags"):
+            return False
+        return "Universal Ctags" in self.first_line("ctags", "--version")
+
     def brew_install(self, packages: tuple[str, ...]) -> Exec:
         """Install the selected Homebrew packages."""
         return self._run(("brew", "install", *packages))

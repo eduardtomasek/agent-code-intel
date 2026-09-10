@@ -5,6 +5,17 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
 
 ## [Unreleased]
 
+### Opraveno
+
+- Preflight, `--status` a `--install-deps` rozlišují BSD `ctags` od Universal
+  Ctags (#99). macOS má `/usr/bin/ctags` vždycky, takže samotná přítomnost nic
+  neříkala: stroj bez `universal-ctags` z Homebrew dostával zelené
+  `ok ctags on PATH` a `--install-deps` hlásil, že nic nechybí, zatímco příkaz
+  předepsaný skillem `code-context` nefungoval vůbec. Nově je to `warn` s
+  vlastní příčinou, odlišený od chybějícího `ctags`, a `--install-deps`
+  `universal-ctags` skutečně nabídne. `ctags` zůstává doporučený nástroj
+  s fallbackem na `ast-grep`, ne povinná závislost.
+
 ### Změněno
 
 - `--apply` přidává do `.gitignore` vedle `.grepai/` a `.gitnexus/` i

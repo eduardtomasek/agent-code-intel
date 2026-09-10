@@ -52,12 +52,16 @@ class _Stack:
         self._watch_start = over.get(
             "watch_start", integrations.Exec(0, "watcher started", "")
         )
+        self._universal_ctags = over.get("universal_ctags", True)
         self.calls: list[tuple] = []
 
     # -- generic --
     def have(self, name):
         self.calls.append(("have", name))
         return name in self._present
+
+    def ctags_is_universal(self):
+        return "ctags" in self._present and self._universal_ctags
 
     def which(self, name):
         return "/usr/bin/%s" % name if name in self._present else ""

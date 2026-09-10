@@ -186,10 +186,25 @@ def _code_context_tool_presence(stack: integrations.Stack) -> dict[str, bool]:
     return {name: stack.have(name) for name in _CODE_CONTEXT_TOOLS}
 
 
+_CTAGS_NOT_UNIVERSAL = (
+    "ctags on PATH is not Universal Ctags (BSD ctags has no --_xformat, so it "
+    "cannot give definition ranges)"
+)
+
+
 def _report_code_context_tools(reporter: Reporter, stack: integrations.Stack) -> None:
     presence = _code_context_tool_presence(stack)
+    # Three states for ctags, not two (issue #99): absent, present but BSD, and
+    # usable. The middle one is the default on a Mac without Homebrew, and it
+    # needs its own wording — "not on PATH" would be plainly false.
+    ctags_usable = presence["ctags"] and stack.ctags_is_universal()
     for name in _CODE_CONTEXT_TOOLS:
-        if presence[name]:
+        if name == "ctags" and presence[name] and not ctags_usable:
+            reporter.row(
+                "warn",
+                "%s — install with: %s" % (_CTAGS_NOT_UNIVERSAL, _INSTALL_DEPS),
+            )
+        elif presence[name]:
             reporter.row("ok", "%s on PATH" % name)
         else:
             reporter.row(
@@ -197,7 +212,7 @@ def _report_code_context_tools(reporter: Reporter, stack: integrations.Stack) ->
                 "%s not on PATH — install with: %s" % (name, _INSTALL_DEPS),
             )
 
-    if not presence["ctags"] and not presence["ast-grep"]:
+    if not ctags_usable and not presence["ast-grep"]:
         reporter.row(
             "warn",
             "ctags and ast-grep are both missing — code navigation ranges are degraded; "
@@ -205,8 +220,15 @@ def _report_code_context_tools(reporter: Reporter, stack: integrations.Stack) ->
         )
 
 
+def _install_dep_ok(stack: integrations.Stack, name: str) -> bool:
+    """Presence, except for ``ctags``, where presence is not the question."""
+    if not stack.have(name):
+        return False
+    return stack.ctags_is_universal() if name == "ctags" else True
+
+
 def _missing_install_deps(stack: integrations.Stack) -> list[str]:
-    return [name for name in _INSTALL_DEPS_TOOLS if not stack.have(name)]
+    return [name for name in _INSTALL_DEPS_TOOLS if not _install_dep_ok(stack, name)]
 
 
 def report_install_deps_hint(reporter: Reporter, stack: integrations.Stack) -> None:
@@ -238,7 +260,10 @@ def run_install_deps(
     missing = _missing_install_deps(stack)
     for name in _INSTALL_DEPS_TOOLS:
         if name in missing:
-            reporter.row("MISSING", "%s not on PATH" % name)
+            if name == "ctags" and stack.have("ctags"):
+                reporter.row("MISSING", _CTAGS_NOT_UNIVERSAL)
+            else:
+                reporter.row("MISSING", "%s not on PATH" % name)
         else:
             reporter.row("ok", "%s on PATH" % name)
 

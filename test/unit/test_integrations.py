@@ -3,7 +3,9 @@
 grepai / gitnexus / ollama / docker / node installed.
 """
 
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -143,6 +145,34 @@ class StackProbes(unittest.TestCase):
 
     def test_qdrant_grpc_non_numeric_port_is_false(self):
         self.assertFalse(self._stack({}).qdrant_grpc_ok("127.0.0.1", "nope"))
+
+    def _ctags_on_path(self):
+        """A real file named ctags on a real PATH, so ``have`` finds it without
+        depending on what this machine has installed."""
+        d = tempfile.mkdtemp(prefix="aci-ctags-")
+        stub = os.path.join(d, "ctags")
+        with open(stub, "w", encoding="utf-8") as handle:
+            handle.write("#!/bin/sh\nexit 1\n")
+        os.chmod(stub, 0o755)
+        return d
+
+    def test_ctags_absent_is_not_universal(self):  # issue #99
+        stack = self._stack({})
+        self.assertFalse(stack.ctags_is_universal())
+
+    def test_bsd_ctags_on_path_is_not_universal(self):  # issue #99
+        # What a Mac without Homebrew has: /usr/bin/ctags exists, rejects
+        # --version with usage on stderr, and leaves stdout empty.
+        table = {("ctags", "--version"): Exec(1, "", "ctags: illegal option -- -")}
+        stack = self._stack(table, path=self._ctags_on_path())
+        self.assertTrue(stack.have("ctags"))
+        self.assertFalse(stack.ctags_is_universal())
+
+    def test_universal_ctags_on_path_is_universal(self):  # issue #99
+        banner = "Universal Ctags 6.2.1, Copyright (C) 2015-2025 Universal Ctags Team\n"
+        table = {("ctags", "--version"): Exec(0, banner, "")}
+        stack = self._stack(table, path=self._ctags_on_path())
+        self.assertTrue(stack.ctags_is_universal())
 
     def test_ollama_has_model_falls_back_to_list_grep(self):
         table = {
