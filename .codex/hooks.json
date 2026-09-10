@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/env python3 \"$(git rev-parse --show-toplevel)/.claude/helpers/code-context-hint.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
