@@ -499,6 +499,52 @@ class Init(unittest.TestCase):
         for block in commands._DOC_BLOCKS.values():
             self.assertEqual(block.count(expected), 1)
 
+    def test_apply_ignores_ds_store_alongside_the_index_directories(self):
+        root = tempfile.mkdtemp(prefix="aci-init-dsstore-")
+        stack = FakeStack()
+        stack.workspace = True
+
+        code = commands.run_init(
+            apply=True,
+            bootstrap=False,
+            do_git=True,
+            start_watch=False,
+            run_analyze=False,
+            write_docs=False,
+            force_docs=False,
+            agent_target="both",
+            context=make_context(root),
+            loaded=loaded(),
+            conf_dir=os.path.join(root, "config"),
+            stdout=io.StringIO(),
+            stderr=io.StringIO(),
+            stack=stack,
+        )
+
+        self.assertEqual(code, 0)
+        lines = Path(root, ".gitignore").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(lines, [".grepai/", ".gitnexus/", ".DS_Store"])
+
+    def test_ensure_gitignore_appends_only_what_is_missing(self):
+        # A hand-maintained .gitignore keeps its own lines and its order; only
+        # the absent entries are appended. This is what lets a user add
+        # .DS_Store by hand on an older project without --apply fighting it.
+        root = tempfile.mkdtemp(prefix="aci-gitignore-append-")
+        path = os.path.join(root, ".gitignore")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("node_modules/\n.DS_Store\n")
+
+        stdout = io.StringIO()
+        commands._ensure_gitignore(
+            commands.Reporter(stdout, io.StringIO()),
+            root,
+            default_config().gitignore_entries,
+        )
+
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+        self.assertEqual(lines, ["node_modules/", ".DS_Store", ".grepai/", ".gitnexus/"])
+        self.assertIn(".gitignore += .grepai/ .gitnexus/", stdout.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

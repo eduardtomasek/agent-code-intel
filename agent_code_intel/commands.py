@@ -614,7 +614,7 @@ def _preview_init(
         else:
             plan("INIT", "git init")
         if project.gitignore_ok(os.path.join(context.root, ".gitignore"), config.gitignore_entries):
-            plan("keep", ".gitignore covers the index directories")
+            plan("keep", ".gitignore covers the configured entries")
         else:
             plan("EDIT", ".gitignore += %s" % " ".join(config.gitignore_entries))
     else:
@@ -1033,7 +1033,7 @@ def _ensure_gitignore(reporter, root: str, entries: tuple[str, ...]) -> None:
             handle.write(text)
         reporter.say(".gitignore += %s" % " ".join(missing))
     else:
-        reporter.say(".gitignore already covers the index directories")
+        reporter.say(".gitignore already covers the configured entries")
 
 
 def _claude_grepai_ok(path: str, workspace: str) -> bool:
