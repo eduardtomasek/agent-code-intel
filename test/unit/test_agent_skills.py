@@ -29,17 +29,54 @@ class AgentSkills(unittest.TestCase):
 
     def test_both_copies_are_byte_identical(self):
         agent_skills.install_targets(self.root, "both", False)
-        paths = [path for _, path in agent_skills.target_paths(self.root, "both")]
-        self.assertEqual(Path(paths[0]).read_bytes(), Path(paths[1]).read_bytes())
-        self.assertEqual(Path(paths[0]).read_text(), agent_skills.source_text())
+        for skill in agent_skills.SKILLS:
+            paths = [
+                path for _, path in agent_skills.target_paths(self.root, "both", skill)
+            ]
+            self.assertEqual(Path(paths[0]).read_bytes(), Path(paths[1]).read_bytes())
+            self.assertEqual(Path(paths[0]).read_text(), agent_skills.source_text(skill))
 
     def test_status_only_reports_selected_agents(self):
         agent_skills.install_targets(self.root, "claude", False)
         self.assertEqual(set(agent_skills.status(self.root, "claude")), {"claude"})
+        self.assertEqual(
+            set(agent_skills.status(self.root, "claude")["claude"]),
+            set(agent_skills.SKILLS),
+        )
         both = agent_skills.status(self.root, "both")
-        self.assertTrue(both["claude"]["ok"])
-        self.assertEqual(both["codex"]["state"], "missing")
-        self.assertFalse(both["codex"]["ok"])
+        self.assertTrue(both["claude"][agent_skills.SKILL_NAME]["ok"])
+        self.assertEqual(both["codex"][agent_skills.SKILL_NAME]["state"], "missing")
+        self.assertEqual(both["codex"]["code-context"]["state"], "missing")
+        self.assertFalse(both["codex"][agent_skills.SKILL_NAME]["ok"])
+
+    def test_all_managed_skills_follow_the_full_lifecycle(self):
+        expected = {
+            (skill, agent)
+            for skill in agent_skills.SKILLS
+            for agent in ("claude", "codex")
+        }
+        installed = agent_skills.install_targets(self.root, "both", False)
+        self.assertEqual({(skill, agent) for skill, agent, _ in installed}, expected)
+        self.assertEqual(
+            {
+                (skill, agent)
+                for skill in agent_skills.SKILLS
+                for agent, _ in agent_skills.target_paths(self.root, "both", skill)
+            },
+            expected,
+        )
+
+        statuses = agent_skills.status(self.root, "both")
+        self.assertEqual(set(statuses), {"claude", "codex"})
+        self.assertEqual(set(statuses["claude"]), set(agent_skills.SKILLS))
+        self.assertTrue(
+            all(details["ok"] for skills in statuses.values() for details in skills.values())
+        )
+
+        managed = agent_skills.managed_targets(self.root)
+        self.assertEqual({(skill, agent) for skill, agent, _ in managed}, expected)
+        removed = agent_skills.remove_managed_targets(self.root)
+        self.assertEqual({(skill, agent) for skill, agent, _ in removed}, expected)
 
     def test_current_skill_is_a_true_noop(self):
         agent_skills.install_targets(self.root, "claude", False)
@@ -48,7 +85,10 @@ class AgentSkills(unittest.TestCase):
         time.sleep(0.002)
         self.assertEqual(
             agent_skills.install_targets(self.root, "claude", False),
-            (("claude", "current"),),
+            (
+                (agent_skills.SKILL_NAME, "claude", "current"),
+                ("code-context", "claude", "current"),
+            ),
         )
         self.assertEqual(os.stat(path).st_mtime_ns, before)
 
@@ -58,7 +98,10 @@ class AgentSkills(unittest.TestCase):
         Path(path).write_text(agent_skills.MANAGED_MARKER + "\nold\n")
         self.assertEqual(
             agent_skills.install_targets(self.root, "claude", False),
-            (("claude", "updated"),),
+            (
+                (agent_skills.SKILL_NAME, "claude", "updated"),
+                ("code-context", "claude", "current"),
+            ),
         )
         self.assertEqual(Path(path).read_text(), agent_skills.source_text())
 
@@ -84,9 +127,21 @@ class AgentSkills(unittest.TestCase):
         claude = agent_skills.target_paths(self.root, "claude")[0][1]
         Path(claude).write_text("foreign\n")
         removed = agent_skills.remove_managed_targets(self.root)
-        self.assertEqual([agent for agent, _ in removed], ["codex"])
+        self.assertEqual(
+            {(skill, agent) for skill, agent, _ in removed},
+            {
+                (agent_skills.SKILL_NAME, "codex"),
+                ("code-context", "claude"),
+                ("code-context", "codex"),
+            },
+        )
         self.assertEqual(Path(claude).read_text(), "foreign\n")
         self.assertFalse(os.path.exists(agent_skills.target_paths(self.root, "codex")[0][1]))
+        self.assertFalse(
+            os.path.exists(
+                agent_skills.target_paths(self.root, "both", "code-context")[0][1]
+            )
+        )
 
 
 if __name__ == "__main__":
