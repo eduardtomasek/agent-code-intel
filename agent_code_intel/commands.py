@@ -1290,15 +1290,18 @@ def _report_hook_status_for_agents(
     for agent in hooks.target_names(agent_target):
         details = hooks.status(root, agent)
         state = str(details["state"])
+        display_path = (
+            details["settings_path"] if agent == "codex" else details["path"]
+        )
         if state == "current":
             reporter.row(
-                "", "  %s SessionStart hook current at %s" % (agent, details["path"])
+                "", "  %s SessionStart hook current at %s" % (agent, display_path)
             )
         else:
             reporter.row(
                 "",
                 "  %s SessionStart hook is %s at %s"
-                % (agent, state, details["path"]),
+                % (agent, state, display_path),
             )
             bad = True
     return bad

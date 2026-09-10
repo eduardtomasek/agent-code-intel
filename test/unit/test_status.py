@@ -202,6 +202,7 @@ class TextTable(unittest.TestCase):
         )
         self.assertEqual(code, 2)
         self.assertIn("claude SessionStart hook is missing", out)
+        self.assertIn("codex SessionStart hook is missing at .codex/hooks.json", out)
 
     def test_hr_rule_is_byte_length_of_the_heading(self):
         root = _mkrepo()
