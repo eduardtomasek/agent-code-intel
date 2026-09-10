@@ -341,6 +341,26 @@ class Init(unittest.TestCase):
         self.assertNotIn("MISSING   node", out.getvalue())
         self.assertEqual(err.getvalue(), "")
 
+    def test_code_context_tools_are_warnings_not_apply_dependencies(self):
+        root = tempfile.mkdtemp(prefix="aci-init-code-context-tools-")
+        out, err = io.StringIO(), io.StringIO()
+
+        commands._init_preflight(
+            commands.Reporter(out, err),
+            bootstrap=False,
+            agent_target="both",
+            context=make_context(root),
+            config=default_config(),
+            stack=FakeStack(),
+        )
+
+        text = out.getvalue()
+        for tool in ("rg", "ctags", "ast-grep", "fd", "rga", "tokei", "scc"):
+            self.assertIn("warn      %s not on PATH" % tool, text)
+        self.assertIn("ctags and ast-grep are both missing", text)
+        self.assertIn("agent-code-intel --install-deps", text)
+        self.assertEqual(err.getvalue(), "")
+
     def test_preview_runs_preflight_and_writes_no_project_files(self):
         root = tempfile.mkdtemp(prefix="aci-init-preview-")
         subprocess.run(["git", "init", "-q", root], check=True)

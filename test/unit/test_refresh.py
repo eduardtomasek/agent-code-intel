@@ -247,6 +247,17 @@ class Preflight(unittest.TestCase):
         self.assertIn("  ok        ollama responding,", out)
         self.assertNotEqual(code, 1)
 
+    def test_code_context_tools_warn_without_blocking_refresh(self):
+        stack = _Stack(present=("gitnexus", "git"))
+        code, out, err = _run(stack=stack, do_grepai=False)
+
+        self.assertEqual(code, 0)
+        for tool in ("rg", "ctags", "ast-grep", "fd", "rga", "tokei", "scc"):
+            self.assertIn("warn      %s not on PATH" % tool, out)
+        self.assertIn("ctags and ast-grep are both missing", out)
+        self.assertIn("agent-code-intel --install-deps", out)
+        self.assertEqual(err, "")
+
     def test_qdrant_http_up_but_grpc_closed(self):
         stack = _Stack(grpc=False)
         _, out, err = _run(stack=stack)
@@ -396,12 +407,14 @@ class Shape(unittest.TestCase):
         self.assertIn("Project:   ", plain)
         self.assertNotIn("Project:   ", jout)
 
-    def test_both_sides_skipped_needs_no_stack(self):
+    def test_both_sides_skipped_reports_optional_tools(self):
         stack = _Stack(present=())
         code, out, _ = _run(stack=stack, do_grepai=False, do_gitnexus=False)
         self.assertEqual(code, 0)
         self.assertIn("Code intelligence is fresh.", out)
-        self.assertEqual(stack.calls, [])
+        for tool in ("rg", "ctags", "ast-grep", "fd", "rga", "tokei", "scc"):
+            self.assertIn("warn      %s not on PATH" % tool, out)
+        self.assertIn("ctags and ast-grep are both missing", out)
 
     def test_missing_selected_routing_skill_is_refresh_drift(self):
         root = _mkrepo("routing-drift")

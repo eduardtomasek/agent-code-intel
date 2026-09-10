@@ -184,6 +184,17 @@ class TextTable(unittest.TestCase):
         self.assertIn("  watcher not running", out)
         self.assertIn("Repair a project with:  agent-code-intel --path <dir> --apply", out)
 
+    def test_code_context_tools_are_reported_in_text_status(self):
+        root = _mkrepo()
+        _, out, _ = _run(
+            as_json=False, status_all=False, context=_context(root), stack=_Stack()
+        )
+
+        for tool in ("rg", "ctags", "ast-grep", "fd", "rga", "tokei", "scc"):
+            self.assertIn("warn      %s not on PATH" % tool, out)
+        self.assertIn("ctags and ast-grep are both missing", out)
+        self.assertIn("agent-code-intel --install-deps", out)
+
     def test_missing_session_start_hook_is_status_drift(self):
         root = _mkrepo("hook-drift")
         _code_intel(root, "team", "hook-drift")
@@ -415,6 +426,32 @@ class JsonDocument(unittest.TestCase):
         self.assertIs(doc["svc"]["container"]["daemon"], False)
         self.assertEqual(doc["svc"]["container"]["cli"], "")
         self.assertIs(doc["svc"]["ollama"]["present"], False)
+
+    def test_code_context_tool_keys_are_stable(self):
+        doc, _ = self._doc()
+        names = ("rg", "ctags", "ast-grep", "fd", "rga", "tokei", "scc")
+
+        self.assertEqual(
+            list(doc["tool"]),
+            ["grepai", "gitnexus", "node", "claude", "codex", "rtk", *names],
+        )
+        for name in names:
+            self.assertEqual(doc["tool"][name], {"present": False})
+
+    def test_code_context_tool_presence_is_reported(self):
+        names = ("rg", "ctags", "ast-grep", "fd", "rga", "tokei", "scc")
+        root = _mkrepo()
+        code, out, _ = _run(
+            as_json=True,
+            status_all=False,
+            context=_context(root),
+            stack=_Stack(present=names),
+        )
+
+        self.assertEqual(code, 0)
+        doc = json.loads(out)
+        for name in names:
+            self.assertEqual(doc["tool"][name], {"present": True})
 
     def test_all_is_ignored_registry_always_enumerated(self):  # JSON-3
         a = _mkrepo("a")

@@ -162,6 +162,33 @@ class _Need:
     fix: str
 
 
+_CODE_CONTEXT_TOOLS = ("rg", "ctags", "ast-grep", "fd", "rga", "tokei", "scc")
+_INSTALL_DEPS = "agent-code-intel --install-deps"
+
+
+def _code_context_tool_presence(stack: integrations.Stack) -> dict[str, bool]:
+    return {name: stack.have(name) for name in _CODE_CONTEXT_TOOLS}
+
+
+def _report_code_context_tools(reporter: Reporter, stack: integrations.Stack) -> None:
+    presence = _code_context_tool_presence(stack)
+    for name in _CODE_CONTEXT_TOOLS:
+        if presence[name]:
+            reporter.row("ok", "%s on PATH" % name)
+        else:
+            reporter.row(
+                "warn",
+                "%s not on PATH — install with: %s" % (name, _INSTALL_DEPS),
+            )
+
+    if not presence["ctags"] and not presence["ast-grep"]:
+        reporter.row(
+            "warn",
+            "ctags and ast-grep are both missing — code navigation ranges are degraded; "
+            "install with: %s" % _INSTALL_DEPS,
+        )
+
+
 _DOC_BLOCKS = {
     "CLAUDE.md": """<!-- code-intel:start -->
 ## Code intelligence
@@ -296,6 +323,7 @@ def _init_preflight(
     reporter.hr("Preflight")
     needs: list[_Need] = []
     reporter.row("ok", "python3 on PATH")
+    _report_code_context_tools(reporter, stack)
 
     def need(what: str, fix: str) -> None:
         needs.append(_Need(what, fix))
@@ -1320,6 +1348,9 @@ def _status_text(
     stack: integrations.Stack,
 ) -> int:
     drift = False
+    reporter.hr("Code-context tools")
+    _report_code_context_tools(reporter, stack)
+    reporter.say("")
     if status_all:
         reporter.hr("code-intel status — all registered projects")
         rows = project.read_registry(registry_path)
@@ -1535,6 +1566,8 @@ def _json_tools(stack: integrations.Stack) -> dict[str, object]:
     tools["claude"] = {"present": stack.have("claude")}
     tools["codex"] = {"present": stack.have("codex")}
     tools["rtk"] = {"present": stack.have("rtk")}
+    for name, present in _code_context_tool_presence(stack).items():
+        tools[name] = {"present": present}
     return tools
 
 
@@ -1769,6 +1802,8 @@ def _refresh_preflight(
     def need(what: str, fix: str) -> None:
         needs.append(_Need(what, fix))
         reporter.row("MISSING", what)
+
+    _report_code_context_tools(reporter, stack)
 
     if do_grepai:
         if stack.have("grepai"):
