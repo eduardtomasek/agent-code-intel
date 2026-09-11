@@ -39,7 +39,7 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
   `code-intel-dash 1.1.0 already installed` a nechala starou kopii. Verze 1.2.0
   se přeskakuje: nese ji build z forku (pozastavení a odebrání projektu), který
   v tomto repozitáři není, a dva různé dashboardy se stejným číslem by
-  instalátor nerozlišil.
+  instalátor nerozlišil. (#109)
 
 ## [6.0.0] - 2026-09-10
 
