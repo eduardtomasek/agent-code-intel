@@ -5,6 +5,8 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
 
 ## [Unreleased]
 
+## [6.1.0] - 2026-09-11
+
 ### Přidáno
 
 - `code-intel-dash` 1.5.0 umí projekt pozastavit a vyřadit, ne jen ukázat, že
@@ -44,7 +46,11 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
   JSON dashboardu (`--once`, `/api/status`) má nové klíče: u projektu
   `paused` a `config_ok`, v kořeni `retired` (vyřazené projekty) a
   `action_error` (proč akce nejdou, když chybí balík `agent_code_intel`).
-  `--once` rozhoduje podle `config_ok` místo `ok`. (#110)
+  `--once` rozhoduje podle `config_ok` místo `ok`.
+
+  Verze 1.2.0 a 1.4.0 se v téhle řadě nevydaly — nesly rozpracovanou práci na
+  otevřených issues. Dashboard tak jde z 1.1.0 na 1.3.0 a odtud na 1.5.0;
+  s touhle číselnou řadou se počítá i dál. (#110)
 - `--status --json` má u každého projektu klíč `drift`: seznam kontrol, které
   selhaly, jménem (`workspace`, `mapping`, `embedder`, `chunking`, `ignores`,
   `watcher`, `legacy_refresh_script`, `routing_skills`,
@@ -385,7 +391,8 @@ dopočítat: nástroj sem přišel v téhle verzi z externího zdroje (viz `git
 log`, merge `Hessevalentino/audit-fixes-dashboard-v2.4.1`), ne z vlastního
 vývoje v tomhle repu.
 
-[Unreleased]: https://github.com/eduardtomasek/agent-code-intel/compare/v6.0.0...HEAD
+[Unreleased]: https://github.com/eduardtomasek/agent-code-intel/compare/v6.1.0...HEAD
+[6.1.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v6.0.0...v6.1.0
 [6.0.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v5.1.0...v6.0.0
 [5.1.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v5.0.0...v5.1.0
 [5.0.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v4.1.0...v5.0.0

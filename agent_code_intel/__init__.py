@@ -27,4 +27,4 @@ nothing (decision 43).
 # The single source of the product version (issue #48, decision 73). The CLI
 # banner and the JSON status both read it from here. The active entrypoint
 # switch in issue #58 makes this the 5.x product version.
-__version__ = "6.0.0"
+__version__ = "6.1.0"

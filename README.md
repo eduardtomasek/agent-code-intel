@@ -7,7 +7,7 @@
 Tato dokumentace popisuje instalaci celého stacku na Macu. Předpokládá pouze
 základní práci s aplikacemi; všechny potřebné kroky jsou vysvětlené.
 
-Text odpovídá vydání 6.0.0.
+Text odpovídá vydání 6.1.0.
 
 Po dokončení se nové projekty nastavují takto:
 
@@ -88,7 +88,7 @@ agent-code-intel --agent both --apply
 Místo posledního příkazu použij `--agent claude`, pokud má projekt obsluhovat
 jen Claude, nebo `--agent codex`, pokud jen Codex. `both` nastaví oba.
 
-## Aktualizace na 6.0.0
+## Aktualizace na 6.1.0
 
 Aktualizace vždy začíná checkoutem, ze kterého jsi nástroj instaloval. Stáhni
 nový zdroj, znovu nainstaluj **lokální soubor** a pak v každém projektu obnov
@@ -137,7 +137,7 @@ starší instalace.
 ## Obsah
 
 0. [Rychlý start](#rychlý-start)
-1. [Aktualizace na 6.0.0](#aktualizace-na-600)
+1. [Aktualizace na 6.1.0](#aktualizace-na-610)
 2. [Co to vlastně dělá](#1-co-to-vlastně-dělá)
 3. [Co budeš potřebovat](#2-co-budeš-potřebovat)
 4. [Terminál — základ](#3-terminál--základ)
