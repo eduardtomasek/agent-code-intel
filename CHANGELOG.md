@@ -44,7 +44,7 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
   JSON dashboardu (`--once`, `/api/status`) má nové klíče: u projektu
   `paused` a `config_ok`, v kořeni `retired` (vyřazené projekty) a
   `action_error` (proč akce nejdou, když chybí balík `agent_code_intel`).
-  `--once` rozhoduje podle `config_ok` místo `ok`.
+  `--once` rozhoduje podle `config_ok` místo `ok`. (#110)
 - `--status --json` má u každého projektu klíč `drift`: seznam kontrol, které
   selhaly, jménem (`workspace`, `mapping`, `embedder`, `chunking`, `ignores`,
   `watcher`, `legacy_refresh_script`, `routing_skills`,
@@ -52,7 +52,7 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
   `ok` je přesně „seznam je prázdný". Kdo potřebuje verdikt bez jedné
   kontroly — dashboard u watcheru, který sám pozastavil — se zeptá seznamu a
   nemusí zbytek verdiktu odvozovat znovu. Klíč stojí těsně před `ok`; ostatní
-  klíče ani jejich pořadí se nemění.
+  klíče ani jejich pořadí se nemění. (#110)
 
 ### Změněno
 
@@ -97,7 +97,7 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
   přebíjí a přepisuje agenty zaznamenané v `.code-intel`, takže u projektu
   zapojeného pro `both` by rada potichu přepnula projekt jen na Clauda. Rada
   teď uvádí přesně ty agenty, proti kterým `--status` řádek posuzoval (klíč
-  `agents`).
+  `agents`). (#110)
 - Čtecí endpointy `code-intel-dash` byly otevřené stránce s DNS rebindingem:
   cizí web přesměrovaný na 127.0.0.1 je pro prohlížeč stejný původ, takže
   mohl číst report, spouštět hledání a číst vrácené úryvky kódu. Kontrola
@@ -106,7 +106,7 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
   parametr `url` z požadavku ignoruje (dřív šlo jeho přes něj poslat POST na
   libovolnou adresu); `ws` u čtecích endpointů musí být platné jméno
   workspace; a dotaz pro `grepai search` jde za `--`, takže text začínající
-  pomlčkou není přepínač.
+  pomlčkou není přepínač. (#110)
 
 ### Testy
 
@@ -117,7 +117,7 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
   i čtením proti skutečnému serveru na loopbacku. GrepAI je v nich falešný
   watcher v paměti a konfigurace míří do dočasného stromu; na skutečný
   registr ani watcher testy nedosáhnou. `DriftContractTest` ověřuje
-  `config_ok` proti skutečnému `--status --json`.
+  `config_ok` proti skutečnému `--status --json`. (#110)
 
 ## [6.0.0] - 2026-09-10
 
