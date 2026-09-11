@@ -291,8 +291,10 @@ dopočítat: nástroj sem přišel v téhle verzi z externího zdroje (viz `git
 log`, merge `Hessevalentino/audit-fixes-dashboard-v2.4.1`), ne z vlastního
 vývoje v tomhle repu.
 
-[Unreleased]: https://github.com/eduardtomasek/agent-code-intel/compare/v5.0.0...HEAD
+[Unreleased]: https://github.com/eduardtomasek/agent-code-intel/compare/v6.0.0...HEAD
+[6.0.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v5.1.0...v6.0.0
+[5.1.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v5.0.0...v5.1.0
 [5.0.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v4.1.0...v5.0.0
 [4.1.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v4.0.0...v4.1.0
-[4.0.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v3.0.0...52232ad1b202d520474278ca8044e24d7af398d2
+[4.0.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v3.0.0...v4.0.0
 [3.0.0]: https://github.com/eduardtomasek/agent-code-intel/releases/tag/v3.0.0

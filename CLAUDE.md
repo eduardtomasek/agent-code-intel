@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **agent-code-intel** (1902 symbols, 4024 relationships, 52 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **agent-code-intel** (1941 symbols, 4109 relationships, 54 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -77,3 +77,24 @@ The five canonical triage roles, each label string equal to its name. See `docs/
 ### Domain docs
 
 Single-context: `CONTEXT.md` and `docs/adr/` at the repo root, both created lazily when something is actually resolved. See `docs/agents/domain.md`.
+
+## Changelog and README
+
+When a change is finished and a user would notice it — behaviour or a default
+changes, a bug is fixed, a flag/message/exit code/JSON key comes or goes, a
+requirement is raised — do two documentation steps **before** the commit and
+before reporting the work as done:
+
+- **MUST add an entry under `## [Unreleased]` in `CHANGELOG.md`** — Czech, Keep
+  a Changelog categories, explaining what changed and why, with `(#NN)` when
+  there is an issue or PR.
+- **MUST check `README.md` is still in sync** with the new behaviour (flag and
+  exit-code tables, requirements, error messages, version strings) and update
+  what drifted. Verify with `rg`, don't assume; report either "README updated:
+  …" or "README checked, no drift".
+
+Not every edit earns an entry. Internal refactors and renames with no
+observable difference, formatting, comments, typos, docs-only and test-only
+changes stay out — don't pad the changelog. When you leave a change out, say so
+in a sentence. See `docs/agents/changelog.md` for the threshold, the README
+section map and the release procedure.
