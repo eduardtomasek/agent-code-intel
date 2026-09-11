@@ -637,7 +637,47 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);
 h2{font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;
  color:var(--accent);margin:30px 0 10px}
 
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(224px,1fr));gap:10px}
+h2 .chip{margin-left:8px;text-transform:none;letter-spacing:0;font-weight:500;
+ vertical-align:1px}
+
+/* ---------- stack: one row per component ----------
+   The fact columns share one track grid across every row, so "server",
+   "version", "HTTP 6333"… sit in the same five columns all the way down and
+   the eye reads the stack like a table. */
+.stack{background:var(--panel);border:1px solid var(--rule);border-radius:3px;
+ overflow:hidden}
+.srow{display:grid;grid-template-columns:200px minmax(0,1fr);column-gap:22px;
+ padding:12px 16px 12px 13px;border-left:3px solid var(--idle);
+ border-bottom:1px solid var(--rule-soft)}
+.srow:last-child{border-bottom:0}
+.srow.ok{border-left-color:var(--ok)} .srow.bad{border-left-color:var(--bad)}
+.srow.warn{border-left-color:var(--warn)}
+.srow.bad,.srow.warn{background:var(--sunk)}
+.srow .id{min-width:0}
+.srow .id h3{margin:0;font-size:14px;font-weight:600;display:flex;gap:8px;
+ align-items:center}
+.srow .id .sub{margin:2px 0 0 16px;font-family:"IBM Plex Mono",monospace;
+ font-size:11.5px;color:var(--faint);white-space:nowrap;overflow:hidden;
+ text-overflow:ellipsis}
+.facts{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px 18px;
+ margin:0;align-content:start}
+.fact{min-width:0}
+.fact dt{font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;
+ text-overflow:ellipsis}
+.fact dd{margin:1px 0 0;font-family:"IBM Plex Mono",monospace;font-size:12.5px;
+ font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.fact dd.ok{color:var(--ok)} .fact dd.bad{color:var(--bad)}
+.fact dd.warn{color:var(--warn)}
+.srow .more{grid-column:2}
+.srow .more .hint{margin:0}
+@media(max-width:860px){.facts{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:640px){
+ .srow{grid-template-columns:minmax(0,1fr)}
+ .srow .id{margin-bottom:9px}
+ .srow .more{grid-column:1}
+ .facts{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+
 .card{background:var(--panel);border:1px solid var(--rule);border-radius:3px;
  padding:13px 15px}
 .card.bad{border-left:3px solid var(--bad)}
@@ -657,13 +697,6 @@ dl.kv dt{color:var(--faint)}
 dl.kv dd{margin:0;text-align:right;font-family:"IBM Plex Mono",monospace;
  font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 dd.bad{color:var(--bad)} dd.ok{color:var(--ok)} dd.warn{color:var(--warn)}
-.srv{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12.5px;
- border-bottom:1px solid var(--rule-soft);flex-wrap:wrap}
-.srv:last-of-type{border-bottom:0}
-.srv .who{font-weight:500;overflow-wrap:anywhere}
-.srv .pid,.srv .up{font-family:"IBM Plex Mono",monospace;font-size:11.5px;
- color:var(--faint);white-space:nowrap}
-.srv .up{margin-left:auto}
 .err{margin-top:9px;padding:7px 9px;background:var(--bad-bg);color:var(--bad);
  border-radius:2px;font-size:12px;overflow-wrap:anywhere}
 .note{margin-top:9px;padding:7px 9px;background:var(--warn-bg);color:var(--warn);
@@ -858,86 +891,103 @@ function codeTable(content, startLine){
 }
 
 /* ------------------------------------------------------------- stack ---- */
+const fact = (k,v,state) =>
+  `<div class="fact"><dt title="${esc(k)}">${esc(k)}</dt><dd class="${state||""}">${esc(v)}</dd></div>`;
+
+/* One component = one row: status and name on the left, its readings in the
+   shared columns on the right, anything that needs saying underneath them.
+   `extra` is trusted HTML (the MCP "no server" hint and kill command). */
+function stackRow(title, state, sub, facts, err, note, extra){
+  const more = (err?`<div class="err">${esc(err)}</div>`:"") +
+               (note?`<div class="note">${esc(note)}</div>`:"") + (extra||"");
+  return `<div class="srow ${state}">
+    <div class="id">
+      <h3><span class="dot ${state}"></span>${esc(title)}</h3>
+      ${sub?`<div class="sub" title="${esc(sub)}">${esc(sub)}</div>`:""}
+    </div>
+    <dl class="facts">${facts.join("")}</dl>
+    ${more?`<div class="more">${more}</div>`:""}
+  </div>`;
+}
+
 function renderStack(d){
   const s=d.status, tool=s.tool||{}, svc=s.svc||{}, meta=s.meta||{};
   const q=d.components.qdrant||{}, o=d.components.ollama||{}, mcp=d.components.mcp||{};
   const nd=tool.node||{};
-  let h = `<h2>Stack</h2><div class="grid">`;
+  const rows = [], states = [];
+  const add = (state, title, ...rest) => {
+    states.push(state); rows.push(stackRow(title, state, ...rest)); };
 
   const cont=svc.container||{}, ports=cont.qdrant_ports||"";
   const bothPorts = ports.includes("6333") && ports.includes("6334");
-  h += card(cont.cli||"kontejnery",
-    cont.daemon ? ((cont.qdrant_state==="running" && bothPorts)?"ok":"warn") : "bad",
-    cont.name||"", [
-      row("daemon", cont.daemon?"running":"stopped", cls(!!cont.daemon)),
-      row("container", cont.qdrant_state||"absent", cont.qdrant_state==="running"?"ok":"bad"),
-      row("both ports", bothPorts?"6333 + 6334":"NO", bothPorts?"ok":"bad"),
+  add(cont.daemon ? ((cont.qdrant_state==="running" && bothPorts)?"ok":"warn") : "bad",
+    cont.cli||"kontejnery", cont.name||"", [
+      fact("daemon", cont.daemon?"running":"stopped", cls(!!cont.daemon)),
+      fact("container", cont.qdrant_state||"absent", cont.qdrant_state==="running"?"ok":"bad"),
+      fact("both ports", bothPorts?"6333 + 6334":"NO", bothPorts?"ok":"bad"),
     ],
     cont.daemon?null:"Start OrbStack or Docker Desktop.",
     (cont.daemon && !bothPorts)
       ? "The container does not publish 6334. GrepAI reads and writes vectors there, so every index will fail." : null);
 
-  h += card("qdrant", q.ok?"ok":"bad", q.version?("v"+q.version):"", [
-      row("HTTP 6333", q.healthz?"200 ok":"no answer", cls(!!q.healthz)),
-      row("gRPC "+((svc.qdrant||{}).grpc_port||"6334"), q.grpc?"open":"closed", cls(!!q.grpc)),
-      row("latency", (q.ms||0)+" ms"),
-      row("collections", (q.collections||[]).length),
+  add(q.ok?"ok":"bad", "qdrant", q.version?("v"+q.version):"", [
+      fact("HTTP 6333", q.healthz?"200 ok":"no answer", cls(!!q.healthz)),
+      fact("gRPC "+((svc.qdrant||{}).grpc_port||"6334"), q.grpc?"open":"closed", cls(!!q.grpc)),
+      fact("latency", (q.ms||0)+" ms"),
+      fact("collections", (q.collections||[]).length),
     ], q.error,
     (q.healthz && !q.grpc)
       ? "HTTP answers but gRPC does not. Search will look alive while storing and finding nothing." : null);
 
   const overflow = o.context_length && meta.chunk_size &&
                    Number(meta.chunk_size) > Number(o.context_length);
-  h += card("ollama", o.ok?"ok":(o.reachable?"warn":"bad"), meta.embed_model||"", [
-      row("server", o.reachable?"answering":"no answer", cls(!!o.reachable)),
-      row("model pulled", o.model_present?"yes":"no", cls(!!o.model_present)),
-      row("loaded", o.loaded?"yes":"no", o.loaded?"ok":""),
-      row("context window", o.context_length?(o.context_length+" tokens"):"—", overflow?"bad":""),
-      row("embed probe", o.ok?(o.dimensions+" dim / "+o.embed_ms+" ms"):"failed", cls(!!o.ok)),
+  add(o.ok?"ok":(o.reachable?"warn":"bad"), "ollama", meta.embed_model||"", [
+      fact("server", o.reachable?"answering":"no answer", cls(!!o.reachable)),
+      fact("model pulled", o.model_present?"yes":"no", cls(!!o.model_present)),
+      fact("loaded", o.loaded?"yes":"no", o.loaded?"ok":""),
+      fact("context window", o.context_length?(o.context_length+" tokens"):"—", overflow?"bad":""),
+      fact("embed probe", o.ok?(o.dimensions+" dim / "+o.embed_ms+" ms"):"failed", cls(!!o.ok)),
     ], o.error,
     overflow ? `chunk ${meta.chunk_size} overflows the ${o.context_length}-token window — files will drop out of the index silently` : null);
 
   /* The verdict follows `version_ok`, the same gate the CLI warns on, which
-     follows gitnexus's published `engines`. `registerHooks` stays as a row
+     follows gitnexus's published `engines`. `registerHooks` stays as a fact
      because it names the exact symptom of an index built under an old Node. */
   const nodeBad = nd.present && nd.version_ok === false;
-  h += card("Node.js", nd.present?(nd.version_ok===false?"bad":"ok"):"bad", nd.path||"", [
-      row("version", nd.version||"—", cls(nd.version_ok !== false)),
-      row("minimum", nd.version_min ? (nd.version_min+" (gitnexus engines)") : "—",
-          cls(nd.version_ok !== false)),
-      row("registerHooks", nd.register_hooks?"function":"MISSING", cls(!!nd.register_hooks)),
-      row("gitnexus", (tool.gitnexus||{}).runs?((tool.gitnexus||{}).version||"ok"):"will not run",
+  add(nd.present?(nd.version_ok===false?"bad":"ok"):"bad", "Node.js", nd.path||"", [
+      fact("version", nd.version||"—", cls(nd.version_ok !== false)),
+      fact("minimum (gitnexus)", nd.version_min||"—", cls(nd.version_ok !== false)),
+      fact("registerHooks", nd.register_hooks?"function":"MISSING", cls(!!nd.register_hooks)),
+      fact("gitnexus", (tool.gitnexus||{}).runs?((tool.gitnexus||{}).version||"ok"):"will not run",
           cls(!!(tool.gitnexus||{}).runs)),
-      row("grepai", ((tool.grepai||{}).version||"—").replace("grepai version ",""),
+      fact("grepai", ((tool.grepai||{}).version||"—").replace("grepai version ",""),
           cls(!!(tool.grepai||{}).present)),
     ],
     nodeBad ? "gitnexus --version may still pass, but analyze is not supported on this Node." : null,
     nodeBad ? ("Needs Node "+(nd.version_min||"24.11.0")+" or newer: brew upgrade node && npm i -g gitnexus.") : null);
 
   /* MCP servers: a server started before the package was upgraded is still
-     running the old code and will reject the newer index. */
+     running the old code and will reject the newer index. Each server is one
+     fact — the client that owns it is the label, since that is what you
+     restart. */
   const srv = mcp.servers||[];
-  const state = srv.length ? (mcp.stale?"bad":"ok") : "idle";
-  let body = srv.length
-    ? srv.map(x => `<div class="srv">
-        <span class="dot ${x.stale?"bad":"ok"}"></span>
-        <span class="who">${esc(x.owner)}</span>
-        <span class="pid">${esc(x.pid)}</span>
-        <span class="up">${esc(x.etime)}</span>
-        <span class="chip ${x.stale?"bad":"ok"}">${x.stale?"stale":"ok"}</span>
-      </div>`).join("")
-    : `<p class="hint">No server running. One starts when you open an agent in a project.</p>`;
-  h += `<div class="card ${state}">
-      <h3><span class="dot ${state}"></span>MCP servers</h3>
-      <div class="sub">gitnexus mcp · running since the client started</div>
-      ${body}
-      ${mcp.stale ? `<div class="err">${mcp.stale} server(s) running an older version
-        than the index — queries will fail with &ldquo;DB version mismatch&rdquo;.</div>
-        <div class="fix">Restart the client, or
-        <code>kill ${esc(srv.filter(x=>x.stale).map(x=>x.pid).join(" "))}</code></div>` : ""}
-    </div>`;
+  const stale = srv.filter(x=>x.stale);
+  add(srv.length ? (mcp.stale?"bad":"ok") : "idle",
+    "MCP servers", "gitnexus mcp",
+    srv.map(x => fact(x.owner+(x.stale?" · stale":""), "pid "+x.pid+" · "+x.etime,
+                      x.stale?"bad":"ok")),
+    mcp.stale ? `${mcp.stale} server(s) running an older version than the index — queries will fail with “DB version mismatch”.` : null,
+    null,
+    (srv.length ? "" : `<p class="hint">No server running. One starts when you open an agent in a project.</p>`) +
+    (mcp.stale ? `<div class="fix">Restart the client, or
+        <code>kill ${esc(stale.map(x=>x.pid).join(" "))}</code></div>` : ""));
 
-  return h + `</div>`;
+  /* idle (no MCP server yet) is a normal state, not something to fix */
+  const need = states.filter(x => x==="bad" || x==="warn").length;
+  const sum = need
+    ? `<span class="chip ${states.includes("bad")?"bad":"warn"}">${need} of ${states.length} need attention</span>`
+    : `<span class="chip ok">all ok</span>`;
+  return `<h2>Stack ${sum}</h2><div class="stack">${rows.join("")}</div>`;
 }
 
 /* ---------------------------------------------------------- projects ---- */
