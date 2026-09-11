@@ -5,6 +5,55 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
 
 ## [Unreleased]
 
+### Přidáno
+
+- `code-intel-dash` 1.5.0 umí projekt pozastavit a vyřadit, ne jen ukázat, že
+  stojí. Stack, který hlídá projekty, na kterých už nikdo nepracuje, pálí CPU,
+  disk i místo ve vektorové databázi zbytečně, a obě nápravy jsou po projektech.
+  Každý projekt má dvě tlačítka:
+  - **Pause indexing** / **Resume indexing** zastaví a znovu spustí GrepAI
+    watcher daného workspace; index zůstává, jak je. Pozastavení si dashboard
+    pamatuje v `<conf>/dash-paused.json`, takže pozastavený projekt je šedý se
+    štítky `config ok` a `watcher paused` — ne červený s „opravou“ `--refresh`
+    nebo `--apply`, která by pozastavení zrušila. `agent-code-intel` počítá
+    zastavený watcher do `ok` projektu; u pozastaveného projektu proto
+    dashboard čte nový seznam `drift` (níže) a config je v pořádku, když
+    v něm je jen `watcher`. `code-intel-dash --once` kvůli pozastavení
+    nevrací 2. Poznámka platí jen do chvíle, kdy watcher cokoli zapíše do
+    svého logu: spustí-li ho mezitím `--refresh` nebo `--apply`, pozastavení
+    skončilo, a když potom spadne, je to zase červená chyba.
+  - **Remove from code-intel…** po potvrzení zastaví watcher a vyřadí projekt
+    z registru — a nic víc. `.grepai/`, `.gitnexus/`, kolekce v qdrantu,
+    routing skilly i blok v `CLAUDE.md` zůstávají, takže návrat nestojí
+    reindex. Vyřazené projekty si dashboard pamatuje v `<conf>/dash-retired`
+    a ukazuje je dole v sekci *Removed from code-intel* s tlačítkem
+    **Bring back**; vrácený projekt má watcher dál pozastavený. Záměrně to
+    není `--remove`, který tohle všechno maže: „přestaň hlídat hotový projekt"
+    a „tohle už není code-intel projekt" jsou dvě různé věci.
+
+  Zápisy jdou jen přes `POST` z vlastní stránky: server odmítne cizí `Host`
+  (DNS rebinding), cizí `Origin` a požadavek bez hlavičky `X-Code-Intel`, na
+  kterou by se cizí stránka musela ptát preflightem, jenž server nikdy
+  nezodpoví. Registr, konfigurační adresář i workspace projektu bere
+  z `agent_code_intel`, ne z vlastní implementace, a registr i seznam
+  vyřazených přepisuje pod zámkem — dvě vyřazení dokončená naráz by jinak
+  jeden projekt ztratila z obou seznamů. Verdikt o watcheru je jeho skutečný
+  stav, ne návratový kód `grepai watch --background`, který po minutě čekání
+  vrací 1, i když watcher běží.
+
+  JSON dashboardu (`--once`, `/api/status`) má nové klíče: u projektu
+  `paused` a `config_ok`, v kořeni `retired` (vyřazené projekty) a
+  `action_error` (proč akce nejdou, když chybí balík `agent_code_intel`).
+  `--once` rozhoduje podle `config_ok` místo `ok`.
+- `--status --json` má u každého projektu klíč `drift`: seznam kontrol, které
+  selhaly, jménem (`workspace`, `mapping`, `embedder`, `chunking`, `ignores`,
+  `watcher`, `legacy_refresh_script`, `routing_skills`,
+  `session_start_hook`; u zkrácených řádků `code_intel` nebo `exists`).
+  `ok` je přesně „seznam je prázdný". Kdo potřebuje verdikt bez jedné
+  kontroly — dashboard u watcheru, který sám pozastavil — se zeptá seznamu a
+  nemusí zbytek verdiktu odvozovat znovu. Klíč stojí těsně před `ok`; ostatní
+  klíče ani jejich pořadí se nemění.
+
 ### Změněno
 
 - Minimální verze Node.js je **24.11.0** a bere se z toho, co si žádá GitNexus,
@@ -40,6 +89,35 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
   se přeskakuje: nese ji build z forku (pozastavení a odebrání projektu), který
   v tomto repozitáři není, a dva různé dashboardy se stejným číslem by
   instalátor nerozlišil. (#109)
+
+### Opraveno
+
+- Oprava konfigurace v přehledu projektu v `code-intel-dash` radila vždy
+  `agent-code-intel --path … --agent claude --apply`. Od 6.0.0 `--agent`
+  přebíjí a přepisuje agenty zaznamenané v `.code-intel`, takže u projektu
+  zapojeného pro `both` by rada potichu přepnula projekt jen na Clauda. Rada
+  teď uvádí přesně ty agenty, proti kterým `--status` řádek posuzoval (klíč
+  `agents`).
+- Čtecí endpointy `code-intel-dash` byly otevřené stránce s DNS rebindingem:
+  cizí web přesměrovaný na 127.0.0.1 je pro prohlížeč stejný původ, takže
+  mohl číst report, spouštět hledání a číst vrácené úryvky kódu. Kontrola
+  hlavičky `Host`, dosud jen u zápisů, teď platí pro každý požadavek. Dál:
+  `/api/files` čte index z qdrantu, jak ho nahlásil `agent-code-intel`, a
+  parametr `url` z požadavku ignoruje (dřív šlo jeho přes něj poslat POST na
+  libovolnou adresu); `ws` u čtecích endpointů musí být platné jméno
+  workspace; a dotaz pro `grepai search` jde za `--`, takže text začínající
+  pomlčkou není přepínač.
+
+### Testy
+
+- `test/unit/test_dash.py` je první sada pro samotný dashboard: pozastavení
+  a jeho poznámka (včetně dvou pozastavení naráz a watcheru, který po restartu
+  spadne), vyřazení a návrat nad skutečným registrem v dočasném stromu včetně
+  dvanácti vyřazení dokončených naráz, verdikt `--once`, a brány před zápisy
+  i čtením proti skutečnému serveru na loopbacku. GrepAI je v nich falešný
+  watcher v paměti a konfigurace míří do dočasného stromu; na skutečný
+  registr ani watcher testy nedosáhnou. `DriftContractTest` ověřuje
+  `config_ok` proti skutečnému `--status --json`.
 
 ## [6.0.0] - 2026-09-10
 

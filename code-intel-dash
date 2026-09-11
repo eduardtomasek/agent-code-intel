@@ -61,13 +61,14 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 DEFAULT_PORT = 7717
 
 # How stale a reading may be before the page stops claiming to know anything.
@@ -350,8 +351,8 @@ def grepai_query(workspace, query, limit=10):
     scraping the pretty output — same reason agent-code-intel grew --json."""
     t0 = time.monotonic()
     rc, out, err = run(
-        ["grepai", "search", query, "--workspace", workspace,
-         "--json", "-n", str(limit)],
+        ["grepai", "search", "--workspace", workspace,
+         "--json", "-n", str(limit), "--", query],
         timeout=90,
     )
     ms = int((time.monotonic() - t0) * 1000)
@@ -422,10 +423,15 @@ def collection_files(http_url, collection, limit=2000):
     return r
 
 
+def log_path(workspace):
+    """Where GrepAI's background watcher for a workspace writes its log."""
+    return os.path.expanduser(
+        "~/Library/Logs/grepai/grepai-workspace-%s.log" % workspace)
+
+
 def read_log(workspace, lines=250):
     """Watcher log, enough of it to see what it has been doing."""
-    p = os.path.expanduser(
-        "~/Library/Logs/grepai/grepai-workspace-%s.log" % workspace)
+    p = log_path(workspace)
     if not os.path.isfile(p):
         return {"ok": False, "error": "no log at %s" % p, "lines": []}
     try:
@@ -509,8 +515,7 @@ def check_gitnexus(path):
 def check_watcher_log(workspace):
     """A watcher can be 'running' and doing nothing. Its log says which."""
     r = {"ok": False}
-    p = os.path.expanduser(
-        "~/Library/Logs/grepai/grepai-workspace-%s.log" % workspace)
+    p = log_path(workspace)
     if not os.path.isfile(p):
         r["error"] = "no log at %s" % p
         return r
@@ -537,6 +542,7 @@ def check_watcher_log(workspace):
 #     performs, and each one is undone by its opposite on the same card:
 #
 #         grepai watch --stop / --background     pause / resume one project
+#         <conf>/dash-paused.json                which of those pauses were ours
 #         registry row removed / re-added        retire / bring back one project
 #
 # WHY RETIRING IS NOT `agent-code-intel --remove`
@@ -556,22 +562,48 @@ def check_watcher_log(workspace):
 #
 # WHY THE REGISTRY IS EDITED THROUGH agent_code_intel
 #     The same rule the report follows: no second implementation. The registry
-#     format, its dedupe-by-path rule and its atomic rewrite live in
-#     agent_code_intel.project, so this file imports that module out of the
-#     bundle the launcher itself uses rather than writing the file by hand. If
-#     the bundle cannot be found the actions refuse; they never guess.
+#     format, its dedupe-by-path rule, where the config directory is and which
+#     workspace a project's watcher runs under all live in agent_code_intel,
+#     so this file imports it out of the bundle the launcher itself uses rather
+#     than writing the file by hand. If the bundle cannot be found the actions
+#     refuse; they never guess.
+#
+#     Those helpers rewrite a file per call and do not lock, and this server is
+#     threaded: two retirements finishing together would each rewrite the
+#     registry from what they read, and one project would vanish from both
+#     lists. Every read-modify-write of the registry and the retired list
+#     therefore runs under _registry_lock — never around a watcher stop, which
+#     can take two minutes.
 
 RETIRED_NAME = "dash-retired"
 WS_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
+# WHY A PAUSE IS REMEMBERED
+#     `grepai watch --stop` leaves nothing behind that says it was deliberate,
+#     so without a note a paused project reads exactly like a crashed watcher:
+#     red, with `--refresh` offered as the fix — the one command that undoes
+#     the pause. The note is <conf>/dash-paused.json, {workspace: when}.
+#
+#     It holds only while nothing has run since. The mark is written after the
+#     stop is verified, so a watcher log touched later than that was written by
+#     a watcher started since — `--refresh`, `--apply`, or by hand — and the
+#     pause is over. A stale note can therefore never dress a crash up as a
+#     pause.
+PAUSED_NAME = "dash-paused.json"
+PAUSE_GRACE_S = 5
+_pause_lock = threading.Lock()
+
+_registry_lock = threading.Lock()
+
 _pkg = {}
-_last_status = {"doc": None}
+_last_status = {"doc": None}         # the last report's status, for its qdrant URL
 
 
 def load_pkg():
     """(project, config, error) from the installed agent_code_intel bundle.
 
-    ``integrations`` comes along in ``_pkg`` for the watcher-status parser.
+    ``integrations``, ``cli`` and ``commands`` come along in ``_pkg`` for the
+    watcher-status parser, the config directory and a project's workspace.
 
     The launcher's layout is <prefix>/bin/agent-code-intel next to
     <prefix>/lib/agent-code-intel/agent_code_intel/; a source checkout has the
@@ -591,13 +623,16 @@ def load_pkg():
         if root not in sys.path:
             sys.path.insert(0, root)
         try:
+            from agent_code_intel import cli as cli_mod
+            from agent_code_intel import commands as cmds
             from agent_code_intel import config as cfg
             from agent_code_intel import integrations as integ
             from agent_code_intel import project as prj
         except Exception as e:                               # noqa: BLE001
             _pkg.update(err="cannot import agent_code_intel from %s: %s" % (root, e))
             return None, None, _pkg["err"]
-        _pkg.update(project=prj, config=cfg, integrations=integ, err=None)
+        _pkg.update(project=prj, config=cfg, integrations=integ, cli=cli_mod,
+                    commands=cmds, err=None)
         return prj, cfg, None
     _pkg.update(err="the agent_code_intel package was not found beside "
                     "agent-code-intel — this page can report, but cannot pause "
@@ -605,22 +640,14 @@ def load_pkg():
     return None, None, _pkg["err"]
 
 
-def conf_dir_from(status):
-    """The config directory agent-code-intel itself named, or the XDG default."""
-    conf_file = ((status or {}).get("meta") or {}).get("config_file", "")
-    if conf_file:
-        return os.path.dirname(conf_file)
-    xdg = os.environ.get("XDG_CONFIG_HOME")
-    return os.path.join(xdg or os.path.join(os.path.expanduser("~"), ".config"),
-                        "code-intel")
-
-
-def registry_paths(status=None):
-    """(registry file, retired file, error) — REGISTRY honoured as the tool does."""
+def registry_paths():
+    """(registry file, retired file, error), found exactly as agent-code-intel
+    finds them: its own config directory from this environment, and REGISTRY
+    from its own config loader."""
     prj, cfg, err = load_pkg()
     if err:
         return None, None, err
-    conf_dir = conf_dir_from(status if status is not None else _last_status["doc"])
+    conf_dir = _pkg["cli"]._conf_dir(os.environ)
     registry = os.path.join(conf_dir, "projects")
     try:
         loaded = cfg.load(conf_dir, os.environ, os.getcwd())
@@ -630,7 +657,7 @@ def registry_paths(status=None):
     return registry, os.path.join(conf_dir, RETIRED_NAME), None
 
 
-def read_retired(status):
+def read_retired():
     """Retired rows, minus any that are back in the live registry.
 
     A retired project that someone re-applied from the command line is a live
@@ -641,18 +668,87 @@ def read_retired(status):
     prj, _, err = load_pkg()
     if err:
         return []
-    registry, retired, err = registry_paths(status)
+    registry, retired, err = registry_paths()
     if err:
         return []
-    live = {path for _, path in prj.read_registry(registry)}
+    with _registry_lock:                 # a rewrite in progress is not a list
+        live = {path for _, path in prj.read_registry(registry)}
+        parked = prj.read_registry(retired)
     rows = []
-    for workspace, path in prj.read_registry(retired):
+    for workspace, path in parked:
         if path in live:
             continue
         rows.append({"workspace": workspace, "path": path,
                      "exists": os.path.isdir(path),
                      "watcher": watcher_alive(workspace)})
     return rows
+
+
+def paused_file():
+    """<conf>/dash-paused.json, beside the retired list; None when unknown."""
+    _, retired, err = registry_paths()
+    return None if err else os.path.join(os.path.dirname(retired), PAUSED_NAME)
+
+
+def read_paused():
+    """{workspace: epoch seconds of the pause}. A missing or unreadable file is
+    no pauses: a lost note only makes a paused project read as stopped."""
+    f = paused_file()
+    if not f:
+        return {}
+    try:
+        with open(f, encoding="utf-8") as h:
+            got = json.load(h)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(got, dict):
+        return {}
+    return {w: float(t) for w, t in got.items()
+            if isinstance(t, (int, float)) and not isinstance(t, bool)}
+
+
+def remember_pause(workspace, paused):
+    """Record or forget one pause. Returns an error string, or None."""
+    f = paused_file()
+    if not f:
+        return "the config directory is unknown"
+    with _pause_lock:                    # the server is threaded; two pauses at once
+        marks = read_paused()
+        if paused:
+            marks[workspace] = time.time()
+        elif marks.pop(workspace, None) is None:
+            return None
+        tmp = f + ".tmp"
+        try:
+            os.makedirs(os.path.dirname(f), exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as h:
+                json.dump(marks, h, indent=1, sort_keys=True)
+                h.write("\n")
+            os.replace(tmp, f)
+        except OSError as e:
+            return str(e)
+    return None
+
+
+def config_ok(p, paused):
+    """agent-code-intel's per-project ``ok`` counts a stopped watcher as drift,
+    so a paused project always fails it — and the fix it implies, ``--apply``,
+    restarts the watcher. For a pause the question is whether anything ELSE
+    failed, and ``drift``, the list of failed checks agent-code-intel reports
+    itself, answers it. A report without the list gets no leniency."""
+    if p.get("ok"):
+        return True
+    return bool(paused) and p.get("drift") == ["watcher"]
+
+
+def pause_holds(workspace, since):
+    """Is a pause recorded at ``since`` still why this watcher is down?"""
+    if since is None:
+        return False
+    try:
+        return os.stat(log_path(workspace)).st_mtime <= since + PAUSE_GRACE_S
+    except OSError:
+        return True                      # no log at all: nothing has run since
 
 
 def watcher_alive(workspace):
@@ -685,6 +781,12 @@ def watcher_set(workspace, action):
     """
     if not WS_OK.match(workspace or ""):
         return {"ok": False, "error": "workspace name missing or malformed"}
+    # Without the package there is no reading of the watcher's state and no
+    # note of the pause: a stop would show red and a start would report the
+    # failure grepai's exit code claims. Refuse, as the page already says.
+    err = load_pkg()[2]
+    if err:
+        return {"ok": False, "error": err}
     stop = action == "stop"
     # Both directions are slow for the same reason: a watcher in the middle of
     # an index does not answer until it is done. 30s was not enough to stop one
@@ -698,34 +800,54 @@ def watcher_set(workspace, action):
     if alive is None:                    # unverifiable: the exit code is all there is
         if rc != 0:
             return {"ok": False, "error": tail or "grepai watch exited %s" % rc}
-        return {"ok": True, "message": tail or
-                ("watcher stopped" if stop else "watcher started")}
-    if alive is not stop:
-        return {"ok": True,
-                "message": "watcher stopped" if stop else "watcher started"}
-    return {"ok": False, "error": tail or
-            ("the watcher is still running" if alive
-             else "the watcher did not start")}
+        result = {"ok": True, "message": tail or
+                  ("watcher stopped" if stop else "watcher started")}
+    elif alive is not stop:
+        result = {"ok": True,
+                  "message": "watcher stopped" if stop else "watcher started"}
+    else:
+        return {"ok": False, "error": tail or
+                ("the watcher is still running" if alive
+                 else "the watcher did not start")}
+    failed = remember_pause(workspace, stop)
+    if failed:
+        result["message"] += " — but the pause was not recorded (%s)" % failed
+    return result
 
 
-def retire_project(workspace, path):
+def watcher_workspace(path, registry_workspace):
+    """The workspace this project's watcher runs under: its ``.code-intel``
+    wins over the registry column, exactly as ``--status`` decides it."""
+    prj = _pkg["project"]
+    identity = prj.read_code_intel(path)
+    if identity.status == "ERR":
+        return registry_workspace
+    return _pkg["commands"]._identity_names(path, identity, registry_workspace)[0]
+
+
+def retire_project(path):
     """Stop watching a project and take it out of the registry. Deletes nothing.
 
     The watcher is stopped first, but a watcher that cannot be stopped — GrepAI
     down, qdrant down — does not block the retirement: `--remove` makes the same
-    call, for the same reason. What it does do is say so.
+    call, for the same reason. What it does do is say so. The registry, not
+    the caller, names the project; only the path comes from the request.
     """
     registry, retired, err = registry_paths()
     if err:
         return {"ok": False, "error": err}
-    prj, _, _ = load_pkg()
-    rows = dict((p, w) for w, p in prj.read_registry(registry))
+    prj = _pkg["project"]
+    with _registry_lock:
+        rows = dict((p, w) for w, p in prj.read_registry(registry))
     if path not in rows:
         return {"ok": False, "error": "%s is not in the registry" % path}
-    workspace = rows[path]                 # the registry, not the caller, names it
-    stopped = watcher_set(workspace, "stop")
-    prj.registry_add(retired, workspace, path)
-    prj.registry_delete(registry, path)
+    workspace = watcher_workspace(path, rows[path])
+    stopped = watcher_set(workspace, "stop")          # slow: outside the lock
+    with _registry_lock:
+        if path not in dict((p, w) for w, p in prj.read_registry(registry)):
+            return {"ok": False, "error": "%s left the registry meanwhile" % path}
+        prj.registry_add(retired, rows[path], path)
+        prj.registry_delete(registry, path)
     if stopped["ok"]:
         return {"ok": True,
                 "message": "%s retired — watcher stopped, nothing on disk was "
@@ -739,21 +861,37 @@ def retire_project(workspace, path):
 
 
 def restore_project(path):
-    """Put a retired row back in the registry. The watcher stays stopped."""
+    """Put a retired row back in the registry. The watcher is left as it is."""
     registry, retired, err = registry_paths()
     if err:
         return {"ok": False, "error": err}
-    prj, _, _ = load_pkg()
-    rows = dict((p, w) for w, p in prj.read_registry(retired))
-    if path not in rows:
-        return {"ok": False, "error": "%s is not in the retired list" % path}
-    workspace = rows[path]
-    if not os.path.isdir(path):
-        return {"ok": False, "error": "%s no longer exists" % path}
-    prj.registry_add(registry, workspace, path)
-    prj.registry_delete(retired, path)
-    return {"ok": True, "message": "%s is back — its watcher is still stopped, "
-                                   "start it when you need it" % workspace}
+    prj = _pkg["project"]
+    with _registry_lock:
+        rows = dict((p, w) for w, p in prj.read_registry(retired))
+        if path not in rows:
+            return {"ok": False, "error": "%s is not in the retired list" % path}
+        registry_workspace = rows[path]
+        if path in dict((p, w) for w, p in prj.read_registry(registry)):
+            # Re-applied from the command line meanwhile: the live row is the
+            # truth, the retired one is only stale.
+            prj.registry_delete(retired, path)
+            return {"ok": True, "message": "%s was already back in the registry"
+                                           % registry_workspace}
+        if not os.path.isdir(path):
+            return {"ok": False, "error": "%s no longer exists" % path}
+        prj.registry_add(registry, registry_workspace, path)
+        prj.registry_delete(retired, path)
+    workspace = watcher_workspace(path, registry_workspace)
+    if watcher_alive(workspace):
+        return {"ok": True, "message": "%s is back, and its watcher is running"
+                                       % workspace}
+    # Retiring is what stopped it, so it comes back paused — also when it was
+    # retired before pauses were written down.
+    failed = remember_pause(workspace, True)
+    return {"ok": True, "message": "%s is back — its watcher is still paused, "
+                                   "resume it when you need it%s"
+                                   % (workspace, " (the pause was not recorded: %s)"
+                                      % failed if failed else "")}
 
 
 # -------------------------------------------------------------- assemble ---
@@ -800,10 +938,13 @@ def build_report():
                        else "ollama is not installed"}
     )
 
+    paused = read_paused()
     for p in projects:
         entry = dict(p)
         path = p.get("path", "")
         ws = p.get("workspace", "")
+        entry["paused"] = not p.get("watcher") and pause_holds(ws, paused.get(ws))
+        entry["config_ok"] = config_ok(p, entry["paused"])
         entry["gitnexus"] = check_gitnexus(path) if p.get("exists") else {
             "ok": False, "error": "project directory is gone"}
         entry["watcher_log"] = check_watcher_log(ws) if p.get("watcher") else {
@@ -819,7 +960,7 @@ def build_report():
         entry["collection_stats"] = col or {"exists": False}
         rep["projects"].append(entry)
 
-    rep["retired"] = read_retired(status)
+    rep["retired"] = read_retired()
     rep["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
     return rep
 
@@ -1284,15 +1425,21 @@ function paneOverview(p, meta){
         nd=(data.status.tool||{}).node||{};
   let h = `<div class="cols">`;
   h += `<div class="cell"><h4>GrepAI</h4><dl class="kv">
-    ${row("watcher", p.watcher?"running":"STOPPED", cls(!!p.watcher))}
+    ${p.paused ? row("watcher", "paused") : row("watcher", p.watcher?"running":"STOPPED", cls(!!p.watcher))}
     ${row("vectors", col.exists?(col.points??0):"no collection", (col.exists&&!col.empty)?"ok":"bad")}
     ${row("collection", col.status||"—", col.status==="green"?"ok":"")}
     ${row("dimensions", col.dimensions||"—")}
-    ${row("probe query", se.ok?(se.results+" hits / "+se.ms+" ms"):"—", cls(se.ok))}
+    ${p.paused ? row("probe query", "paused")
+               : row("probe query", se.ok?(se.results+" hits / "+se.ms+" ms"):"—", cls(se.ok))}
   </dl>`;
   if(col.exists && col.empty)
     h += `<div class="err">The collection is empty — search returns nothing and it looks like a bad query.</div>`;
-  if(!p.watcher)
+  /* A pause from this page is not a failure, and `--refresh` — the fix for a
+     dead watcher — is exactly what would undo it. */
+  if(p.paused)
+    h += `<p class="hint">Indexing is paused from this dashboard. Search answers from the index as it
+          was when it stopped; nothing new is picked up until you resume.</p>`;
+  else if(!p.watcher)
     h += `<div class="err">The watcher is not running. Search keeps &ldquo;working&rdquo; while answering from stale data.</div>
           <div class="fix">Fix: <code>agent-code-intel --path ${esc(p.path)} --refresh</code></div>`;
   h += `</div>`;
@@ -1321,7 +1468,9 @@ function paneOverview(p, meta){
     ${row("ignore list", p.ignores_ok?"ok":"incomplete", cls(!!p.ignores_ok))}
   </dl>`;
   if(p.gob_leftover) h += `<div class="note">Leftover .grepai/index.gob — safe to delete.</div>`;
-  if(!p.ok) h += `<div class="fix">Fix: <code>agent-code-intel --path ${esc(p.path)} --agent claude --apply</code></div>`;
+  /* --agent overrides what the project recorded and rewrites it, so the fix
+     names exactly the agents this row was audited against. */
+  if(!p.config_ok) h += `<div class="fix">Fix: <code>agent-code-intel --path ${esc(p.path)}${p.agents?" --agent "+esc(p.agents):""} --apply</code></div>`;
   h += `</div></div>`;
   return h;
 }
@@ -1423,13 +1572,16 @@ function renderProjects(d){
   for(const p of d.projects){
     const ws = p.workspace, s = st(ws);
     const gn=p.gitnexus||{}, se=p.search||{}, col=p.collection_stats||{};
-    const allOk = p.ok && gn.ok && se.ok && !col.empty;
+    /* paused: everything else healthy, just deliberately not indexing — grey */
+    const healthy = p.config_ok && gn.ok && !col.empty;
+    const dot = healthy && se.ok ? "ok" : (healthy && p.paused ? "idle" : "bad");
+    const watch = p.watcher ? ["ok","running"] : (p.paused ? ["idle","paused"] : ["bad","stopped"]);
     h += `<div class="proj">
       <div class="head">
-        <span class="dot ${allOk?"ok":"bad"}"></span>
+        <span class="dot ${dot}"></span>
         <strong>${esc(ws)}</strong>
-        <span class="chip ${p.ok?"ok":"bad"}">config ${p.ok?"ok":"drift"}</span>
-        <span class="chip ${p.watcher?"ok":"bad"}">watcher ${p.watcher?"running":"stopped"}</span>
+        <span class="chip ${p.config_ok?"ok":"bad"}">config ${p.config_ok?"ok":"drift"}</span>
+        <span class="chip ${watch[0]}">watcher ${watch[1]}</span>
         <span class="p">${esc(p.path)}</span>
       </div>
       ${actionBar(p)}
@@ -1593,9 +1745,8 @@ async function ensureTabData(ws){
   const s = st(ws);
   const p = (data.projects||[]).find(x => x.workspace === ws) || {};
   if(s.tab === "index" && !s.files){
-    const url = ((data.status.svc||{}).qdrant||{}).http_url || "";
     try{ s.files = await (await fetch(
-      `/api/files?ws=${encodeURIComponent(ws)}&url=${encodeURIComponent(url)}`)).json(); }
+      `/api/files?ws=${encodeURIComponent(ws)}`)).json(); }
     catch(e){ s.files = {ok:false, error:String(e)}; }
     render(data);
   }
@@ -1675,11 +1826,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
     #
     # A curl on this machine still works, which is the point: the gate is
     # against a foreign page, not against the person sitting here.
+    #
+    # Reads get the Host half. A page rebound to 127.0.0.1 is same-origin to
+    # the browser, so without it that page could read the report, run searches
+    # and read back the code they return.
 
-    def _guard(self):
+    def _host_refused(self):
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]")
         if host not in ("127.0.0.1", "localhost", "::1"):
             return "unexpected Host header: %s" % (host or "(none)")
+        return None
+
+    def _guard(self):
+        refused = self._host_refused()
+        if refused:
+            return refused
         origin = self.headers.get("Origin")
         if origin:
             where = urllib.parse.urlparse(origin).hostname or ""
@@ -1709,6 +1870,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                        "application/json; charset=utf-8")
             return
 
+        try:
+            self._write()
+        except Exception as e:                               # noqa: BLE001
+            # A failed write still answers, so the page shows why instead of
+            # a bare "Failed to fetch".
+            self._json({"ok": False, "error": "the action failed: %s" % e})
+
+    def _write(self):
         path = urllib.parse.urlparse(self.path).path
         body = self._body()
         ws = str(body.get("ws") or "")
@@ -1727,7 +1896,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._json({"ok": False, "error": "project path missing"})
                 return
             if action == "retire":
-                self._json(retire_project(ws, where))
+                self._json(retire_project(where))
             elif action == "restore":
                 self._json(restore_project(where))
             else:
@@ -1739,12 +1908,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
                        "application/json; charset=utf-8")
 
     def do_GET(self):                                        # noqa: N802
+        refused = self._host_refused()
+        if refused:
+            self._send(403, refused, "text/plain; charset=utf-8")
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         q = urllib.parse.parse_qs(parsed.query)
 
         def arg(name, default=""):
             return (q.get(name) or [default])[0]
+
+        # A workspace names a log file and a collection; nothing else passes.
+        if path in ("/api/search", "/api/files", "/api/log") and arg("ws") \
+                and not WS_OK.match(arg("ws")):
+            self._json({"ok": False, "error": "workspace name malformed",
+                        "hits": [], "lines": []})
+            return
 
         if path == "/":
             self._send(200, PAGE.replace("__STALE__", str(STALE_AFTER_S)),
@@ -1769,9 +1949,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(grepai_query(ws, query, limit))
 
         elif path == "/api/files":
-            ws, url = arg("ws"), arg("url")
+            # qdrant is wherever agent-code-intel last said it is — never a URL
+            # from the request, which would let a request aim this server's
+            # POST anywhere.
+            ws = arg("ws")
+            url = (((_last_status["doc"] or {}).get("svc") or {})
+                   .get("qdrant") or {}).get("http_url", "")
             if not ws or not url:
-                self._json({"ok": False, "error": "workspace missing"})
+                self._json({"ok": False,
+                            "error": "workspace missing" if not ws
+                                     else "no qdrant URL yet — reload the page"})
                 return
             self._json(collection_files(url, "workspace_" + ws))
 
@@ -1793,6 +1980,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass                                                 # keep the terminal usable
 
 
+def report_is_bad(rep):
+    """What `--once` exits 2 on. A pause from the page is not a failure."""
+    bad = bool(rep.get("status_error"))
+    for c in rep.get("components", {}).values():
+        bad = bad or not c.get("ok")
+    for p in rep.get("projects", []):
+        bad = bad or not p.get("config_ok") or not (p.get("gitnexus") or {}).get("ok")
+    return bad
+
+
 def main():
     ap = argparse.ArgumentParser(
         prog="code-intel-dash",
@@ -1811,12 +2008,7 @@ def main():
         sys.stdout.write("\n")
         # Exit non-zero when something is actually wrong, so this is usable
         # from cron or a shell prompt without parsing the document.
-        bad = bool(rep.get("status_error"))
-        for c in rep.get("components", {}).values():
-            bad = bad or not c.get("ok")
-        for p in rep.get("projects", []):
-            bad = bad or not p.get("ok") or not (p.get("gitnexus") or {}).get("ok")
-        return 2 if bad else 0
+        return 2 if report_is_bad(rep) else 0
 
     if not find_script():
         print("agent-code-intel not found on PATH or beside this script.",

@@ -596,12 +596,12 @@ test_install_manages_dashboard_when_present() {
   run_install "$home"
   assert_status 0 || return
   local dash="$home/.local/bin/code-intel-dash"
-  if [[ "$OUT" == *"code-intel-dash 1.4.0"* ]]; then
-    assert_contains "installed -> $dash (code-intel-dash 1.4.0)" || return
+  if [[ "$OUT" == *"code-intel-dash 1.5.0"* ]]; then
+    assert_contains "installed -> $dash (code-intel-dash 1.5.0)" || return
     [[ -x "$dash" ]] || { fail "dashboard není spustitelný"; return; }
     local version
     version="$(env -i HOME="$home" PATH="$BARE_PATH" "$dash" --version 2>&1)"
-    [[ "$version" == "code-intel-dash 1.4.0" ]] \
+    [[ "$version" == "code-intel-dash 1.5.0" ]] \
       || { fail "dashboard má neočekávanou verzi: $version"; return; }
   else
     assert_contains "code-intel-dash also needs reinstalling" || return
@@ -614,7 +614,7 @@ test_install_installs_dashboard_when_absent() {
   assert_status 0 || return
   local dash="$home/.local/bin/code-intel-dash"
   if [[ -e "$dash" ]]; then
-    assert_contains "installed -> $dash (code-intel-dash 1.4.0)" || return
+    assert_contains "installed -> $dash (code-intel-dash 1.5.0)" || return
   else
     assert_not_contains "code-intel-dash" || return
   fi

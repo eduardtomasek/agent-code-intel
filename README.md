@@ -1057,7 +1057,9 @@ souhrn: `all ok`, nebo kolik komponent potřebuje pozornost.
 | Node.js     | verze proti minimu 24.11.0, `registerHooks`, a jestli se gitnexus spustí    |
 | MCP servers | jestli běžící `gitnexus mcp` není starší než index — viz níže               |
 
-Dole každý **projekt** ve čtyřech záložkách. Rozhraní dashboardu je anglicky:
+Dole každý **projekt** — pod jeho názvem dvě tlačítka (viz
+[Pozastavení a vyřazení projektu](#pozastavení-a-vyřazení-projektu)) a pod
+nimi čtyři záložky. Rozhraní dashboardu je anglicky:
 
 - **Overview** — hlídač, počet vektorů, velikost grafu, stáří indexu,
   konfigurace. Když něco nesedí, je pod tím rovnou příkaz, který to spraví.
@@ -1096,6 +1098,40 @@ MCP server`. Na disku není nic rozbité — jen je čtenář starší než soub
   Spraví to restart klienta a dashboard ti řekne, kterého.
 
 Když je něco špatně, napíše rovnou příkaz, kterým se to spraví.
+
+### Pozastavení a vyřazení projektu
+
+Na projektu, na kterém už nepracuješ, watcher dál hlídá soubory a index dál
+spotřebovává CPU i místo. Každý projekt má proto dvě tlačítka; spolu s
+**Bring back** a **Stop watcher** u vyřazených projektů jsou to jediné věci na
+stránce, které něco mění:
+
+- **Pause indexing** zastaví GrepAI watcher toho projektu, **Resume indexing**
+  ho zase spustí. Index zůstává, jak byl; hledání odpovídá z něj, jen do něj
+  nepřibývá nic nového. Pozastavený projekt je **šedý** se štítkem
+  `watcher paused` — není to chyba, a `code-intel-dash --once` kvůli němu
+  nevrací 2. Pozastavení platí, dokud watcher znovu
+  nespustí něco jiného: `agent-code-intel --refresh` (ten agent spouští po
+  každé změně kódu) nebo `--apply` ho rozběhnou a projekt je zase normálně
+  zelený. Když by potom watcher spadl, dashboard to ukáže červeně jako
+  každou jinou chybu.
+- **Remove from code-intel…** se nejdřív zeptá, pak zastaví watcher a vyřadí
+  projekt z registru, takže zmizí z dashboardu i z
+  `agent-code-intel --status --all`. **Nic se nemaže**: `.grepai/`,
+  `.gitnexus/`, kolekce v qdrantu, routing skilly i blok v `CLAUDE.md`
+  zůstávají. Vyřazený projekt najdeš dole v sekci *Removed from code-intel*;
+  **Bring back** ho vrátí do registru bez reindexu a s watcherem dál
+  pozastaveným.
+
+Tohle není `agent-code-intel --remove`. Ten projekt odpojí úplně a index
+smaže — správná volba, když už projekt code-intel používat nemá, špatná,
+když jen skončil vývoj a může se k němu vrátit.
+
+Dashboard si pamatuje dvě věci, obě vedle konfigurace
+(`~/.config/code-intel/`): `dash-retired` se seznamem vyřazených projektů
+a `dash-paused.json` s tím, které watchery zastavil on. Zapisovat jde jen
+z vlastní stránky dashboardu; cizí web v prohlížeči to nedokáže, i když
+server běží bez hesla.
 
 ### Stáří údajů
 
