@@ -577,9 +577,11 @@ class JsonDocument(unittest.TestCase):
             "workspace", "path", "name", "agents", "agents_recorded", "exists",
             "workspace_exists", "mapped",
             "mapped_path", "embedder", "chunking_ok", "ignores_ok", "watcher",
-            "routing_skills", "session_start_hook", "gob_leftover", "collection", "ok",
+            "routing_skills", "session_start_hook", "gob_leftover", "collection",
+            "drift", "ok",
         ])
         self.assertIs(entry["ok"], True)
+        self.assertEqual(entry["drift"], [])
         self.assertIs(entry["gob_leftover"], False)
         self.assertIs(entry["chunking_ok"], True)
         self.assertEqual(
@@ -676,10 +678,12 @@ class JsonDocument(unittest.TestCase):
                 "code_intel_error",
                 "routing_skills",
                 "session_start_hook",
+                "drift",
                 "ok",
             ],
         )
         self.assertIs(entry["ok"], False)
+        self.assertEqual(entry["drift"], ["code_intel"])
         self.assertEqual(set(entry["routing_skills"]), {"claude", "codex"})
         self.assertIn("unknown key 'BOGUS'", entry["code_intel_error"])
 
@@ -700,10 +704,12 @@ class JsonDocument(unittest.TestCase):
                 "exists",
                 "routing_skills",
                 "session_start_hook",
+                "drift",
                 "ok",
             ],
         )
         self.assertIs(entry["exists"], False)
+        self.assertEqual(entry["drift"], ["exists"])
         self.assertEqual(
             entry["routing_skills"]["codex"]["agent-code-intel-routing"]["state"],
             "missing",
@@ -780,6 +786,46 @@ class GrepaiConfigProbes(unittest.TestCase):
     def test_ignores_no_block(self):
         path = self._cfg("chunking:\n  size: 1\n  overlap: 1\n")
         self.assertFalse(project.grepai_config_ignores_ok(path, ("a",)))
+
+
+class DriftNames(unittest.TestCase):
+    """``drift`` names every check that failed, and ``ok`` is exactly an empty
+    list. The dashboard reads it to tell a watcher it paused on purpose from
+    any other drift, without re-deriving the rest of the verdict."""
+
+    def _entry(self, *, watch="running", mapped_to=None, size="256"):
+        root = _mkrepo("widget")
+        _code_intel(root, "widget", agents="claude")
+        _grepai_config(root, size=size)
+        agent_skills.install_targets(root, "claude", False)
+        reg = os.path.join(tempfile.mkdtemp(prefix="aci-reg-"), "projects")
+        with open(reg, "w") as handle:
+            handle.write("widget\t%s\n" % root)
+        _, out, _ = _run(
+            as_json=True,
+            status_all=True,
+            context=_context(root),
+            registry=reg,
+            stack=_Stack(
+                ws_exists=True,
+                show="  - widget: %s\n  model nomic-embed-text-v2-moe\n" % (mapped_to or root),
+                watch=watch,
+            ),
+        )
+        return json.loads(out)["projects"][0]
+
+    def test_a_healthy_project_has_no_drift(self):
+        entry = self._entry()
+        self.assertEqual((entry["ok"], entry["drift"]), (True, []))
+
+    def test_a_stopped_watcher_is_named_alone(self):
+        entry = self._entry(watch="")
+        self.assertEqual((entry["ok"], entry["drift"]), (False, ["watcher"]))
+
+    def test_every_failed_check_is_named_in_order(self):
+        entry = self._entry(watch="", mapped_to="/elsewhere", size="512")
+        self.assertEqual(entry["drift"], ["mapping", "chunking", "watcher"])
+        self.assertIs(entry["ok"], False)
 
 
 class PerProjectAgents(unittest.TestCase):

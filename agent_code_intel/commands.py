@@ -1862,6 +1862,7 @@ def _json_projects(
             entry["code_intel_error"] = identity.message
             entry["routing_skills"] = agent_skills.status(root, agent_target)
             entry["session_start_hook"] = hooks.status(root, agent_target)
+            entry["drift"] = ["code_intel"]
             entry["ok"] = False
             projects.append(entry)
             continue
@@ -1870,7 +1871,11 @@ def _json_projects(
 
         grepai_cfg = os.path.join(root, ".grepai", "config.yaml")
         refresh_script = os.path.join(root, "refresh-intel.sh")
-        bad = False
+        # Which checks failed, by name. `ok` is exactly "none did", so a
+        # reader that needs the verdict minus one check (the dashboard, for a
+        # watcher it paused on purpose) asks this list instead of re-deriving
+        # the rest of it.
+        drift: list[str] = []
 
         entry["workspace"] = workspace
         entry["path"] = root
@@ -1882,6 +1887,7 @@ def _json_projects(
             entry["exists"] = False
             entry["routing_skills"] = agent_skills.status(root, agent_target)
             entry["session_start_hook"] = hooks.status(root, agent_target)
+            entry["drift"] = ["exists"]
             entry["ok"] = False
             projects.append(entry)
             continue
@@ -1893,19 +1899,19 @@ def _json_projects(
             entry["workspace_exists"] = True
         else:
             entry["workspace_exists"] = False
-            bad = True
+            drift.append("workspace")
 
         mapped = integrations.mapped_path(show, proj_name)
         maps_here = bool(mapped) and project.canon(mapped) == root
         entry["mapped"] = maps_here
         if not maps_here:
-            bad = True
+            drift.append("mapping")
         entry["mapped_path"] = mapped
 
         state = integrations.model_state(show, config.embed_model)
         entry["embedder"] = state
         if state == "mismatch":
-            bad = True
+            drift.append("embedder")
 
         if project.grepai_config_chunking_ok(
             grepai_cfg, config.chunk_size, config.chunk_overlap
@@ -1913,24 +1919,24 @@ def _json_projects(
             entry["chunking_ok"] = True
         else:
             entry["chunking_ok"] = False
-            bad = True
+            drift.append("chunking")
 
         if project.grepai_config_ignores_ok(grepai_cfg, config.extra_ignores):
             entry["ignores_ok"] = True
         else:
             entry["ignores_ok"] = False
-            bad = True
+            drift.append("ignores")
 
         if integrations.watcher_running(stack.watch_status(workspace)):
             entry["watcher"] = True
         else:
             entry["watcher"] = False
-            bad = True
+            drift.append("watcher")
 
         if identity.status == "ABSENT" and project.legacy_refresh_is_pristine(
             refresh_script
         ):
-            bad = True
+            drift.append("legacy_refresh_script")
 
         routing_skills = agent_skills.status(root, agent_target)
         entry["routing_skills"] = routing_skills
@@ -1939,18 +1945,19 @@ def _json_projects(
             for skills in routing_skills.values()
             for details in skills.values()
         ):
-            bad = True
+            drift.append("routing_skills")
 
         hook_status = hooks.status(root, agent_target)
         entry["session_start_hook"] = hook_status
         if not bool(hook_status["ok"]):
-            bad = True
+            drift.append("session_start_hook")
 
         entry["gob_leftover"] = os.path.isfile(
             os.path.join(root, ".grepai", "index.gob")
         )
         entry["collection"] = "workspace_%s" % workspace
-        entry["ok"] = not bad
+        entry["drift"] = drift
+        entry["ok"] = not drift
         projects.append(entry)
 
     return projects
