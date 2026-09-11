@@ -33,6 +33,13 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
   pozornost, má i podbarvené pozadí. Nadpis Stack nese souhrn `all ok`, nebo
   `N of 5 need attention` — MCP bez běžícího serveru se nepočítá, protože je to
   běžný stav. Data, verdikty ani texty varování se nemění. (#108)
+- `code-intel-dash` má verzi **1.3.0**. `--install` přepisuje dashboard jen
+  tehdy, když se jeho verze liší od nainstalované, takže bez zvednutí by stroj
+  s 1.1.0 nový vzhled Stacku z #108 nikdy nedostal — instalace by hlásila
+  `code-intel-dash 1.1.0 already installed` a nechala starou kopii. Verze 1.2.0
+  se přeskakuje: nese ji build z forku (pozastavení a odebrání projektu), který
+  v tomto repozitáři není, a dva různé dashboardy se stejným číslem by
+  instalátor nerozlišil.
 
 ## [6.0.0] - 2026-09-10
 
