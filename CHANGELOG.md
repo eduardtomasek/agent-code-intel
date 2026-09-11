@@ -24,6 +24,15 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
   `--status --json` vrací nulu i při rozpadu, protože stav se čte z klíče `ok`.
 - README uvádí minimum 24.11.0 v přehledu součástí, v seznamu požadavků, v tabulce
   tří úrovní závislostí, v kapitole 7 a v popisu dashboardu.
+- `code-intel-dash` ukazuje sekci Stack jako pět řádků pod sebou místo mřížky
+  karet. Karty se lámaly podle šířky okna, takže MCP servery na běžném monitoru
+  padaly samy na další řádek a stejné údaje byly u každé komponenty jinde —
+  kdo hledal, co je špatně, musel číst kartu po kartě. Teď má každá komponenta
+  vlevo stav a název, vpravo hodnoty v pěti sloupcích, které lícují napříč
+  všemi řádky, a varování s opravou přímo pod nimi; řádek, který potřebuje
+  pozornost, má i podbarvené pozadí. Nadpis Stack nese souhrn `all ok`, nebo
+  `N of 5 need attention` — MCP bez běžícího serveru se nepočítá, protože je to
+  běžný stav. Data, verdikty ani texty varování se nemění.
 
 ## [6.0.0] - 2026-09-10
 

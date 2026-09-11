@@ -1044,9 +1044,12 @@ Proto potřebuje `agent-code-intel` na PATH; bez něj rovnou řekne, že neví n
 
 ### Co na něm uvidíš
 
-Nahoře **stack**, tedy věci společné všem projektům:
+Nahoře **stack**, tedy věci společné všem projektům — jeden řádek na komponentu.
+Vlevo je stav a název, vpravo hodnoty ve sloupcích, které lícují napříč všemi
+řádky, a když něco nesedí, je pod nimi varování a oprava. Vedle nadpisu je
+souhrn: `all ok`, nebo kolik komponent potřebuje pozornost.
 
-| Karta       | Co ověřuje                                                                  |
+| Řádek       | Co ověřuje                                                                  |
 | ----------- | --------------------------------------------------------------------------- |
 | docker      | běží daemon, běží kontejner, publikuje **oba** porty 6333 i 6334            |
 | qdrant      | HTTP odpovídá, gRPC port je otevřený, kolik má kolekcí, jak rychle odpovídá |
