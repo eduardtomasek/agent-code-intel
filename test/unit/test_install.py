@@ -375,7 +375,7 @@ class Run(Base):
             + "installed -> %s\n" % os.path.join(self.bin, "agent-code-intel")
             + "WARNING: ~/.local/bin is not on PATH. Add to your shell rc:\n"
             + '  export PATH="$HOME/.local/bin:$PATH"\n'
-            + "installed -> %s (code-intel-dash 1.3.0)\n"
+            + "installed -> %s (code-intel-dash 1.5.0)\n"
             % os.path.join(self.bin, "code-intel-dash")
             + "wrote %s\n" % toml_path
             + "claude: allowed Bash(agent-code-intel --refresh) in %s\n" % settings
@@ -395,7 +395,7 @@ class Run(Base):
             text=True,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout, "code-intel-dash 1.3.0\n")
+        self.assertEqual(proc.stdout, "code-intel-dash 1.5.0\n")
 
     def test_matching_dashboard_version_is_not_rewritten(self):
         self.do_run()
@@ -403,7 +403,7 @@ class Run(Base):
         before = os.stat(dashboard).st_mtime_ns
         _, out, _ = self.do_run()
         self.assertEqual(os.stat(dashboard).st_mtime_ns, before)
-        self.assertIn("code-intel-dash 1.3.0 already installed at", out)
+        self.assertIn("code-intel-dash 1.5.0 already installed at", out)
 
     def test_matching_non_executable_dashboard_is_repaired(self):
         self.do_run()
@@ -411,7 +411,7 @@ class Run(Base):
         os.chmod(dashboard, stat.S_IRUSR | stat.S_IWUSR)
         _, out, _ = self.do_run()
         self.assertTrue(os.stat(dashboard).st_mode & stat.S_IXUSR)
-        self.assertIn("installed -> %s (code-intel-dash 1.3.0)" % dashboard, out)
+        self.assertIn("installed -> %s (code-intel-dash 1.5.0)" % dashboard, out)
 
     def test_installed_command_runs_standalone_from_an_unrelated_cwd(self):
         # issue #52 AC3 / INST-11 — the installed launcher works with no
@@ -481,9 +481,9 @@ class Run(Base):
                 capture_output=True,
                 text=True,
             ).stdout,
-            "code-intel-dash 1.3.0\n",
+            "code-intel-dash 1.5.0\n",
         )
-        self.assertIn("installed -> %s (code-intel-dash 1.3.0)" % dashboard, out)
+        self.assertIn("installed -> %s (code-intel-dash 1.5.0)" % dashboard, out)
 
     def test_from_installed_copy_says_already_installed_at_the_bin_path(self):
         # issue #39 decision 14 / issue #40 decision 12 — `already installed at
