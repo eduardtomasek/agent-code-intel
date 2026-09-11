@@ -32,7 +32,7 @@ Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování
   všemi řádky, a varování s opravou přímo pod nimi; řádek, který potřebuje
   pozornost, má i podbarvené pozadí. Nadpis Stack nese souhrn `all ok`, nebo
   `N of 5 need attention` — MCP bez běžícího serveru se nepočítá, protože je to
-  běžný stav. Data, verdikty ani texty varování se nemění.
+  běžný stav. Data, verdikty ani texty varování se nemění. (#108)
 
 ## [6.0.0] - 2026-09-10
 
