@@ -1,56 +1,57 @@
 <p align="center">
-  <img src="hero.jpg" alt="agent-code-intel — analýza a code intelligence pro AI agenty" width="100%">
+  <img src="hero.jpg" alt="agent-code-intel — analysis and code intelligence for AI agents" width="100%">
 </p>
 
-# Code intelligence pro AI agenty
+# Code intelligence for AI agents
 
-Tato dokumentace popisuje instalaci celého stacku na Macu. Předpokládá pouze
-základní práci s aplikacemi; všechny potřebné kroky jsou vysvětlené.
+This documentation describes installing the whole stack on a Mac. It assumes
+only basic familiarity with applications; every required step is explained.
 
-Text odpovídá vydání 6.1.0.
+The text matches release 6.1.0.
 
-Po dokončení se nové projekty nastavují takto:
+Once you are done, new projects are set up like this:
 
 ```
-mkdir ~/projects/muj-projekt
-cd ~/projects/muj-projekt
+mkdir ~/projects/my-project
+cd ~/projects/my-project
 agent-code-intel --agent claude --apply
 ```
 
-AI kódovací agent pak umí hledat v kódu podle významu, ne pouze podle
-klíčových slov, a vyhodnotit dopad změn.
+Your AI coding agent can then search the code by meaning, not only by
+keywords, and assess the impact of changes.
 
-> `--agent claude` tam nechybí náhodou. Bez něj skript vyžaduje i Codex a
-> odmítne se spustit, pokud Codex není nainstalovaný. Při použití obou agentů
-> lze přepínač vynechat.
+> `--agent claude` is not there by accident. Without it the script also
+> requires Codex and refuses to run if Codex is not installed. If you use both
+> agents, you can omit the flag.
 >
-> Stačí ho ale napsat jednou: `--apply` volbu zapíše do `.code-intel` projektu
-> jako `AGENTS=claude` a `--status`, `--refresh` i `--remove` z ní pak vycházejí
-> samy. Viz [Které agenty projekt používá](#které-agenty-projekt-používá).
+> You only have to write it once: `--apply` records the choice in the project's
+> `.code-intel` file as `AGENTS=claude`, and `--status`, `--refresh` and
+> `--remove` then read it on their own. See
+> [Which agents the project uses](#which-agents-the-project-uses).
 
 ---
 
-## Rychlý start
+## Quick start
 
-Toto je nejkratší postup pro nový Mac. Příkazy spouštějte **po jednom** a na
-další přejděte až po návratu řádku s `%`. Pokud Homebrew po instalaci vypíše
-další příkazy pro nastavení PATH, nejdříve spusťte právě tyto pokyny.
+This is the shortest path on a new Mac. Run the commands **one at a time** and
+move on only after the line with `%` comes back. If Homebrew prints extra
+commands for setting up PATH after installation, run those instructions first.
 
-Nejdříve ověřte Git:
+First verify Git:
 
 ```
 git --version
 ```
 
-Pokud příkaz selže, macOS nabídne instalaci vývojářských nástrojů. Dokončete
-ji a Git zkontrolujte znovu:
+If the command fails, macOS offers to install the developer tools. Finish that
+and check Git again:
 
 ```
 xcode-select --install
 git --version
 ```
 
-Pak nainstaluj Homebrew, Python, kontejnery, lokální embeddingy a Node.js:
+Then install Homebrew, Python, containers, local embeddings and Node.js:
 
 ```
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -63,409 +64,418 @@ brew services start ollama
 brew install node
 ```
 
-`gitnexus` není Homebrew balíček a `grepai` se instaluje vlastním instalačním
-příkazem. Obě věci a nástroje pro `code-context` nabídne nebo vypíše
-`--install-deps` níže. Po prvním otevření OrbStacku vyčkej, až dokončí
-nastavení, a ověř ho:
+`gitnexus` is not a Homebrew package and `grepai` installs with its own install
+command. Both of them, and the tools for `code-context`, are offered or printed
+by `--install-deps` below. After you open OrbStack for the first time, wait for
+it to finish setting up, then verify it:
 
 ```
 docker info
 ```
 
-Nakonec stáhni tento projekt, nainstaluj jeho lokální kopii a zapni inteligenci
-v prvním projektu:
+Finally, download this project, install its local copy and turn intelligence on
+in your first project:
 
 ```
 git clone https://github.com/eduardtomasek/agent-code-intel.git ~/src/agent-code-intel
 cd ~/src/agent-code-intel
 python3 ./agent-code-intel --install
 agent-code-intel --install-deps
-mkdir -p ~/projects/muj-projekt
-cd ~/projects/muj-projekt
+mkdir -p ~/projects/my-project
+cd ~/projects/my-project
 agent-code-intel --agent both --apply
 ```
 
-Místo posledního příkazu použij `--agent claude`, pokud má projekt obsluhovat
-jen Claude, nebo `--agent codex`, pokud jen Codex. `both` nastaví oba.
+Use `--agent claude` instead of the last command if only Claude should serve
+the project, or `--agent codex` if only Codex. `both` sets up both.
 
-## Aktualizace na 6.1.0
+## Updating to 6.1.0
 
-Aktualizace vždy začíná checkoutem, ze kterého jsi nástroj instaloval. Stáhni
-nový zdroj, znovu nainstaluj **lokální soubor** a pak v každém projektu obnov
-spravované artefakty:
+An update always starts from the checkout you installed the tool from. Pull the
+new source, reinstall the **local file**, and then refresh the managed
+artifacts in every project:
 
 ```
 cd ~/src/agent-code-intel
 git pull --ff-only
 python3 ./agent-code-intel --install
 agent-code-intel --install-deps
-cd /cesta/k/projektu
+cd /path/to/project
 agent-code-intel --agent both --apply
 ```
 
-Používáš-li jen jeden agent, poslední řádek nahraď jednou z variant:
+If you use only one agent, replace the last line with one of these:
 
 ```
 agent-code-intel --agent claude --apply
 agent-code-intel --agent codex --apply
 ```
 
-`--install` bezpečně aktualizuje vlastní instalovanou kopii a zachová tvoji
-konfiguraci. `--apply` je idempotentní: identický routing skill nechá beze
-změny a jinak aktualizuje pouze artefakty vybraného agenta.
+`--install` safely updates its own installed copy and keeps your
+configuration. `--apply` is idempotent: it leaves an identical routing skill
+untouched and otherwise updates only the artifacts of the selected agent.
 
-### Co se v šestce mění nekompatibilně
+### What changes incompatibly in version 6
 
-`--apply` zapisuje `.code-intel` ve **schématu 2**, které navíc obsahuje klíč
-`AGENTS` — viz [Které agenty projekt používá](#které-agenty-projekt-používá).
+`--apply` writes `.code-intel` in **schema 2**, which additionally contains the
+`AGENTS` key — see [Which agents the project uses](#which-agents-the-project-uses).
 
-- **Projekty ze starších verzí fungují dál.** Jejich `SCHEMA=1` se čte
-  a `--status` u nich přidá řádek `.code-intel predates AGENTS`, který **není
-  drift**. Spuštění `--apply` není povinné; je to jen způsob, jak volbu
-  zaznamenat.
-- **Opačný směr nefunguje.** Jakmile projekt projde `--apply` ze šestky, starší
-  verze nástroje jeho `.code-intel` odmítne s hláškou `unsupported SCHEMA=2`.
-  Po downgradu je proto potřeba spustit `--apply` z té starší verze, která
-  soubor přepíše zpět na schéma 1.
+- **Projects from older versions keep working.** Their `SCHEMA=1` is read and
+  `--status` adds a `.code-intel predates AGENTS` line for them, which is **not
+  drift**. Running `--apply` is not mandatory; it is only a way to record the
+  choice.
+- **The other direction does not work.** Once a project has gone through
+  `--apply` from version 6, an older version of the tool rejects its
+  `.code-intel` with `unsupported SCHEMA=2`. After a downgrade you therefore
+  have to run `--apply` from that older version, which rewrites the file back
+  to schema 1.
 
-Pokud na jednom stroji držíš vedle sebe dvě různé verze nástroje, aktualizuj
-je obě, nebo nespouštěj `--apply` ze šestky v projektech, které obsluhuje
-starší instalace.
+If you keep two different versions of the tool side by side on one machine,
+update both, or do not run `--apply` from version 6 in projects served by the
+older installation.
 
 ---
 
-## Obsah
+## Contents
 
-0. [Rychlý start](#rychlý-start)
-1. [Aktualizace na 6.1.0](#aktualizace-na-610)
-2. [Co to vlastně dělá](#1-co-to-vlastně-dělá)
-3. [Co budeš potřebovat](#2-co-budeš-potřebovat)
-4. [Terminál — základ](#3-terminál--základ)
+0. [Quick start](#quick-start)
+1. [Updating to 6.1.0](#updating-to-610)
+2. [What it actually does](#1-what-it-actually-does)
+3. [What you will need](#2-what-you-will-need)
+4. [The terminal — the basics](#3-the-terminal--the-basics)
 5. [Homebrew](#4-homebrew)
-6. [OrbStack — kontejnery](#5-orbstack--kontejnery)
+6. [OrbStack — containers](#5-orbstack--containers)
 7. [Ollama — embedding model](#6-ollama--embedding-model)
 8. [Node.js](#7-nodejs)
 9. [GrepAI](#8-grepai)
 10. [GitNexus](#9-gitnexus)
 11. [agent-code-intel](#10-agent-code-intel)
-    - [Referenční tabulka všech režimů a přepínačů](#referenční-tabulka-všech-režimů-a-přepínačů)
-12. [První projekt](#11-první-projekt)
-13. [Codex — tři brány pro aktivní hook](#codex--tři-brány-pro-aktivní-hook)
-14. [Ověření, že to funguje](#12-ověření-že-to-funguje)
-15. [Každodenní používání](#13-každodenní-používání)
-16. [Dashboard — přehled o všem najednou](#14-dashboard--přehled-o-všem-najednou)
-17. [Když se něco pokazí](#15-když-se-něco-pokazí)
-18. [Odinstalace](#16-odinstalace)
-19. [Slovníček](#17-slovníček)
+    - [Reference table of all modes and flags](#reference-table-of-all-modes-and-flags)
+12. [First project](#11-first-project)
+13. [Codex — three gates for an active hook](#codex--three-gates-for-an-active-hook)
+14. [Verifying that it works](#12-verifying-that-it-works)
+15. [Everyday use](#13-everyday-use)
+16. [Dashboard — everything at a glance](#14-dashboard--everything-at-a-glance)
+17. [When something goes wrong](#15-when-something-goes-wrong)
+18. [Uninstalling](#16-uninstalling)
+19. [Glossary](#17-glossary)
 
 ---
 
-## 1. Co to vlastně dělá
+## 1. What it actually does
 
-Když AI agent pracuje s tvým kódem, musí se v něm nejdřív zorientovat. Bez
-pomoci to dělá tak, že hledá textové řetězce — jako když v editoru zmáčkneš
-Cmd+F. To funguje, dokud víš, co přesně hledat. Jakmile chceš „najdi místo, kde
-se ověřuje heslo", a ta funkce se jmenuje `validateCreds`, textové hledání
-selže.
+When an AI agent works with your code, it first has to find its way around it.
+Without help it does that by searching for text strings — like pressing Cmd+F
+in an editor. That works as long as you know exactly what to look for. As soon
+as you want "find the place where the password is verified", and that function
+is called `validateCreds`, text search fails.
 
-Tenhle stack přidává dvě věci, které to řeší jinak.
+This stack adds two things that solve it differently.
 
-**GrepAI** čte tvůj kód a každý jeho kousek převede na sadu čísel, která
-zachycuje význam — takzvaný vektor. Když se pak zeptáš větou, převede se stejným
-způsobem i tvoje otázka a najdou se kousky kódu, jejichž čísla jsou nejblíž.
-Proto najde `validateCreds`, i když jsi slovo „validate" nenapsal. Tomuhle se
-říká sémantické vyhledávání.
+**GrepAI** reads your code and turns every piece of it into a set of numbers
+that captures meaning — a so-called vector. When you then ask in a sentence,
+your question is converted the same way and the pieces of code whose numbers
+are closest are found. That is why it finds `validateCreds` even though you
+never wrote the word "validate". This is called semantic search.
 
-**GitNexus** staví mapu vztahů: co odkud volá, co na čem závisí. Odpovídá na
-otázky typu „když změním tuhle funkci, co všechno se může rozbít". To je něco,
-co ze samotného textu nevyčteš.
+**GitNexus** builds a map of relationships: what calls what, what depends on
+what. It answers questions like "if I change this function, what can break".
+That is something you cannot read out of the text itself.
 
-Obojí běží **výhradně u tebe na počítači**. Žádný kód nikam neodchází.
+Both run **exclusively on your own computer**. No code leaves the machine.
 
-Jeden příkaz, `agent-code-intel`, tohle všechno pro nový projekt nastaví najednou
-a zároveň napíše tvému AI agentovi instrukce, kdy má co použít.
+A single command, `agent-code-intel`, sets all of this up for a new project at
+once and at the same time writes instructions for your AI agent about when to
+use what.
 
-### Z čeho se to skládá
+### What it is made of
 
-| Součást              | Co dělá                             | Proč je potřeba                         |
-| -------------------- | ----------------------------------- | --------------------------------------- |
-| **Ollama**           | Převádí text na vektory             | Bez ní není z čeho hledat               |
-| **qdrant**           | Databáze vektorů, běží v kontejneru | Ukládá a prohledává, co ollama vyrobila |
-| **OrbStack**         | Spouští kontejnery                  | Hostitel pro qdrant                     |
-| **GrepAI**           | Sémantické vyhledávání              | Řídí indexování a hledání               |
-| **GitNexus**         | Mapa vztahů v kódu                  | Odpovídá na „co se rozbije"             |
-| **Node.js** 24.11+   | Běhové prostředí                    | GitNexus je v něm napsaný               |
-| **ripgrep (`rg`)**   | Přesné hledání a ověření            | Volitelný nástroj pro routing skill     |
-| **Homebrew**         | Správce balíčků                     | Instaluje většinu z výše uvedeného      |
-| **agent-code-intel** | Propojí to všechno                  | Aby to byl jeden příkaz, ne patnáct     |
+| Component            | What it does                            | Why it is needed                         |
+| -------------------- | --------------------------------------- | ---------------------------------------- |
+| **Ollama**           | Converts text into vectors              | Without it there is nothing to search    |
+| **qdrant**           | Vector database, runs in a container    | Stores and searches what ollama produced |
+| **OrbStack**         | Runs containers                         | The host for qdrant                      |
+| **GrepAI**           | Semantic search                         | Drives indexing and searching            |
+| **GitNexus**         | Map of relationships in the code        | Answers "what breaks"                    |
+| **Node.js** 24.11+   | Runtime                                 | GitNexus is written in it                |
+| **ripgrep (`rg`)**   | Exact search and verification           | Optional tool for the routing skill      |
+| **Homebrew**         | Package manager                         | Installs most of the above               |
+| **agent-code-intel** | Ties it all together                    | So it is one command, not fifteen        |
 
-Připrav si zhruba **20 minut** a **5 GB místa na disku**. Většina času je čekání
-na stahování.
+Set aside roughly **20 minutes** and **5 GB of disk space**. Most of the time is
+waiting for downloads.
 
 ---
 
-## 2. Co budeš potřebovat
+## 2. What you will need
 
-- Mac s macOS — návod je psaný pro Apple Silicon i Intel
-- Od verze 5.0.0 Python 3.11 nebo novější; po instalaci ověřte, že
-  `python3 --version` vypíše alespoň 3.11. Python 3.9 a starší skončí
-  srozumitelnou chybou bez tracebacku
-- Node.js 24.11.0 nebo novější — požadavek si určuje GitNexus; preflight nižší
-  verzi vypíše jako `warn`, viz [kapitola 7](#7-nodejs)
-- Připojení k internetu
-- Heslo ke svému účtu na Macu, jednou při instalaci Homebrew
-- Claude Code, VS Code nebo jiný agent, který umí MCP
+- A Mac running macOS — the guide is written for both Apple Silicon and Intel
+- Since version 5.0.0, Python 3.11 or newer; after installing, verify that
+  `python3 --version` prints at least 3.11. Python 3.9 and older ends with a
+  readable error and no traceback
+- Node.js 24.11.0 or newer — the requirement comes from GitNexus; preflight
+  reports a lower version as `warn`, see [chapter 7](#7-nodejs)
+- An internet connection
+- The password for your Mac account, once, during the Homebrew installation
+- Claude Code, VS Code or another agent that speaks MCP
 
-Nemusíš umět programovat. Nemusíš rozumět tomu, co jednotlivé příkazy dělají —
-u každého je napsané, co se stane a jak poznáš, že to vyšlo.
+You do not need to know how to program. You do not need to understand what the
+individual commands do — each one says what happens and how you can tell it
+worked.
 
-### Závislosti ve třech úrovních
+### Dependencies in three levels
 
-Od verze 5.0.0 nástroj rozlišuje mezi tím, co je nutné pro samotný produkt, co má
-spolehlivý náhradní postup a co rozšiřuje schopnosti agenta:
+Since version 5.0.0 the tool distinguishes between what is required for the
+product itself, what has a reliable fallback, and what extends the agent's
+capabilities:
 
-| Úroveň | Nástroje | Když chybí |
+| Level | Tools | When missing |
 | --- | --- | --- |
-| **Povinné** | `git`, `curl`, Python 3.11+, Node.js 24.11+, Docker/OrbStack, Ollama, `grepai`, `gitnexus` | preflight může práci zablokovat; `grepai` a `gitnexus` nejsou v Homebrew |
-| **Doporučené s fallbackem** | `rg`, `ctags` (`universal-ctags`) | preflight vypíše `warn`; pro hledání lze použít `grep` a pro rozsahy Pythonu stdlib `ast`, případně `ast-grep` |
-| **Silně doporučené** | `ast-grep`, `fd`, `rga`, `tokei`, `scc` | `warn`; agent přijde jen o strukturální dotazy, výběr podle vlastností, čtení archivů nebo přehled/složitost |
+| **Required** | `git`, `curl`, Python 3.11+, Node.js 24.11+, Docker/OrbStack, Ollama, `grepai`, `gitnexus` | preflight may block the work; `grepai` and `gitnexus` are not in Homebrew |
+| **Recommended with a fallback** | `rg`, `ctags` (`universal-ctags`) | preflight prints `warn`; you can use `grep` for searching and the Python stdlib `ast`, or `ast-grep`, for ranges |
+| **Strongly recommended** | `ast-grep`, `fd`, `rga`, `tokei`, `scc` | `warn`; the agent only loses structural queries, selection by file properties, reading archives, or overview/complexity |
 
-`--install-deps` kontroluje sedm nástrojů druhé a třetí úrovně plus
-`grepai` a `gitnexus`, tedy celkem devět: `rg`, `ctags`, `ast-grep`, `fd`,
-`rga`, `tokei`, `scc`, `grepai` a `gitnexus`. Na macOS nabídne `brew install` pro sedm
-balíčků dostupných v Homebrew; pro `grepai` vypíše vlastní instalační příkaz a
-pro `gitnexus` `npm i -g gitnexus`. Bez TTY pouze vypíše příkazy a nic
-neinstaluje.
+`--install-deps` checks seven tools from the second and third level plus
+`grepai` and `gitnexus`, nine in total: `rg`, `ctags`, `ast-grep`, `fd`,
+`rga`, `tokei`, `scc`, `grepai` and `gitnexus`. On macOS it offers
+`brew install` for the seven packages available in Homebrew; for `grepai` it
+prints its own install command and for `gitnexus` `npm i -g gitnexus`. Without
+a TTY it only prints the commands and installs nothing.
 
-Spusť ho po instalaci tohoto nástroje:
+Run it after installing this tool:
 
 ```
 agent-code-intel --install-deps
 ```
 
-Přepínač `--no-install-deps` potlačí nabídku a instalaci Homebrew, ale stále
-vypíše kontrolu, chybějící nástroje a příkazy, které můžeš spustit ručně:
+The `--no-install-deps` flag suppresses the Homebrew prompt and installation,
+but still prints the check, the missing tools and the commands you can run
+manually:
 
 ```
 agent-code-intel --install-deps --no-install-deps
 ```
 
-`rg` a `ctags` jsou důležité pro dokumentovaný postup, ale jejich absence není
-blokace. U nepythonového jazyka, kde `ctags` nevrací konce definic, však bez
-`ast-grep` zůstává jen méně spolehlivý ruční fallback; preflight navíc
-výslovně varuje, když chybí oba nástroje.
+`rg` and `ctags` matter for the documented workflow, but their absence is not a
+blocker. In a non-Python language where `ctags` does not return definition
+ends, however, without `ast-grep` only the less reliable manual fallback
+remains; preflight also warns explicitly when both tools are missing.
 
 ---
 
-## 3. Terminál — základ
+## 3. The terminal — the basics
 
-Terminál je aplikace, kde se počítači píšou příkazy místo klikání. Otevřeš ho
-takto: zmáčkni **Cmd + mezerník**, napiš `Terminál` a dej Enter.
+The terminal is the application where you type commands to the computer instead
+of clicking. You open it like this: press **Cmd + space**, type `Terminal` and
+press Enter.
 
-Objeví se okno s řádkem, který končí znakem `%`. Za něj se píše.
+A window appears with a line ending in `%`. You type after it.
 
-Tři věci, které ti ušetří trápení:
+Three things that save you trouble:
 
-**Příkazy kopíruj po jednom.** Zkopíruj řádek, vlož do terminálu, dej Enter,
-počkej, až se objeví nový řádek s `%`. Teprve pak další. Když vložíš víc řádků
-najednou a jeden z nich je rozdělený, terminál zahlásí chybu.
+**Copy commands one at a time.** Copy a line, paste it into the terminal, press
+Enter, wait for a new line with `%` to appear. Only then the next one. If you
+paste several lines at once and one of them is split, the terminal reports an
+error.
 
-**Když se nic neděje, čeká se.** Stahování a instalace trvají. Dokud se
-neobjeví nový řádek s `%`, příkaz běží. Nepřerušuj ho.
+**When nothing happens, you are waiting.** Downloads and installations take
+time. Until a new line with `%` appears, the command is running. Do not
+interrupt it.
 
-**Terminál nezavírej** dokud nebudeš hotový, ať se ti neztratí kontext.
+**Do not close the terminal** until you are done, so you do not lose context.
 
-Vyzkoušej si to. Napiš:
+Try it. Type:
 
 ```
-echo ahoj
+echo hello
 ```
 
-Musí to vypsat `ahoj`. Když ano, umíš vše potřebné.
+It has to print `hello`. If it does, you know everything you need.
 
 ---
 
 ## 4. Homebrew
 
-Homebrew je správce balíčků — jednou příkazem nainstaluje program, který bys
-jinak musel hledat a stahovat ručně. Většina dalších kroků ho používá.
+Homebrew is a package manager — one command installs a program you would
+otherwise have to find and download by hand. Most of the next steps use it.
 
-Nejdřív zjisti, jestli ho už nemáš:
+First find out whether you already have it:
 
 ```
 brew --version
 ```
 
-Když to vypíše číslo verze, přeskoč na krok 5. Když to řekne `command not
-found`, nainstaluj ho:
+If it prints a version number, skip to step 5. If it says `command not found`,
+install it:
 
 ```
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ```
 
-Instalátor se zeptá na heslo k tvému účtu. Při psaní hesla se **nic
-nezobrazuje** — ani hvězdičky. To je normální, piš a dej Enter.
+The installer asks for your account password. While you type the password
+**nothing is shown** — not even asterisks. That is normal, type it and press
+Enter.
 
-Na konci může Homebrew napsat něco jako „Run these commands in your terminal to
-add Homebrew to your PATH" a pod tím dva až tři příkazy. **Ty příkazy spusť** —
-jinak `brew` nebude fungovat. Zkopíruj je přesně tak, jak je vypsal.
+At the end Homebrew may print something like "Run these commands in your
+terminal to add Homebrew to your PATH" and two or three commands below it.
+**Run those commands** — otherwise `brew` will not work. Copy them exactly as
+printed.
 
-Kontrola:
+Check:
 
 ```
 brew --version
 ```
 
-Musí vypsat verzi. Pokud pořád `command not found`, zavři terminál, otevři nový
-a zkus znovu.
+It has to print a version. If it still says `command not found`, close the
+terminal, open a new one and try again.
 
 ---
 
-## 5. OrbStack — kontejnery
+## 5. OrbStack — containers
 
-Kontejner je izolované prostředí, ve kterém běží jeden program. Databáze
-qdrant, kterou stack potřebuje, běží právě takhle — nemusíš ji instalovat do
-systému, jen ji spustíš jako kontejner.
+A container is an isolated environment in which one program runs. The qdrant
+database that the stack needs runs exactly like that — you do not have to
+install it into the system, you just start it as a container.
 
-OrbStack je aplikace, která kontejnery na Macu spouští. Je rychlejší a šetrnější
-k baterii než Docker Desktop, ale pokud už Docker Desktop máš, tenhle krok
-přeskoč.
+OrbStack is the application that runs containers on a Mac. It is faster and
+easier on the battery than Docker Desktop, but if you already have Docker
+Desktop, skip this step.
 
 ```
 brew install --cask orbstack
 ```
 
-Stahuje se zhruba 100 MB. Po instalaci OrbStack **spusť** — Cmd + mezerník,
-napiš `OrbStack`, Enter. Při prvním spuštění se tě zeptá na pár věcí, výchozí
-volby stačí.
+The download is roughly 100 MB. After installing, **start** OrbStack — Cmd +
+space, type `OrbStack`, Enter. On first launch it asks you a few things, the
+defaults are enough.
 
-V nastavení OrbStacku si zapni spouštění po přihlášení. Ušetří ti to
-každodenní „proč to nefunguje" — bez běžícího OrbStacku totiž nemá qdrant kde
-běžet.
+In OrbStack settings, enable starting at login. It saves you the daily "why
+does this not work" — without a running OrbStack, qdrant has nowhere to run.
 
-Kontrola:
+Check:
 
 ```
-docker info > /dev/null 2>&1 && echo "funguje" || echo "OrbStack nebezi"
+docker info > /dev/null 2>&1 && echo "works" || echo "OrbStack not running"
 ```
 
-Musí to říct `funguje`. Když ne, počkej pár vteřin, až se OrbStack rozběhne, a
-zkus znovu.
+It has to say `works`. If not, wait a few seconds for OrbStack to start and try
+again.
 
 ---
 
 ## 6. Ollama — embedding model
 
-Ollama je program, který na tvém počítači spouští jazykové modely. Tady ji
-potřebujeme jen k jedné věci: převádět kousky kódu na vektory.
+Ollama is a program that runs language models on your computer. Here we need it
+for one thing only: converting pieces of code into vectors.
 
 ```
 brew install ollama
 ```
 
-Aby se spouštěla automaticky po přihlášení:
+To make it start automatically at login:
 
 ```
 brew services start ollama
 ```
 
-Kontrola:
+Check:
 
 ```
 ollama list
 ```
 
-Vypíše tabulku, nejspíš prázdnou. Prázdná je v pořádku — hlavní je, že to
-nezahlásilo chybu. Model se stáhne až za chvíli, `agent-code-intel` si ho
-dotáhne sám.
+It prints a table, most likely an empty one. Empty is fine — the point is that
+it did not report an error. The model is downloaded later, `agent-code-intel`
+pulls it on its own.
 
 ---
 
 ## 7. Node.js
 
-Node.js je běhové prostředí pro JavaScript. GitNexus je v něm napsaný, takže bez
-něj nepůjde nainstalovat. Zkontroluj, jestli ho už nemáš:
+Node.js is the JavaScript runtime. GitNexus is written in it, so without it you
+cannot install it. Check whether you already have it:
 
 ```
 node --version
 ```
 
-Když to vypíše číslo, jdi dál. Když ne:
+If it prints a number, move on. If not:
 
 ```
 brew install node
 ```
 
-Kontrola:
+Check:
 
 ```
 node --version
 npm --version
 ```
 
-Obojí musí vypsat verzi.
+Both have to print a version.
 
-### Verze Node.js musí být alespoň 24.11.0
+### The Node.js version has to be at least 24.11.0
 
-Tohle je zrádné, protože stará verze se neprojeví hned. GitNexus se
-nainstaluje, `gitnexus --version` bez potíží vypíše číslo, a teprve při
-skutečném indexování to spadne.
+This one is treacherous, because an old version does not show up right away.
+GitNexus installs, `gitnexus --version` prints a number without trouble, and it
+only falls over during actual indexing.
 
-Požadavek si určuje GitNexus sám — verze 1.6.11 deklaruje
-`engines: ^22.18.0 || >=24.11.0`. `agent-code-intel` z toho bere **horní
-větev jako jedno minimum: 24.11.0**. Je to o něco přísnější, než co GitNexus
-připouští, ale je to jedno číslo místo dvou rozsahů, a žádný Node na řadě 22
-není potřeba vysvětlovat.
+The requirement comes from GitNexus itself — version 1.6.11 declares
+`engines: ^22.18.0 || >=24.11.0`. `agent-code-intel` takes the **upper branch
+as a single minimum: 24.11.0**. It is somewhat stricter than what GitNexus
+allows, but it is one number instead of two ranges, and no Node on the 22 line
+needs explaining.
 
 ```
 node --version
 ```
 
-Když to vypíše `v24.11.0` nebo víc, jsi v pořádku. Preflight si to kontroluje
-sám a při nižší verzi napíše:
+If it prints `v24.11.0` or more, you are fine. Preflight checks it on its own
+and prints this for a lower version:
 
 ```
   warn      node v20.0.0 is below the 24.11.0 that gitnexus requires
 ```
 
-Pokud verzi potřebuješ zvednout, zjisti nejdřív, odkud se ti Node bere:
+If you need to raise the version, first find out where your Node comes from:
 
 ```
 which node
 brew list --versions node
 ```
 
-Podle výsledku jsi v jedné ze tří situací:
+Depending on the result you are in one of three situations:
 
-**Node je z Homebrew** — `brew list --versions node` vypsalo číslo:
+**Node comes from Homebrew** — `brew list --versions node` printed a number:
 
 ```
 brew upgrade node
 ```
 
-**Node je z instalátoru z nodejs.org** — `which node` ukazuje do
-`/usr/local/bin`, ale `brew list --versions node` nevypsalo nic. Tohle je
-nejčastější případ a `brew upgrade node` v něm **selže** s hláškou
-`Error: node not installed`, protože Homebrew ten Node nespravuje. Doinstaluj
-si Homebrew verzi vedle:
+**Node comes from the installer at nodejs.org** — `which node` points into
+`/usr/local/bin`, but `brew list --versions node` printed nothing. This is the
+most common case and `brew upgrade node` **fails** in it with
+`Error: node not installed`, because Homebrew does not manage that Node.
+Install the Homebrew version alongside it:
 
 ```
 brew install node
 ```
 
-Na Apple Siliconu je `/opt/homebrew/bin` v PATH před `/usr/local/bin`, takže
-nová verze tu starou rovnou zastíní; původní instalace zůstane nedotčená.
-Ověř si to — `which node` už musí ukazovat do `/opt/homebrew`.
+On Apple Silicon, `/opt/homebrew/bin` comes before `/usr/local/bin` in PATH, so
+the new version shadows the old one right away; the original installation stays
+untouched. Verify it — `which node` now has to point into `/opt/homebrew`.
 
-**Node je z nvm** — `which node` ukazuje někam do `.nvm`:
+**Node comes from nvm** — `which node` points somewhere into `.nvm`:
 
 ```
 nvm install --lts
 nvm use --lts
 ```
 
-Po jakékoli změně verze Node.js **musíš GitNexus přeinstalovat**, protože je
-navázaný na tu verzi, pod kterou se instaloval:
+After any change of the Node.js version you **have to reinstall GitNexus**,
+because it is bound to the version it was installed under:
 
 ```
 npm i -g gitnexus
@@ -475,58 +485,60 @@ npm i -g gitnexus
 
 ## 8. GrepAI
 
-GrepAI je ten nástroj, který dělá sémantické vyhledávání. Instaluje se z
-vlastního repozitáře autora:
+GrepAI is the tool that does the semantic search. It installs from the author's
+own repository:
 
 ```
 curl -sSL https://raw.githubusercontent.com/yoanbernabeu/grepai/main/install.sh | sh
 ```
 
-Instalaci lze místo toho spustit přes `agent-code-intel --install-deps`, který
-vypíše tento příkaz, pokud `grepai` chybí.
+Instead of that, you can run the installation through
+`agent-code-intel --install-deps`, which prints this command if `grepai` is
+missing.
 
-Kontrola:
+Check:
 
 ```
 grepai version
 ```
 
-Musí vypsat číslo verze, například `grepai version 0.36.1`. Pozor, je to
-`grepai version`, ne `grepai --version` — ten druhý tvar neexistuje a zahlásí
-chybu.
+It has to print a version number, for example `grepai version 0.36.1`. Careful,
+it is `grepai version`, not `grepai --version` — the second form does not exist
+and reports an error.
 
 ---
 
 ## 9. GitNexus
 
-GitNexus staví tu mapu vztahů v kódu.
+GitNexus builds that map of relationships in the code.
 
 ```
 npm i -g gitnexus
 ```
 
-Vypíše pár varování o zastaralých balíčcích. To je v pořádku, jsou to varování,
-ne chyby.
+It prints a few warnings about deprecated packages. That is fine, they are
+warnings, not errors.
 
-Kontrola:
+Check:
 
 ```
 gitnexus --version
 ```
 
-Musí vypsat verzi.
+It has to print a version.
 
-> **Poznámka na později.** Pokud někdy budeš přepínat verze Node.js přes nvm,
-> GitNexus po přepnutí přestane fungovat, i když ho `which gitnexus` pořád
-> najde. Oprava je jednoduchá — `npm i -g gitnexus` pod novou verzí. Skript na
-> to sám upozorní, protože GitNexus nekontroluje jen tím, že existuje, ale tím,
-> že se opravdu spustí.
+> **A note for later.** If you ever switch Node.js versions with nvm, GitNexus
+> stops working after the switch even though `which gitnexus` still finds it.
+> The fix is simple — `npm i -g gitnexus` under the new version. The script
+> points it out on its own, because it does not check GitNexus by its existence
+> but by actually running it.
 
-### Volitelný ripgrep (`rg`)
+### Optional ripgrep (`rg`)
 
-`rg` je rychlé přesné hledání textu. Routing skill ho volí tehdy, když už znáš
-přesný identifikátor, konfigurační klíč, proměnnou prostředí nebo když chce po
-úpravě ověřit výsledek. Pro samotné GrepAI a GitNexus není povinný.
+`rg` is fast exact text search. The routing skill picks it when you already
+know the exact identifier, configuration key or environment variable, or when
+it wants to verify a result after an edit. It is not mandatory for GrepAI and
+GitNexus themselves.
 
 ```
 brew install ripgrep
@@ -537,12 +549,13 @@ rg --version
 
 ## 10. agent-code-intel
 
-Nástroj propojí vše uvedené výše do jednoho příkazu. Instalace vyžaduje celý
-checkout repozitáře; samotný soubor `agent-code-intel` nestačí, protože načítá
-balík `agent_code_intel/` a dashboard ze stejného checkoutu.
+The tool ties everything above into a single command. Installation requires the
+whole repository checkout; the `agent-code-intel` file alone is not enough,
+because it loads the `agent_code_intel/` package and the dashboard from the
+same checkout.
 
-Pokud nebyl použit postup z rychlého startu, naklonujte repozitář a instalaci
-spusťte z jeho kořene:
+If you did not use the quick start path, clone the repository and run the
+installation from its root:
 
 ```
 git clone https://github.com/eduardtomasek/agent-code-intel.git ~/src/agent-code-intel
@@ -550,105 +563,109 @@ cd ~/src/agent-code-intel
 python3 ./agent-code-intel --install
 ```
 
-Instalace uloží launcher do `~/.local/bin/agent-code-intel`, importovatelný
-balík do `~/.local/lib/agent-code-intel/` a dashboard do
-`~/.local/bin/code-intel-dash`. Pokud neexistuje žádná konfigurace, vytvoří
-komentovanou šablonu `~/.config/code-intel/defaults.toml`; existující
-`defaults.env` nebo `defaults.toml` zachová beze změny.
+The installation stores the launcher in `~/.local/bin/agent-code-intel`, the
+importable package in `~/.local/lib/agent-code-intel/` and the dashboard in
+`~/.local/bin/code-intel-dash`. If no configuration exists, it creates a
+commented `~/.config/code-intel/defaults.toml` template; an existing
+`defaults.env` or `defaults.toml` is kept unchanged.
 
-Ve výchozím režimu také přidá do `~/.claude/settings.json` přesné oprávnění
-`Bash(agent-code-intel --refresh)`. Přepínač `--no-perms` tento krok vynechá;
-nečitelný soubor nastavení se nemění a potřebné oprávnění je pak nutné přidat
-ručně.
+In the default mode it also adds the exact
+`Bash(agent-code-intel --refresh)` permission to `~/.claude/settings.json`. The
+`--no-perms` flag skips this step; an unreadable settings file is not modified
+and the required permission then has to be added by hand.
 
-Pokud instalace vypíše varování, že `~/.local/bin` není na PATH, spusťte:
+If the installation prints a warning that `~/.local/bin` is not on PATH, run:
 
 ```
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-Kontrola instalace:
+Verify the installation:
 
 ```
 agent-code-intel --version
 ```
 
-Příkaz musí vypsat číslo verze.
+The command has to print a version number.
 
 ### Python 3.11+
 
-Verze 5 a 6 používají aktivní zdrojový launcher `agent-code-intel` a balík
-`agent_code_intel/`. Vyžaduje Python 3.11 nebo novější. Launcher automaticky
-nevybírá jiný interpret a při staré verzi skončí přesnou diagnostikou.
-Při instalaci z checkoutu použijte aktuální `python3`, jehož verzi lze ověřit
-příkazem `python3 --version`:
+Versions 5 and 6 use the active source launcher `agent-code-intel` and the
+`agent_code_intel/` package. It requires Python 3.11 or newer. The launcher
+does not pick another interpreter automatically and ends with exact
+diagnostics on an old version. When installing from the checkout, use the
+current `python3`, whose version you can verify with `python3 --version`:
 
 ```
 python3 ./agent-code-intel --install
 ```
 
-Instalátor uloží tenký launcher do `~/.local/bin/agent-code-intel`, dashboard
-do `~/.local/bin/code-intel-dash` a celý importovatelný balík do
-`~/.local/lib/agent-code-intel/`. Instalace zkopíruje všechny Pythonové
-moduly i dashboard, nepřenáší `__pycache__` a upgrade nahradí vlastní balík
-jako celek. Verze dashboardu se čte z jeho vlastního `VERSION`; verze CLI
-ji nepřebíjí.
+The installer stores a thin launcher in `~/.local/bin/agent-code-intel`, the
+dashboard in `~/.local/bin/code-intel-dash` and the whole importable package in
+`~/.local/lib/agent-code-intel/`. The installation copies all Python modules
+and the dashboard, does not carry `__pycache__` over, and an upgrade replaces
+its own package as a whole. The dashboard version is read from its own
+`VERSION`; the CLI version does not override it.
 
-### Přepínače pro závislosti a hook
+### Flags for dependencies and the hook
 
-`--install-deps` je samostatný režim pro kontrolu a nabídku instalace
-závislostí. `--install` instaluje jen vlastní produkt a `--apply` cizí
-závislosti pouze kontroluje — ani jeden z nich je sám neinstaluje.
+`--install-deps` is a standalone mode for checking dependencies and offering to
+install them. `--install` installs only the product itself and `--apply` only
+checks third-party dependencies — neither of them installs those on its own.
 
-Pokud si hooky v projektu spravuješ sám, použij při nastavování:
+If you manage the hooks in the project yourself, use this during setup:
 
 ```
 agent-code-intel --agent both --apply --no-hook
 ```
 
-`--no-hook` přeskočí zápis repo-lokálního `SessionStart` hooku. Skill
-`code-context`, routing skill a ostatní dokumentace se tím nevypínají.
+`--no-hook` skips writing the repo-local `SessionStart` hook. The
+`code-context` skill, the routing skill and the rest of the documentation are
+not turned off by it.
 
-### Ověřené jazyky pro přesné rozsahy
+### Verified languages for exact ranges
 
-Přesnost rozsahů byla ověřena na těchto skutečných projektech:
+Range accuracy has been verified on these real projects:
 
-| Jazyk | Co bylo ověřeno | Doporučený postup |
+| Language | What was verified | Recommended approach |
 | --- | --- | --- |
-| **Python** | `ctags` přesně 10/10 rozsahů | `ctags` |
-| **TypeScript** | `ctags` nemá konce u 170 definic; `ast-grep` 99,4 % | `ast-grep` s `kind:` pravidlem |
-| **PHP / Laravel** | `ctags` nemá konce u 145 definic; `ast-grep` 99,3 % | `ast-grep` s `kind:` pravidlem |
-| **JavaScript** | rozsahy ověřené na 236 definicích; pro širší pokrytí je nutné přidat `function_expression` a `arrow_function` | nejdřív ověřit `ctags`, jinak `ast-grep` podle skillu |
-| **Shell** | pouze rozsahy; `ctags` našel konce u 2/70 definic | `ast-grep` kind pravidlo; při jeho absenci ruční fallback |
+| **Python** | `ctags` exact on 10/10 ranges | `ctags` |
+| **TypeScript** | `ctags` has no ends for 170 definitions; `ast-grep` 99.4 % | `ast-grep` with a `kind:` rule |
+| **PHP / Laravel** | `ctags` has no ends for 145 definitions; `ast-grep` 99.3 % | `ast-grep` with a `kind:` rule |
+| **JavaScript** | ranges verified on 236 definitions; wider coverage requires adding `function_expression` and `arrow_function` | check `ctags` first, otherwise `ast-grep` per the skill |
+| **Shell** | ranges only; `ctags` found ends for 2/70 definitions | `ast-grep` kind rule; manual fallback when it is missing |
 
-Úplná sada ověření skillu se týkala Pythonu, TypeScriptu a PHP; JavaScript a
-Shell mají jen výše uvedené cílené testy. Ostatní jazyky testované nejsou.
-Nepřenášej proto výsledek z jednoho jazyka na jiný bez ověření. Nejdřív zjisti, zda
-`ctags --_xformat='%N|%n|%{end}|%K'` vrací konce; pokud je nevrací a jazyk
-podporuje `ast-grep`, použij kind pravidlo ze skillu `code-context`. Postup a
-naměřená data jsou v [plánu měření code-context](docs/plans/code-context-toolchain.md).
+The full verification set for the skill covered Python, TypeScript and PHP;
+JavaScript and Shell only have the targeted tests above. Other languages are
+not tested. Do not carry a result from one language over to another without
+verifying. First find out whether
+`ctags --_xformat='%N|%n|%{end}|%K'` returns ends; if it does not and the
+language supports `ast-grep`, use the kind rule from the `code-context` skill.
+The procedure and the measured data are in the
+[code-context measurement plan](docs/plans/code-context-toolchain.md).
 
-### Konfigurace: `defaults.env` a `defaults.toml`
+### Configuration: `defaults.env` and `defaults.toml`
 
-Podporovány jsou dva formáty, ale v jednom běhu smí existovat právě jeden:
+Two formats are supported, but exactly one of them may exist in a single run:
 
-- `~/.config/code-intel/defaults.env` se vykoná skutečným Bashem. Zachovává
-  expanze, odkazy na dříve nastavené hodnoty, pole, exporty i výstup na oba
-  streamy; podporovaná konfigurace se předá podprocesům v neměnném prostředí.
-- `~/.config/code-intel/defaults.toml` je typovaný soubor s deklarovanými
-  klíči. Neprovádí shell ani expanzi proměnných. Neznámý klíč, chybný typ nebo
-  neparsovatelný TOML je chyba.
+- `~/.config/code-intel/defaults.env` is executed by a real Bash. It preserves
+  expansions, references to previously set values, arrays, exports and output
+  on both streams; the supported configuration is passed to subprocesses in an
+  immutable environment.
+- `~/.config/code-intel/defaults.toml` is a typed file with declared keys. It
+  runs neither a shell nor variable expansion. An unknown key, a wrong type or
+  unparseable TOML is an error.
 
-Když neexistuje ani jeden soubor, instalace nabídne komentovanou TOML šablonu.
-Existující ENV se automaticky nepřevádí do TOML a existující konfigurace se
-nepřepisuje. Pokud existují oba soubory, nástroj skončí a vyžádá si ponechání
-jednoho z nich.
+When neither file exists, the installation offers a commented TOML template. An
+existing ENV file is not converted to TOML automatically and an existing
+configuration is not overwritten. If both files exist, the tool exits and asks
+you to keep one of them.
 
-### Ověření aktivního Pythonového launcheru
+### Verifying the active Python launcher
 
-Aktivní vstup je po vydání kandidáta Pythonový launcher. Při ručním ověření
-postupuj z checkoutu takto:
+Since the release candidate, the active entry point is the Python launcher. To
+verify it by hand, proceed from the checkout like this:
 
 ```
 python3 ./agent-code-intel --version
@@ -659,165 +676,169 @@ agent-code-intel --version
 agent-code-intel --status --json
 ```
 
-Zkontroluj, že `command -v` ukazuje do `~/.local/bin`. Konfigurace ENV zůstává
-platná; převod do TOML je vždy ruční a volitelný.
+Check that `command -v` points into `~/.local/bin`. An ENV configuration stays
+valid; conversion to TOML is always manual and optional.
 
-### Referenční tabulka všech režimů a přepínačů
+### Reference table of all modes and flags
 
-Úplný výpis dostaneš kdykoliv příkazem `agent-code-intel --help`. Tahle tabulka
-je jeho čitelnější podoba — pro běžné používání stačí `--apply`, `--refresh`
-a `--status`, zbytek jsou záchranné brzdy.
+You can get the full listing at any time with `agent-code-intel --help`. This
+table is its more readable form — for everyday use `--apply`, `--refresh` and
+`--status` are enough, the rest are emergency brakes.
 
-#### Režimy
+#### Modes
 
-Režim se vybírá jedním přepínačem; bez něj běží **náhled**, který nic nemění.
+The mode is selected by a single flag; without one, a **preview** runs that
+changes nothing.
 
-| Režim | Co udělá |
+| Mode | What it does |
 | --- | --- |
-| _(bez přepínače)_ | Náhled: vypíše, co by se stalo, a nic nezapíše |
-| `--apply` | Nastaví projekt nebo opraví, co se rozešlo |
-| `--refresh` | Znovu zaindexuje, nahodí hlídače a zkontroluje stav. Nic nezakládá — bez `.code-intel` selže |
-| `--status` | Kontrola zdraví bez zápisů |
-| `--remove` | Vyjme nástroj z projektu (`--remove` samo je náhled, zapíše až `--remove --apply`) |
-| `--install` | Nainstaluje vlastní produkt do `~/.local/bin` |
-| `--install-deps` | Zkontroluje devět nástrojů a na macOS nabídne `brew install` |
-| `--version` | Vypíše verzi |
-| `-h`, `--help` | Vypíše nápovědu |
+| _(no flag)_ | Preview: prints what would happen and writes nothing |
+| `--apply` | Sets the project up, or repairs what has drifted |
+| `--refresh` | Reindexes, starts the watchers and checks the state. It creates nothing — without `.code-intel` it fails |
+| `--status` | Health check with no writes |
+| `--remove` | Takes the tool out of the project (`--remove` alone is a preview, only `--remove --apply` writes) |
+| `--install` | Installs the product itself into `~/.local/bin` |
+| `--install-deps` | Checks nine tools and on macOS offers `brew install` |
+| `--version` | Prints the version |
+| `-h`, `--help` | Prints the help |
 
-#### Obecné přepínače
+#### General flags
 
-| Přepínač | Co dělá |
+| Flag | What it does |
 | --- | --- |
-| `--path DIR` | Pracovní adresář projektu (výchozí: aktuální). S `--refresh` přeskočí hledání kořene gitu |
-| `--agent claude\|codex\|both` | Pro které agenty pracovat. Výchozí je `AGENTS` z `.code-intel`, a `both` u projektu, který to nemá zaznamenané |
-| `[workspace]` | Jméno GrepAI workspace jako první poziční argument (výchozí: jméno adresáře) |
+| `--path DIR` | The project working directory (default: the current one). With `--refresh` it skips looking for the git root |
+| `--agent claude\|codex\|both` | Which agents to work for. The default is `AGENTS` from `.code-intel`, and `both` for a project that has not recorded it |
+| `[workspace]` | The GrepAI workspace name as the first positional argument (default: the directory name) |
 
-#### Co při nastavování vynechat
+#### What to skip during setup
 
-Platí pro náhled a `--apply`.
+Applies to the preview and to `--apply`.
 
-| Přepínač | Co vynechá |
+| Flag | What it skips |
 | --- | --- |
-| `--no-bootstrap` | Nespouští qdrant ani ollama, jen je zkontroluje |
-| `--no-git` | Nespustí `git init` a nesahá na `.gitignore` |
-| `--no-watch` | Nenahazuje hlídače GrepAI |
-| `--no-analyze` | Přeskočí první indexování GitNexusem (na velkém repozitáři pomalé) |
-| `--no-docs` | Nesahá na dokumenty pro agenty ani na routing skill |
-| `--no-hook` | Nezapíše repo-lokální `SessionStart` hook |
-| `--force-docs` | Naopak: přepíše spravované dokumenty a převezme cizí routing skill |
+| `--no-bootstrap` | Does not start qdrant or ollama, only checks them |
+| `--no-git` | Does not run `git init` and does not touch `.gitignore` |
+| `--no-watch` | Does not start the GrepAI watcher |
+| `--no-analyze` | Skips the first GitNexus indexing (slow on a large repository) |
+| `--no-docs` | Does not touch the agent documents or the routing skill |
+| `--no-hook` | Does not write the repo-local `SessionStart` hook |
+| `--force-docs` | The opposite: overwrites the managed documents and takes over a foreign routing skill |
 
-#### K jednotlivým režimům
+#### Per-mode flags
 
-| Přepínač | Patří k | Co dělá |
+| Flag | Belongs to | What it does |
 | --- | --- | --- |
-| `--no-grepai` | `--refresh` | Přeskočí kontrolu a spuštění hlídače |
-| `--no-gitnexus` | `--refresh` | Přeskočí znovu-zaindexování |
-| `--all` | `--status` | Všechny projekty z registru, ne jen tenhle |
-| `--json` | `--status` | Strojově čitelný výstup místo tabulky. Hlásí i služby a nic nespouští; tohle čte dashboard |
-| `--purge-collection` | `--remove` | Smaže i kolekci v qdrantu |
-| `--no-perms` | `--install` | Nesahá na `~/.claude/settings.json` |
-| `--no-install-deps` | `--install-deps` | Nenabídne instalaci přes Homebrew, jen vypíše kontrolu |
+| `--no-grepai` | `--refresh` | Skips the check and the watcher start |
+| `--no-gitnexus` | `--refresh` | Skips reindexing |
+| `--all` | `--status` | All projects from the registry, not just this one |
+| `--json` | `--status` | Machine-readable output instead of a table. It also reports services and starts nothing; this is what the dashboard reads |
+| `--purge-collection` | `--remove` | Also deletes the collection in qdrant |
+| `--no-perms` | `--install` | Does not touch `~/.claude/settings.json` |
+| `--no-install-deps` | `--install-deps` | Does not offer installation through Homebrew, only prints the check |
 
-#### Návratové kódy
+#### Exit codes
 
-| Režim | 0 | 1 | 2 |
+| Mode | 0 | 1 | 2 |
 | --- | --- | --- | --- |
-| náhled | vše odpovídá | chyba | rozešlo se |
-| `--refresh` | v pořádku | nešlo spustit (chybí závislosti, nebo projekt ještě nemá `.code-intel`) | proběhlo, ale našlo rozpad nebo starý index |
-| `--status` | v pořádku | chyba | rozešlo se |
-| `--status --json` | **vždy** | — | — |
+| preview | everything matches | error | drifted |
+| `--refresh` | fine | could not run (missing dependencies, or the project has no `.code-intel` yet) | ran, but found breakage or a stale index |
+| `--status` | fine | error | drifted |
+| `--status --json` | **always** | — | — |
 
-`--status --json` vrací **nulu i při rozpadu** — záměrně, protože ho volá
-dashboard, který si stav čte z JSONu, ne z návratového kódu. Ve skriptu se proto
-na návratový kód `--json` nespoléhej a čti klíč `ok`.
+`--status --json` returns **zero even on breakage** — deliberately, because it
+is called by the dashboard, which reads the state from the JSON, not from the
+exit code. So in a script do not rely on the exit code of `--json` and read the
+`ok` key.
 
 ---
 
-## 11. První projekt
+## 11. First project
 
-Teď to celé vyzkoušíme na testovacím projektu.
+Now we will try the whole thing on a test project.
 
 ```
 mkdir -p ~/projects/test-intel
 cd ~/projects/test-intel
 ```
 
-> **Pozor na velká písmena.** macOS nerozlišuje velikost písmen ve složkách, ale
-> pamatuje si, jak jsi ji napsal. Když jednou napíšeš `~/Projects` a podruhé
-> `~/projects`, dostaneš se do téže složky, ale ve Finderu pak hledáš něco, co
-> se jmenuje jinak. Drž se jednoho tvaru, ideálně malých písmen.
+> **Watch out for capital letters.** macOS does not distinguish letter case in
+> folders, but it remembers how you typed it. If you write `~/Projects` once and
+> `~/projects` the next time, you end up in the same folder, but then you look
+> in Finder for something named differently. Stick to one form, ideally
+> lowercase.
 
-Nejdřív si nech ukázat, co se stane, bez toho, aby se cokoli změnilo:
+First have it show you what will happen, without changing anything:
 
 ```
 agent-code-intel
 ```
 
-Skript nejdřív zkontroluje, jestli je všechno na svém místě, a přitom sám
-nastartuje qdrant a ollamu, pokud neběží. Poprvé přitom stáhne image qdrantu a
-embedding model, což je asi gigabajt — na chvíli se to zdánlivě zastaví, to je
-v pořádku.
+The script first checks whether everything is in place, and while doing that it
+starts qdrant and ollama itself if they are not running. The first time it also
+downloads the qdrant image and the embedding model, about a gigabyte — it
+seems to stall for a while, which is fine.
 
-Pak vypíše seznam toho, co by udělal. Všechny řádky preflightu by měly být `ok`.
+Then it prints a list of what it would do. All preflight lines should be `ok`.
 
-Když je vše zelené, spusť to naostro:
+When everything is green, run it for real:
 
 ```
 agent-code-intel --apply
 ```
 
-Projde devíti kroky a na konci vypíše shrnutí. Ve složce ti přibudou tyhle
-soubory:
+It goes through nine steps and prints a summary at the end. These files appear
+in the folder:
 
-| Soubor                                     | K čemu je                                             | Kdo ho vytvoří                       |
-| ------------------------------------------ | ----------------------------------------------------- | ------------------------------------ |
-| `.git/`                                    | Verzovací systém, založí se automaticky               | agent-code-intel                     |
-| `.gitignore`                               | Aby se indexy a `.DS_Store` nedostaly do gitu         | agent-code-intel                     |
-| `.grepai/`                                 | Nastavení indexování pro tenhle projekt               | agent-code-intel                     |
-| `.mcp.json`                                | Napojení vyhledávání na tvého AI agenta               | agent-code-intel                     |
-| `CLAUDE.md`                                | Odkaz na routing a `code-context` skilly pro Claude  | agent-code-intel pro `claude`/`both` |
-| `.claude/helpers/code-context-hint.py`     | Repo-lokální Claude i Codex `SessionStart` hint      | agent-code-intel pro `claude`/`both` |
-| `.claude/skills/agent-code-intel-routing/` | Rozhoduje, kdy použít GrepAI, GitNexus nebo ripgrep   | agent-code-intel pro `claude`/`both` |
-| `.claude/skills/code-context/`              | Přesné rozsahy, reference, struktura a nečitelné formáty | agent-code-intel pro `claude`/`both` |
-| `AGENTS.md`                                | Odkaz na routing skill pro Codex a ostatní agenty     | agent-code-intel pro `codex`/`both`  |
-| `.agents/skills/agent-code-intel-routing/` | Stejný routing skill ve formátu, který objevuje Codex | agent-code-intel pro `codex`/`both`  |
-| `.agents/skills/code-context/`             | Stejný `code-context` skill pro Codex                 | agent-code-intel pro `codex`/`both`  |
-| `.codex/hooks.json`                        | Registrace repo-lokálního Codex `SessionStart` hooku | agent-code-intel pro `codex`/`both`  |
-| `.gitnexus/`                               | Grafový index a jeho databáze                         | gitnexus                             |
-| `AGENTS.md`, `CLAUDE.md`                   | Vlastní oddělený blok s pravidly grafu                | gitnexus                             |
-| `.claude/skills/gitnexus/`                 | Dovednosti pro Claude Code k práci s grafem           | gitnexus                             |
+| File                                       | What it is for                                        | Who creates it                        |
+| ------------------------------------------ | ----------------------------------------------------- | ------------------------------------- |
+| `.git/`                                    | Version control, created automatically                | agent-code-intel                      |
+| `.gitignore`                               | So indexes and `.DS_Store` do not get into git        | agent-code-intel                      |
+| `.grepai/`                                 | Indexing settings for this project                    | agent-code-intel                      |
+| `.mcp.json`                                | Wires the search into your AI agent                   | agent-code-intel                      |
+| `CLAUDE.md`                                | Points to the routing and `code-context` skills for Claude | agent-code-intel for `claude`/`both` |
+| `.claude/helpers/code-context-hint.py`     | Repo-local Claude and Codex `SessionStart` hint       | agent-code-intel for `claude`/`both`  |
+| `.claude/skills/agent-code-intel-routing/` | Decides when to use GrepAI, GitNexus or ripgrep       | agent-code-intel for `claude`/`both`  |
+| `.claude/skills/code-context/`             | Exact ranges, references, structure and unreadable formats | agent-code-intel for `claude`/`both` |
+| `AGENTS.md`                                | Points to the routing skill for Codex and other agents | agent-code-intel for `codex`/`both`  |
+| `.agents/skills/agent-code-intel-routing/` | The same routing skill in the format Codex discovers  | agent-code-intel for `codex`/`both`   |
+| `.agents/skills/code-context/`             | The same `code-context` skill for Codex               | agent-code-intel for `codex`/`both`   |
+| `.codex/hooks.json`                        | Registers the repo-local Codex `SessionStart` hook    | agent-code-intel for `codex`/`both`   |
+| `.gitnexus/`                               | The graph index and its database                      | gitnexus                              |
+| `AGENTS.md`, `CLAUDE.md`                   | Its own separate block with graph rules               | gitnexus                              |
+| `.claude/skills/gitnexus/`                 | Skills for Claude Code to work with the graph         | gitnexus                              |
 
-`--agent claude`, `--agent codex` a výchozí `--agent both` řídí současně MCP
-registraci, dokument s instrukcemi i umístění routing skillu. GitNexus si při
-`analyze` může navíc vytvořit vlastní bloky a Claude skilly bez ohledu na tuto
-volbu; ty nejsou vlastnictvím `agent-code-intel`.
+`--agent claude`, `--agent codex` and the default `--agent both` drive the MCP
+registration, the instruction document and the location of the routing skill at
+the same time. During `analyze`, GitNexus may additionally create its own
+blocks and Claude skills regardless of this choice; those are not owned by
+`agent-code-intel`.
 
-### Které agenty projekt používá
+### Which agents the project uses
 
-Volba se nezadává pokaždé znovu. `--apply` ji zapíše do `.code-intel` daného
-projektu:
+You do not have to pass the choice every time. `--apply` writes it into the
+`.code-intel` file of the given project:
 
 ```
 # agent-code-intel — identity of this repository. Generated, do not edit by hand.
 SCHEMA=2
-WORKSPACE=muj-projekt
-PROJECT=muj-projekt
+WORKSPACE=my-project
+PROJECT=my-project
 AGENTS=claude
 ```
 
-`--status`, `--refresh` a `--remove` pak pracují přesně s těmi agenty, pro které
-byl projekt zapojený. Projekt nastavený jen pro Clauda tak nehlásí drift na
-chybějícím Codex routing skillu, a to ani ve výpisu `--status --all`, kde má
-každý projekt vlastní odpověď.
+`--status`, `--refresh` and `--remove` then work with exactly the agents the
+project was wired up for. A project set up for Claude only therefore does not
+report drift over a missing Codex routing skill, not even in the
+`--status --all` listing, where every project has its own answer.
 
-Přednost má vždy `--agent` na příkazové řádce — je to i způsob, jak volbu
-projektu změnit:
+`--agent` on the command line always wins — it is also the way to change the
+project's choice:
 
 ```
-agent-code-intel --agent both --apply      # projekt nově obsluhují oba agenti
+agent-code-intel --agent both --apply      # the project is now served by both agents
 ```
 
-Hlavička výpisu říká, odkud hodnota pochází:
+The listing header says where the value comes from:
 
 ```
 Agents:    claude (from .code-intel)
@@ -825,63 +846,65 @@ Agents:    both (--agent)
 Agents:    both (default)
 ```
 
-Projekty zapojené starší verzí mají `SCHEMA=1` bez klíče `AGENTS`. Čtou se dál a
-fungují; `--status` u nich přidá řádek `.code-intel predates AGENTS`, který není
-drift — jen upozorňuje, že příští `--apply` volbu zaznamená. Opačným směrem to
-nejde: starší verze nástroje soubor se `SCHEMA=2` odmítne přečíst.
+Projects wired up by an older version have `SCHEMA=1` with no `AGENTS` key.
+They are still read and they work; `--status` adds a `.code-intel predates
+AGENTS` line for them, which is not drift — it only points out that the next
+`--apply` will record the choice. The other direction does not work: an older
+version of the tool refuses to read a file with `SCHEMA=2`.
 
-Umístění odpovídají oficiální dokumentaci pro
-[Claude Code](https://code.claude.com/docs/en/skills) a
+The locations follow the official documentation for
+[Claude Code](https://code.claude.com/docs/en/skills) and
 [Codex](https://learn.chatgpt.com/docs/build-skills).
 
-Routing skill je záměrně verzovatelný: `.gitignore` pokrývá `.grepai/`,
-`.gitnexus/` a `.DS_Store`, ale ne `.claude/` ani `.agents/`. Tým tak dostane stejné
-rozhodování nástrojů. Výchozí GrepAI konfigurace obě agentní složky při
-indexování ignoruje.
+The routing skill is deliberately versionable: `.gitignore` covers `.grepai/`,
+`.gitnexus/` and `.DS_Store`, but neither `.claude/` nor `.agents/`. That way
+the team gets the same tool decisions. The default GrepAI configuration ignores
+both agent folders during indexing.
 
-Opakovaný `--apply` identický skill vůbec nepřepíše. Změněnou managed kopii
-opraví automaticky; cizí skill stejného jména bezpečně odmítne. Pokud jej chceš
-výslovně převzít pod správu nástroje, použij `--force-docs`. Přepínač
-`--no-docs` přeskočí dokumenty i routing skilly.
-
----
-
-## Codex — tři brány pro aktivní hook
-
-> **Důležité:** samotný soubor `.codex/hooks.json` ještě neznamená, že Codex
-> hook spouští. Všechny tři podmínky musí být splněné; při nesplnění může hook
-> zůstat neaktivní bez chyby.
-
-Při `--agent codex` nebo `--agent both` zapíše `--apply` registraci do
-`.codex/hooks.json` a sdílený skript do `.claude/helpers/code-context-hint.py`.
-V Codexu pak ověř:
-
-1. V `~/.codex/config.toml` nesmí být `[features] hooks = false`.
-2. Projektová vrstva `.codex/` musí být důvěryhodná.
-3. V CLI spusť `/hooks` a projektový hook schval.
-
-Schvaluje se definice v `hooks.json`, ne text skriptu. Pokud ji další
-`--apply` nezmění, schválení stačí jednou; změna registrace vyžádá nové
-schválení. Stav schválení `--status` ověřit neumí, hlásí pouze existenci
-`hooks.json`.
-
-Při vytvoření nebo změně registrace vypíše `--apply` tyto tři kroky. Pokud
-hooky spravuješ sám, zápis přeskoč pomocí `--no-hook`.
+A repeated `--apply` does not overwrite an identical skill at all. It repairs a
+modified managed copy automatically; it safely refuses a foreign skill of the
+same name. If you want to take that one over under the tool's management
+explicitly, use `--force-docs`. The `--no-docs` flag skips both the documents
+and the routing skills.
 
 ---
 
-## 12. Ověření, že to funguje
+## Codex — three gates for an active hook
 
-Vytvoř si testovací soubor. Otevři složku ve svém editoru — máš-li VS Code
-s nainstalovaným příkazem `code`, stačí:
+> **Important:** the `.codex/hooks.json` file alone does not yet mean Codex runs
+> the hook. All three conditions have to be met; if they are not, the hook can
+> stay inactive without an error.
+
+With `--agent codex` or `--agent both`, `--apply` writes the registration into
+`.codex/hooks.json` and the shared script into
+`.claude/helpers/code-context-hint.py`. Then verify in Codex:
+
+1. `~/.codex/config.toml` must not contain `[features] hooks = false`.
+2. The project `.codex/` layer has to be trusted.
+3. In the CLI, run `/hooks` and approve the project hook.
+
+What you approve is the definition in `hooks.json`, not the text of the script.
+If the next `--apply` does not change it, approving once is enough; a change of
+the registration requires a new approval. `--status` cannot verify the approval
+state, it only reports that `hooks.json` exists.
+
+When the registration is created or changed, `--apply` prints these three
+steps. If you manage hooks yourself, skip the write with `--no-hook`.
+
+---
+
+## 12. Verifying that it works
+
+Create a test file. Open the folder in your editor — if you have VS Code with
+the `code` command installed, this is enough:
 
 ```
 code .
 ```
 
-Když `code` hlásí `command not found`, otevři složku ve VS Code přes
-`File → Open Folder`, použij jiný editor, nebo si soubor vyrob rovnou
-z terminálu:
+If `code` reports `command not found`, open the folder in VS Code through
+`File → Open Folder`, use another editor, or create the file straight from the
+terminal:
 
 ```
 cat > app.js <<'EOF'
@@ -892,7 +915,7 @@ function checkCredentials(user, pass) {
 EOF
 ```
 
-Do souboru `app.js` patří tohle:
+This is what belongs in `app.js`:
 
 ```javascript
 function checkCredentials(user, pass) {
@@ -901,254 +924,264 @@ function checkCredentials(user, pass) {
 }
 ```
 
-Ulož ho. Pak zpátky v terminálu:
+Save it. Then back in the terminal:
 
 ```
 git add -A
-git commit -m "prvni verze"
+git commit -m "first version"
 agent-code-intel --refresh
 ```
 
-Commit dělej — je to dobrý zvyk a starší GitNexus ho pro vyhodnocení
-aktuálnosti potřeboval. Od verze 1.6 už podmínka není: `gitnexus status` hlásí
-`up-to-date` i v repozitáři bez jediného commitu. Takže když na něj zapomeneš,
-nic se nerozbije.
+Do commit — it is a good habit and older GitNexus needed it to judge freshness.
+Since version 1.6 the condition is gone: `gitnexus status` reports `up-to-date`
+even in a repository without a single commit. So if you forget it, nothing
+breaks.
 
-Příkaz musí skončit hláškou `Code intelligence is fresh.`
+The command has to finish with `Code intelligence is fresh.`
 
-### Tři kontroly
+### Three checks
 
-**Dostaly se vektory do databáze?**
+**Did the vectors make it into the database?**
 
 ```
 curl -s http://127.0.0.1:6333/collections/workspace_test-intel | python3 -m json.tool | grep -iE "points|status"
 ```
 
-Musíš vidět `"status": "green"` a `points_count` větší než nula.
+You have to see `"status": "green"` and a `points_count` greater than zero.
 
-**Funguje sémantické hledání?**
+**Does semantic search work?**
 
 ```
-grepai search "overeni hesla uzivatele" --workspace test-intel
+grepai search "verifying a user password" --workspace test-intel
 ```
 
-Musí najít `app.js`. Všimni si, že v tom souboru není ani slovo „ověření", ani
-„heslo" — proto je tohle ten hlavní test. Obyčejný grep by nenašel nic.
+It has to find `app.js`. Note that the file contains neither the word "verify"
+nor "password" — that is why this is the main test. A plain grep would find
+nothing.
 
-Přepínač `--workspace` je povinný. Bez něj sáhne GrepAI po jiném, prázdném
-indexu a vrátí nesmysly.
+The `--workspace` flag is mandatory. Without it GrepAI reaches for another,
+empty index and returns nonsense.
 
-**Vidí to tvůj AI agent?**
+**Does your AI agent see it?**
 
-Otevři složku v editoru a spusť v ní Claude Code. Napiš `/mcp` — musíš vidět
-`grepai` i `gitnexus` jako připojené.
+Open the folder in your editor and start Claude Code in it. Type `/mcp` — you
+have to see both `grepai` and `gitnexus` as connected.
 
-Když tam nejsou, nepotvrdil jsi při startu dialog, který se ptá, jestli
-projektovým MCP serverům důvěřuješ. Zavři Claude Code, otevři znovu a potvrď.
+If they are not there, you did not confirm the dialog at startup that asks
+whether you trust the project MCP servers. Close Claude Code, open it again and
+confirm.
 
-Poslední test: zadej agentovi úkol, ve kterém nezmíníš název souboru ani funkce
-— třeba „najdi, kde se v tomhle projektu ověřují přihlašovací údaje". Když
-sáhne po nástroji `grepai_search`, je propojení kompletní.
+The final test: give the agent a task in which you mention neither the file nor
+the function name — for example "find where login credentials are verified in
+this project". If it reaches for the `grepai_search` tool, the wiring is
+complete.
 
 ---
 
-## 13. Každodenní používání
+## 13. Everyday use
 
-### Nový projekt
+### A new project
 
 ```
-mkdir ~/projects/muj-projekt
-cd ~/projects/muj-projekt
+mkdir ~/projects/my-project
+cd ~/projects/my-project
 agent-code-intel --agent claude --apply
 ```
 
-To je celé. Nastavení, které jsi udělal jednou, platí pro všechny další
-projekty.
+That is all. The setup you did once applies to all further projects.
 
-### Po každé změně kódu
+### After every code change
 
 ```
 agent-code-intel --refresh
 ```
 
-Tenhle příkaz by měl spouštět tvůj AI agent sám — instrukci k tomu má v
-`CLAUDE.md` nebo `AGENTS.md`, který mu `agent-code-intel` napsal. Když to
-neudělá, spusť ho ručně.
+Your AI agent should run this command on its own — it has the instruction for
+it in `CLAUDE.md` or `AGENTS.md`, which `agent-code-intel` wrote for it. If it
+does not, run it by hand.
 
-Proč je vůbec potřeba: GrepAI se aktualizuje průběžně, protože na pozadí běží
-hlídač, který si všímá ukládaných souborů. GitNexus ne — jeho mapa se
-přepočítává jen na povel, a právě tenhle příkaz ten povel dává. Zároveň
-zkontroluje, že hlídač běží, a ohlásí, kdyby něco nesedělo. Kontroluje také
-routing skill pro agenty vybrané přes `--agent`; jeho chybějící nebo změněná
-kopie je drift a opraví ji další `--apply`.
+Why it is needed at all: GrepAI updates continuously, because a watcher runs in
+the background and notices saved files. GitNexus does not — its map is
+recomputed only on command, and this command is that command. At the same time
+it checks that the watcher is running and reports if something is off. It also
+checks the routing skill for the agents selected through `--agent`; a missing
+or modified copy of it is drift and the next `--apply` repairs it.
 
-Rychlá kontrola bez přeindexování:
+A quick check without reindexing:
 
 ```
 agent-code-intel --status
 ```
 
-### Kontrola všech projektů najednou
+### Checking all projects at once
 
 ```
 agent-code-intel --status --all
 ```
 
-Projde všechny projekty, které jsi kdy nastavil, a řekne, kde něco nesedí.
-Typicky po restartu Macu, kdy neběží hlídač.
+It goes through all the projects you ever set up and says where something is
+off. Typically after a Mac restart, when the watcher is not running.
 
-### Po restartu počítače
+### After restarting the computer
 
-OrbStack i ollama se spustí samy, pokud sis to nastavil v krocích 5 a 6.
-**Hlídač GrepAI se ale sám nespustí.** Vyhledávání pak dál „funguje", jen
-odpovídá ze zastaralých dat, což je horší než chyba. Pojistka je jednoduchá —
-v projektu spusť:
+OrbStack and ollama start on their own if you set that up in steps 5 and 6.
+**The GrepAI watcher, however, does not start on its own.** Search then keeps
+"working", it just answers from stale data, which is worse than an error. The
+safeguard is simple — in the project run:
 
 ```
 agent-code-intel --refresh
 ```
 
-Hlídače nastartuje a všechno doindexuje.
+It starts the watchers and indexes everything that is pending.
 
 ---
 
-## 14. Dashboard — přehled o všem najednou
+## 14. Dashboard — everything at a glance
 
-`agent-code-intel --status --all` ti řekne, jestli sedí _nastavení_ projektů.
-Neřekne ti ale, jestli běží služby pod nimi a jestli opravdu dělají, co mají —
-to je schválně, protože status musí fungovat i na stroji, kde je všechno
-vypnuté.
+`agent-code-intel --status --all` tells you whether the _setup_ of the projects
+is right. What it does not tell you is whether the services underneath are
+running and whether they really do what they should — that is deliberate,
+because status has to work on a machine where everything is switched off.
 
-Na tuhle druhou otázku odpovídá dashboard. Spusť ho:
+The dashboard answers that second question. Start it:
 
 ```
 code-intel-dash --open
 ```
 
-Otevře se stránka na `http://127.0.0.1:7717`. Běží jen na tvém počítači, na
-loopbacku, bez hesla — nikam se nedostane. Ukončíš ho Ctrl+C.
+A page opens at `http://127.0.0.1:7717`. It runs only on your computer, on the
+loopback, without a password — it reaches nowhere. You stop it with Ctrl+C.
 
-Instalace z checkoutu ho uloží vedle CLI automaticky:
+Installing from the checkout stores it next to the CLI automatically:
 
 ```
 python3 ./agent-code-intel --install
 ```
 
-Při každé další instalaci se porovná vlastní verze dashboardu; shodná verze se
-nepřepisuje, starší nebo poškozená kopie se nahradí zdrojovou verzí.
+On every further installation the dashboard's own version is compared; an
+identical version is not overwritten, an older or damaged copy is replaced by
+the source version.
 
-Dashboard nemá vlastní kontroly — všechno o projektech si vytáhne z
-`agent-code-intel --status --all --json`. Kdyby měl kontroly vlastní, dřív nebo
-později by se s tím příkazem rozešly a **oba by přitom dál svítily zeleně**.
-Proto potřebuje `agent-code-intel` na PATH; bez něj rovnou řekne, že neví nic.
+The dashboard has no checks of its own — it pulls everything about the projects
+from `agent-code-intel --status --all --json`. If it had its own checks, sooner
+or later they would drift apart from that command and **both would keep showing
+green**. That is why it needs `agent-code-intel` on PATH; without it, it says
+straight away that it knows nothing.
 
-### Co na něm uvidíš
+### What you will see on it
 
-Nahoře **stack**, tedy věci společné všem projektům — jeden řádek na komponentu.
-Vlevo je stav a název, vpravo hodnoty ve sloupcích, které lícují napříč všemi
-řádky, a když něco nesedí, je pod nimi varování a oprava. Vedle nadpisu je
-souhrn: `all ok`, nebo kolik komponent potřebuje pozornost.
+At the top the **stack**, the things common to all projects — one line per
+component. On the left the state and the name, on the right values in columns
+that line up across all rows, and when something is off, a warning and a fix
+below them. Next to the heading there is a summary: `all ok`, or how many
+components need attention.
 
-| Řádek       | Co ověřuje                                                                  |
-| ----------- | --------------------------------------------------------------------------- |
-| docker      | běží daemon, běží kontejner, publikuje **oba** porty 6333 i 6334            |
-| qdrant      | HTTP odpovídá, gRPC port je otevřený, kolik má kolekcí, jak rychle odpovídá |
-| ollama      | server žije, model je stažený a načtený, **a skutečně vrátí vektor**        |
-| Node.js     | verze proti minimu 24.11.0, `registerHooks`, a jestli se gitnexus spustí    |
-| MCP servers | jestli běžící `gitnexus mcp` není starší než index — viz níže               |
+| Row         | What it verifies                                                              |
+| ----------- | ----------------------------------------------------------------------------- |
+| docker      | the daemon is running, the container is running, it publishes **both** ports 6333 and 6334 |
+| qdrant      | HTTP answers, the gRPC port is open, how many collections it has, how fast it answers |
+| ollama      | the server is alive, the model is downloaded and loaded, **and it really returns a vector** |
+| Node.js     | the version against the 24.11.0 minimum, `registerHooks`, and whether gitnexus starts |
+| MCP servers | whether a running `gitnexus mcp` is not older than the index — see below      |
 
-Dole každý **projekt** — pod jeho názvem dvě tlačítka (viz
-[Pozastavení a vyřazení projektu](#pozastavení-a-vyřazení-projektu)) a pod
-nimi čtyři záložky. Rozhraní dashboardu je anglicky:
+At the bottom every **project** — under its name two buttons (see
+[Pausing and retiring a project](#pausing-and-retiring-a-project)) and below
+them four tabs. The dashboard interface is in English:
 
-- **Overview** — hlídač, počet vektorů, velikost grafu, stáří indexu,
-  konfigurace. Když něco nesedí, je pod tím rovnou příkaz, který to spraví.
-- **Search** — vlastní dotaz proti skutečnému indexu. Výsledky se dají
-  rozklikávat: uvidíš cestu, rozsah řádků, skóre podobnosti a samotný úsek kódu
-  s čísly řádků. Je to stejné hledání, jaké dostane agent.
-- **Index contents** — které soubory se do indexu skutečně dostaly a kolik
-  z nich zabírají. **Soubor, který tu chybí, hledání nikdy nenajde** — takhle
-  se pozná tiché vypadnutí souboru z indexu.
-- **Watcher log** — co hlídač poslední dobou dělal, indexační řádky zeleně.
+- **Overview** — the watcher, the number of vectors, the size of the graph, the
+  age of the index, the configuration. When something is off, the command that
+  fixes it is right below.
+- **Search** — your own query against the real index. The results can be
+  expanded: you see the path, the line range, the similarity score and the
+  piece of code itself with line numbers. It is the same search the agent gets.
+- **Index contents** — which files actually made it into the index and how much
+  of it they take up. **A file that is missing here will never be found by
+  search** — this is how you spot a file silently dropping out of the index.
+- **Watcher log** — what the watcher has been doing lately, indexing lines in
+  green.
 
-Záložka se propíše do adresy (`#test-intel/search/...`), takže si konkrétní
-pohled můžeš uložit do záložek nebo poslat dál.
+The tab is reflected in the address (`#test-intel/search/...`), so you can
+bookmark a particular view or pass it on.
 
-### Proč to není jen „svítí zeleně"
+### Why this is not just "it lights up green"
 
-Dashboard schválně netestuje jen to, že proces běží — to je slabé tvrzení.
-U každé komponenty zkusí přímo to, kvůli čemu existuje:
+The dashboard deliberately does not test only that a process is running — that
+is a weak claim. For every component it tries directly the thing it exists for:
 
-- **ollama** dostane skutečný text k převedení na vektor. Když se vrátí 768
-  čísel, je jistota, že embedding funguje; server, který odpovídá na `/api/tags`
-  a přitom neumí embedovat, by jinak vypadal zdravě.
-- **GrepAI** dostane skutečný dotaz. Nula výsledků znamená prázdný index, ne
-  špatný dotaz.
-- **qdrant** ukáže počet vektorů v kolekci. Zelená kolekce s nulou vektorů je
-  rozbitý index, ne zdravý — dashboard to napíše červeně.
-- **GitNexus** hlásí, pod jakou verzí Node byl index postavený. Když se
-  neshoduje s tou, která běží teď, upozorní tě — to je přesně ta past
-  z kapitoly 7.
-- **MCP servers** porovná, kdy se spustil běžící `gitnexus mcp`, s tím, kdy byl
-  balíček naposledy přepsaný. Node si totiž načte kód do paměti při startu
-  procesu, takže po `npm i -g gitnexus` běží každý už otevřený agent dál na
-  staré verzi. Nová `analyze` pak zapíše index, který ten starý server neumí
-  přečíst, a uprostřed práce dostaneš `DB version mismatch, v43 index vs v42
-MCP server`. Na disku není nic rozbité — jen je čtenář starší než soubor.
-  Spraví to restart klienta a dashboard ti řekne, kterého.
+- **ollama** gets real text to convert into a vector. When 768 numbers come
+  back, embedding is certain to work; a server that answers `/api/tags` while
+  being unable to embed would otherwise look healthy.
+- **GrepAI** gets a real query. Zero results means an empty index, not a bad
+  query.
+- **qdrant** shows the number of vectors in the collection. A green collection
+  with zero vectors is a broken index, not a healthy one — the dashboard writes
+  that in red.
+- **GitNexus** reports which Node version the index was built under. When it
+  does not match the one running now, it warns you — that is exactly the trap
+  from chapter 7.
+- **MCP servers** compares when the running `gitnexus mcp` was started with when
+  the package was last overwritten. Node loads the code into memory at process
+  start, so after `npm i -g gitnexus` every already open agent keeps running the
+  old version. A new `analyze` then writes an index that the old server cannot
+  read, and in the middle of your work you get `DB version mismatch, v43 index
+  vs v42 MCP server`. Nothing on disk is broken — the reader is just older than
+  the file. Restarting the client fixes it, and the dashboard tells you which
+  one.
 
-Když je něco špatně, napíše rovnou příkaz, kterým se to spraví.
+When something is wrong, it prints the command that fixes it right away.
 
-### Pozastavení a vyřazení projektu
+### Pausing and retiring a project
 
-Na projektu, na kterém už nepracuješ, watcher dál hlídá soubory a index dál
-spotřebovává CPU i místo. Každý projekt má proto dvě tlačítka; spolu s
-**Bring back** a **Stop watcher** u vyřazených projektů jsou to jediné věci na
-stránce, které něco mění:
+On a project you no longer work on, the watcher keeps watching files and the
+index keeps consuming CPU and space. Every project therefore has two buttons;
+together with **Bring back** and **Stop watcher** on retired projects, they are
+the only things on the page that change anything:
 
-- **Pause indexing** zastaví GrepAI watcher toho projektu, **Resume indexing**
-  ho zase spustí. Index zůstává, jak byl; hledání odpovídá z něj, jen do něj
-  nepřibývá nic nového. Pozastavený projekt je **šedý** se štítkem
-  `watcher paused` — není to chyba, a `code-intel-dash --once` kvůli němu
-  nevrací 2. Pozastavení platí, dokud watcher znovu
-  nespustí něco jiného: `agent-code-intel --refresh` (ten agent spouští po
-  každé změně kódu) nebo `--apply` ho rozběhnou a projekt je zase normálně
-  zelený. Když by potom watcher spadl, dashboard to ukáže červeně jako
-  každou jinou chybu.
-- **Remove from code-intel…** se nejdřív zeptá, pak zastaví watcher a vyřadí
-  projekt z registru, takže zmizí z dashboardu i z
-  `agent-code-intel --status --all`. **Nic se nemaže**: `.grepai/`,
-  `.gitnexus/`, kolekce v qdrantu, routing skilly i blok v `CLAUDE.md`
-  zůstávají. Vyřazený projekt najdeš dole v sekci *Removed from code-intel*;
-  **Bring back** ho vrátí do registru bez reindexu a s watcherem dál
-  pozastaveným.
+- **Pause indexing** stops that project's GrepAI watcher, **Resume indexing**
+  starts it again. The index stays as it was; search answers from it, nothing
+  new is just added to it. A paused project is **grey** with a
+  `watcher paused` label — it is not an error, and `code-intel-dash --once`
+  does not return 2 because of it. The pause holds until something else starts
+  the watcher again: `agent-code-intel --refresh` (the one the agent runs after
+  every code change) or `--apply` starts it and the project is normally green
+  again. If the watcher then crashed, the dashboard shows it in red like any
+  other error.
+- **Remove from code-intel…** asks first, then stops the watcher and removes the
+  project from the registry, so it disappears from the dashboard and from
+  `agent-code-intel --status --all`. **Nothing is deleted**: `.grepai/`,
+  `.gitnexus/`, the collection in qdrant, the routing skills and the block in
+  `CLAUDE.md` all stay. You find a retired project at the bottom in the
+  *Removed from code-intel* section; **Bring back** returns it to the registry
+  with no reindex and with the watcher still paused.
 
-Tohle není `agent-code-intel --remove`. Ten projekt odpojí úplně a index
-smaže — správná volba, když už projekt code-intel používat nemá, špatná,
-když jen skončil vývoj a může se k němu vrátit.
+This is not `agent-code-intel --remove`. That one disconnects the project
+completely and deletes the index — the right choice when the project should not
+use code-intel any more, the wrong one when development merely stopped and you
+may come back to it.
 
-Dashboard si pamatuje dvě věci, obě vedle konfigurace
-(`~/.config/code-intel/`): `dash-retired` se seznamem vyřazených projektů
-a `dash-paused.json` s tím, které watchery zastavil on. Zapisovat jde jen
-z vlastní stránky dashboardu; cizí web v prohlížeči to nedokáže, i když
-server běží bez hesla.
+The dashboard remembers two things, both next to the configuration
+(`~/.config/code-intel/`): `dash-retired` with the list of retired projects and
+`dash-paused.json` with the watchers it stopped itself. Writing is possible only
+from the dashboard's own page; a foreign website in the browser cannot do it,
+even though the server runs without a password.
 
-### Stáří údajů
+### Age of the data
 
-Stránka se sama obnovuje každých 15 vteřin. Kdyby přestala, **zešedne a napíše,
-že už za nic neručí** — protože dashboard, který po výpadku dál ukazuje poslední
-zelený obrázek, je horší než žádný.
+The page refreshes itself every 15 seconds. If it stopped, it **turns grey and
+says it no longer vouches for anything** — because a dashboard that keeps
+showing the last green picture after an outage is worse than none.
 
-### Bez prohlížeče
+### Without a browser
 
-Hodí se do skriptů, cronu nebo prompt řádku. Vypíše JSON a skončí s kódem 0 při
-zdraví, 2 když je něco špatně:
+Handy in scripts, cron or a prompt line. It prints JSON and exits with code 0
+when healthy, 2 when something is wrong:
 
 ```
 code-intel-dash --once
 ```
 
-Kdyby port 7717 kolidoval s něčím jiným:
+If port 7717 collided with something else:
 
 ```
 code-intel-dash --port 8080
@@ -1156,62 +1189,63 @@ code-intel-dash --port 8080
 
 ---
 
-## 15. Když se něco pokazí
+## 15. When something goes wrong
 
 ### `command not found`
 
-Program buď není nainstalovaný, nebo systém neví, kde ho hledat. Vrať se ke
-kroku, kde se instaloval, a zopakuj kontrolu. U `agent-code-intel` bývá příčinou
-chybějící PATH — viz konec kroku 10.
+The program is either not installed, or the system does not know where to look
+for it. Go back to the step where it was installed and repeat the check. For
+`agent-code-intel` the cause is usually a missing PATH — see the end of step 10.
 
-### `docker run failed` nebo `Cannot connect to the Docker daemon`
+### `docker run failed` or `Cannot connect to the Docker daemon`
 
-OrbStack neběží. Spusť ho a počkej, až naběhne:
+OrbStack is not running. Start it and wait for it to come up:
 
 ```
 open -a OrbStack
 sleep 15
-docker info > /dev/null 2>&1 && echo "funguje" || echo "jeste ne"
+docker info > /dev/null 2>&1 && echo "works" || echo "not yet"
 ```
 
-Pak `agent-code-intel` spusť znovu.
+Then run `agent-code-intel` again.
 
-### `embedding model ... not pulled` hned po úspěšném stažení
+### `embedding model ... not pulled` right after a successful download
 
-Server o modelu ještě neví. Prostě spusť příkaz znovu, podruhé projde.
+The server does not know about the model yet. Just run the command again, the
+second time it goes through.
 
-### `grepai --version` hlásí `unknown flag`
+### `grepai --version` reports `unknown flag`
 
-Správný tvar je `grepai version`, bez pomlček.
+The correct form is `grepai version`, without the dashes.
 
 ### `does not provide an export named 'registerHooks'`
 
-Tvůj Node.js je starý na to, co GitNexus potřebuje — typický projev Node pod
-**24.11.0**. Zákeřné na tom je, že `gitnexus --version` funguje — rozbije se až
-samotné indexování. GrepAI to neovlivňuje, sémantické hledání ti mezitím
-funguje dál.
+Your Node.js is too old for what GitNexus needs — the typical symptom of Node
+below **24.11.0**. The nasty part is that `gitnexus --version` works — only the
+indexing itself breaks. It does not affect GrepAI, semantic search keeps
+working in the meantime.
 
-Nejdřív zjisti, odkud se ti Node bere, protože oprava se podle toho liší:
+First find out where your Node comes from, because the fix differs accordingly:
 
 ```
 which node
 brew list --versions node
 ```
 
-Pak postupuj podle **kapitoly 7**, sekce „Verze Node.js musí být alespoň
-24.11.0" —
-jsou tam popsané všechny tři případy. Pozor hlavně na ten nejčastější: když
-`which node` ukazuje do `/usr/local/bin` a `brew list --versions node` mlčí,
-je Node z instalátoru z nodejs.org a `brew upgrade node` selže na
-`Error: node not installed`. Tam se používá `brew install node`.
+Then follow **chapter 7**, the section "The Node.js version has to be at least
+24.11.0" — all three cases are described there. Watch out above all for the
+most common one: when `which node` points into `/usr/local/bin` and
+`brew list --versions node` says nothing, Node came from the installer at
+nodejs.org and `brew upgrade node` fails with `Error: node not installed`.
+There you use `brew install node`.
 
-Po jakékoli změně verze Node.js je přeinstalace GitNexusu povinná:
+After any change of the Node.js version, reinstalling GitNexus is mandatory:
 
 ```
 npm i -g gitnexus
 ```
 
-Pak v projektu:
+Then, in the project:
 
 ```
 agent-code-intel --refresh
@@ -1219,106 +1253,109 @@ agent-code-intel --refresh
 
 ### `workspace ... does not map this project`
 
-Cesta uložená v GrepAI neodpovídá té, ze které skript běží. Nejčastěji kvůli
-velkým písmenům — `~/Projects` versus `~/projects`. Zjisti skutečný tvar:
+The path stored in GrepAI does not match the one the script runs from. Most
+often because of capital letters — `~/Projects` versus `~/projects`. Find out
+the real form:
 
 ```
-cd ~/projects/muj-projekt
+cd ~/projects/my-project
 pwd -P
 ```
 
-Používej ten, který ti to vypsalo.
+Use the one it printed.
 
-### Ve složce „nejsou" `.mcp.json` a `CLAUDE.md`
+### `.mcp.json` and `CLAUDE.md` are "not" in the folder
 
-Skoro jistě jsi v jiné složce, než si myslíš. Ověř:
+You are almost certainly in a different folder than you think. Verify:
 
 ```
 pwd -P
 ls -la
 ```
 
-Ve VS Code otevři složku přes `File → Open Folder` přímo na projekt, ne na
-nadřazený adresář. Nebo rovnou z terminálu:
+In VS Code, open the folder through `File → Open Folder` on the project itself,
+not on the parent directory. Or straight from the terminal:
 
 ```
-cd ~/projects/muj-projekt && code .
+cd ~/projects/my-project && code .
 ```
 
-### V Claude Code chybí nástroje grepai a gitnexus
+### The grepai and gitnexus tools are missing in Claude Code
 
-Napiš `/mcp` a podívej se, co je připojené. Když tam nejsou, zavři Claude Code a
-otevři znovu ve složce projektu — při startu se ptá, jestli projektovým MCP
-serverům důvěřuješ, a ten dialog je potřeba potvrdit.
+Type `/mcp` and look at what is connected. If they are not there, close Claude
+Code and open it again in the project folder — at startup it asks whether you
+trust the project MCP servers, and that dialog has to be confirmed.
 
-### Vyhledávání vrací nesmysly nebo nic
+### Search returns nonsense or nothing
 
-Projdi to v tomhle pořadí:
+Go through this in order:
 
-1. Běží hlídač? `grepai watch --workspace NAZEV --status`
-2. Jsou v databázi vektory? Viz kontrola v kapitole 12.
-3. Zapomněl jsi `--workspace`? Bez něj hledá GrepAI v prázdném indexu.
-4. Co dělá hlídač? `tail -20 ~/Library/Logs/grepai/grepai-workspace-NAZEV.log`
+1. Is the watcher running? `grepai watch --workspace NAME --status`
+2. Are there vectors in the database? See the check in chapter 12.
+3. Did you forget `--workspace`? Without it GrepAI searches an empty index.
+4. What is the watcher doing? `tail -20 ~/Library/Logs/grepai/grepai-workspace-NAME.log`
 
-### Nikdy neupravuj `.grepai/config.yaml` ručně
+### Never edit `.grepai/config.yaml` by hand
 
-Tenhle soubor si hlídač drží v paměti a při každém indexování ho **celý
-přepíše**. Tvoje úprava zmizí — bez chyby, bez záznamu v logu, klidně až za pár
-hodin. Změny konfigurace patří do `~/.config/code-intel/defaults.toml`, nebo do
-existujícího `~/.config/code-intel/defaults.env`; poté znovu spusť
-`agent-code-intel --apply`.
+The watcher keeps this file in memory and **overwrites it entirely** on every
+indexing run. Your edit disappears — with no error, no log record, possibly only
+hours later. Configuration changes belong in
+`~/.config/code-intel/defaults.toml`, or in an existing
+`~/.config/code-intel/defaults.env`; then run `agent-code-intel --apply` again.
 
 ---
 
-## 16. Odinstalace
+## 16. Uninstalling
 
-### Jeden projekt
+### A single project
 
-Ve složce projektu:
+In the project folder:
 
 ```
 agent-code-intel --remove
 ```
 
-Ukáže, co by smazal. Když souhlasíš:
+It shows what it would delete. If you agree:
 
 ```
 agent-code-intel --remove --apply
 ```
 
-Odpojí projekt, zastaví hlídač, smaže vygenerované soubory, vyřízne managed
-instrukce z `CLAUDE.md` a `AGENTS.md` a odstraní obě managed kopie routing
-skillu. Cizí skill stejného jména zachová. Tvého kódu ani gitu se nedotkne.
-Chceš-li smazat i vektory z databáze, přidej `--purge-collection`.
+It disconnects the project, stops the watcher, deletes the generated files, cuts
+the managed instructions out of `CLAUDE.md` and `AGENTS.md` and removes both
+managed copies of the routing skill. A foreign skill of the same name is kept.
+It does not touch your code or your git. If you also want to delete the vectors
+from the database, add `--purge-collection`.
 
-### CLI bez smazání konfigurace
+### The CLI without deleting the configuration
 
-Nejdřív si případně zazálohuj nastavení. Odstranění CLI je oddělené od projektů,
-registru a sdíleného stacku:
+First back up your settings if you want to. Removing the CLI is separate from
+the projects, the registry and the shared stack:
 
 ```
 rm -f ~/.local/bin/agent-code-intel
 rm -rf ~/.local/lib/agent-code-intel
 ```
 
-`~/.config/code-intel` nemaž, pokud chceš zachovat konfiguraci a registr pro
-pozdější instalaci. Soubor `~/.claude/settings.json` také nemaž celý: pokud
-chceš odstranit automatické povolení, odeber pouze přesné pravidlo
-`Bash(agent-code-intel --refresh)` a zachovej ostatní oprávnění.
+Do not delete `~/.config/code-intel` if you want to keep the configuration and
+the registry for a later installation. Do not delete the whole
+`~/.claude/settings.json` file either: if you want to remove the automatic
+permission, remove only the exact `Bash(agent-code-intel --refresh)` rule and
+keep the other permissions.
 
-### Volitelné odstranění konfigurace a registru
+### Optionally removing the configuration and the registry
 
-Po kontrole obsahu můžeš odstranit pouze data tohoto nástroje:
+After checking its contents you can remove only this tool's data:
 
 ```
 rm -rf ~/.config/code-intel
 ```
 
-Tohle nemaže žádný projektový zdroj ani Qdrant data. Projekty je nutné nejdřív
-odpojit příkazem `agent-code-intel --remove --apply`; kolekci smaž jen při
-samostatném, výslovném použití `--purge-collection`.
+This deletes no project resource and no Qdrant data. The projects have to be
+disconnected first with `agent-code-intel --remove --apply`; delete the
+collection only through a separate, explicit `--purge-collection`.
 
-### Celý stack
+### The whole stack
 
 ```
 rm ~/.local/bin/agent-code-intel
@@ -1333,41 +1370,44 @@ brew uninstall ollama
 brew uninstall --cask orbstack
 ```
 
-Homebrew, Node.js a stažený model si nech, pokud je používáš i k jinému.
+Keep Homebrew, Node.js and the downloaded model if you use them for something
+else too.
 
 ---
 
-## 17. Slovníček
+## 17. Glossary
 
-**Embedding, vektor** — převod textu na sadu čísel, která zachycuje význam. Dva
-texty o témže mají podobná čísla, i když nemají společné slovo.
+**Embedding, vector** — the conversion of text into a set of numbers that
+captures meaning. Two texts about the same thing have similar numbers even when
+they share no word.
 
-**Sémantické vyhledávání** — hledání podle významu místo podle přesného textu.
-To, co dělá GrepAI.
+**Semantic search** — searching by meaning instead of by exact text. What GrepAI
+does.
 
-**Kontejner** — izolované prostředí pro jeden program. Nemusíš ho instalovat do
-systému, jen ho spustíš a případně zase zahodíš.
+**Container** — an isolated environment for one program. You do not have to
+install it into the system, you just start it and throw it away again if you
+want.
 
-**Image** — předpis, ze kterého se kontejner vytvoří. Stahuje se jednou.
+**Image** — the recipe a container is created from. It is downloaded once.
 
-**Hlídač, watcher** — program běžící na pozadí, který sleduje ukládané soubory a
-průběžně je doindexovává.
+**Watcher** — a program running in the background that watches saved files and
+indexes them continuously.
 
-**Index** — datová struktura pro rychlé hledání. Tady jsou dva: vektorový v
-GrepAI a grafový v GitNexusu.
+**Index** — a data structure for fast searching. There are two here: the vector
+one in GrepAI and the graph one in GitNexus.
 
-**MCP** — způsob, jakým se k AI agentovi připojují externí nástroje. Díky němu
-umí Claude Code volat GrepAI a GitNexus.
+**MCP** — the way external tools connect to an AI agent. Thanks to it, Claude
+Code can call GrepAI and GitNexus.
 
-**PATH** — seznam složek, kde systém hledá programy. Když v něm složka není,
-musíš program spouštět celou cestou.
+**PATH** — the list of folders where the system looks for programs. When a
+folder is not in it, you have to run the program by its full path.
 
-**Workspace** — pojmenovaná skupina projektů v GrepAI. Tenhle stack zakládá
-jeden workspace na projekt.
+**Workspace** — a named group of projects in GrepAI. This stack creates one
+workspace per project.
 
-**Preflight** — kontrola před startem. Zjistí, co chybí, a vypíše to všechno
-najednou.
+**Preflight** — the check before the start. It finds out what is missing and
+prints it all at once.
 
-**Idempotentní** — vlastnost příkazu, který můžeš spustit vícekrát a výsledek je
-stejný. `agent-code-intel --apply` proto můžeš spouštět opakovaně; co je hotové,
-nechá být, co se rozpadlo, opraví.
+**Idempotent** — the property of a command you can run several times with the
+same result. That is why you can run `agent-code-intel --apply` repeatedly; it
+leaves what is done alone and repairs what has broken.
