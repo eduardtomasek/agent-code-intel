@@ -2,6 +2,16 @@
   <img src="hero.jpg" alt="agent-code-intel — analysis and code intelligence for AI agents" width="100%">
 </p>
 
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/release-6.1.0-success.svg" alt="Release 6.1.0">
+  <img src="https://img.shields.io/badge/platform-macOS-lightgrey.svg" alt="Platform: macOS">
+  <img src="https://img.shields.io/badge/python-3.11%2B-3776AB.svg" alt="Python 3.11+">
+  <img src="https://img.shields.io/badge/node-24.11%2B-5FA04E.svg" alt="Node.js 24.11+">
+  <img src="https://img.shields.io/badge/MCP-Claude%20Code%20%7C%20Codex-8A63D2.svg" alt="MCP: Claude Code and Codex">
+  <img src="https://img.shields.io/badge/runs-100%25%20local-0aa.svg" alt="Runs 100% locally">
+</p>
+
 # Code intelligence for AI agents
 
 This documentation describes installing the whole stack on a Mac. It assumes
@@ -159,6 +169,7 @@ older installation.
 17. [When something goes wrong](#15-when-something-goes-wrong)
 18. [Uninstalling](#16-uninstalling)
 19. [Glossary](#17-glossary)
+20. [License](#license)
 
 ---
 
@@ -1411,3 +1422,14 @@ prints it all at once.
 **Idempotent** — the property of a command you can run several times with the
 same result. That is why you can run `agent-code-intel --apply` repeatedly; it
 leaves what is done alone and repairs what has broken.
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE) — free for private and commercial
+use, modification and redistribution. The only condition is that the copyright
+notice and the license text stay with the copies you distribute, so the author
+keeps being credited.
+
+Copyright (c) 2026 Eduard Tomášek.

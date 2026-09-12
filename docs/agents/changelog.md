@@ -31,13 +31,13 @@ guessing either way.
 ## 1. Changelog entry
 
 `CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/) and is
-written **in Czech**, matching the surrounding entries.
+written **in English**, matching the surrounding entries.
 
 - Add the entry under `## [Unreleased]`. Never invent a version heading; cutting
   a release is a separate, deliberate act (see below).
 - Use the categories this file already uses, in this order:
-  `### Breaking`, `### Přidáno`, `### Změněno`, `### Opraveno`,
-  `### Odstraněno`, `### Testy`.
+  `### Breaking`, `### Added`, `### Changed`, `### Fixed`,
+  `### Removed`, `### Tests`.
 - Write what changed **and why** — the existing entries explain the reasoning,
   the old behaviour, and the concrete new message or key. A one-line "fixed a
   bug" is not in the house style.
@@ -48,7 +48,7 @@ written **in Czech**, matching the surrounding entries.
 
 ## 2. README consistency check
 
-`README.md` is the Czech end-user manual and drifts silently. After the
+`README.md` is the English end-user manual and drifts silently. After the
 changelog entry, check the sections the change could have invalidated and fix
 what no longer matches:
 

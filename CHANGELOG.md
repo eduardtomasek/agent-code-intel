@@ -1,395 +1,439 @@
 # Changelog
 
-Formát vychází z [Keep a Changelog](https://keepachangelog.com/), verzování z
-[Semantic Versioning](https://semver.org/).
+The format is based on [Keep a Changelog](https://keepachangelog.com/),
+versioning on [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `LICENSE` — the project is now released under the MIT License. Free private
+  and commercial use, modification and redistribution; the only condition is
+  that the license text and the attribution stay with the copies you
+  distribute. README has a "License" section and a badge for it.
+
+### Changed
+
+- README is now entirely in English and carries badges in its header (license,
+  release, platform, Python, Node.js, MCP). The content, the commands and the
+  error messages do not change, only the language of the text.
+- This changelog is now written in English, including all historical entries.
+  Only the language changes, no record was added, removed or reworded in
+  substance.
+
 ## [6.1.0] - 2026-09-11
 
-### Přidáno
+### Added
 
-- `code-intel-dash` 1.5.0 umí projekt pozastavit a vyřadit, ne jen ukázat, že
-  stojí. Stack, který hlídá projekty, na kterých už nikdo nepracuje, pálí CPU,
-  disk i místo ve vektorové databázi zbytečně, a obě nápravy jsou po projektech.
-  Každý projekt má dvě tlačítka:
-  - **Pause indexing** / **Resume indexing** zastaví a znovu spustí GrepAI
-    watcher daného workspace; index zůstává, jak je. Pozastavení si dashboard
-    pamatuje v `<conf>/dash-paused.json`, takže pozastavený projekt je šedý se
-    štítky `config ok` a `watcher paused` — ne červený s „opravou“ `--refresh`
-    nebo `--apply`, která by pozastavení zrušila. `agent-code-intel` počítá
-    zastavený watcher do `ok` projektu; u pozastaveného projektu proto
-    dashboard čte nový seznam `drift` (níže) a config je v pořádku, když
-    v něm je jen `watcher`. `code-intel-dash --once` kvůli pozastavení
-    nevrací 2. Poznámka platí jen do chvíle, kdy watcher cokoli zapíše do
-    svého logu: spustí-li ho mezitím `--refresh` nebo `--apply`, pozastavení
-    skončilo, a když potom spadne, je to zase červená chyba.
-  - **Remove from code-intel…** po potvrzení zastaví watcher a vyřadí projekt
-    z registru — a nic víc. `.grepai/`, `.gitnexus/`, kolekce v qdrantu,
-    routing skilly i blok v `CLAUDE.md` zůstávají, takže návrat nestojí
-    reindex. Vyřazené projekty si dashboard pamatuje v `<conf>/dash-retired`
-    a ukazuje je dole v sekci *Removed from code-intel* s tlačítkem
-    **Bring back**; vrácený projekt má watcher dál pozastavený. Záměrně to
-    není `--remove`, který tohle všechno maže: „přestaň hlídat hotový projekt"
-    a „tohle už není code-intel projekt" jsou dvě různé věci.
+- `code-intel-dash` 1.5.0 can pause and retire a project, not only show that it
+  is idle. A stack that watches projects nobody works on any more burns CPU,
+  disk and space in the vector database for nothing, and both remedies are
+  per-project. Every project has two buttons:
+  - **Pause indexing** / **Resume indexing** stops and restarts the GrepAI
+    watcher of the given workspace; the index stays as it is. The dashboard
+    remembers the pause in `<conf>/dash-paused.json`, so a paused project is
+    grey with the `config ok` and `watcher paused` labels — not red with a
+    "fix" of `--refresh` or `--apply`, which would cancel the pause.
+    `agent-code-intel` counts a stopped watcher towards the project's `ok`; for
+    a paused project the dashboard therefore reads the new `drift` list (below)
+    and the config is fine when `watcher` is the only entry in it.
+    `code-intel-dash --once` does not return 2 because of a pause. The note
+    holds only until the watcher writes anything into its log: if `--refresh`
+    or `--apply` starts it in the meantime, the pause is over, and if it then
+    crashes, it is a red error again.
+  - **Remove from code-intel…** stops the watcher after confirmation and takes
+    the project out of the registry — and nothing more. `.grepai/`,
+    `.gitnexus/`, the collection in qdrant, the routing skills and the block in
+    `CLAUDE.md` all stay, so coming back costs no reindex. The dashboard
+    remembers retired projects in `<conf>/dash-retired` and shows them at the
+    bottom in the *Removed from code-intel* section with a **Bring back**
+    button; a returned project still has its watcher paused. Deliberately this
+    is not `--remove`, which deletes all of that: "stop watching a finished
+    project" and "this is not a code-intel project any more" are two different
+    things.
 
-  Zápisy jdou jen přes `POST` z vlastní stránky: server odmítne cizí `Host`
-  (DNS rebinding), cizí `Origin` a požadavek bez hlavičky `X-Code-Intel`, na
-  kterou by se cizí stránka musela ptát preflightem, jenž server nikdy
-  nezodpoví. Registr, konfigurační adresář i workspace projektu bere
-  z `agent_code_intel`, ne z vlastní implementace, a registr i seznam
-  vyřazených přepisuje pod zámkem — dvě vyřazení dokončená naráz by jinak
-  jeden projekt ztratila z obou seznamů. Verdikt o watcheru je jeho skutečný
-  stav, ne návratový kód `grepai watch --background`, který po minutě čekání
-  vrací 1, i když watcher běží.
+  Writes go only through a `POST` from the dashboard's own page: the server
+  rejects a foreign `Host` (DNS rebinding), a foreign `Origin` and a request
+  without the `X-Code-Intel` header, which a foreign page would have to ask for
+  with a preflight that the server never answers. It takes the registry, the
+  configuration directory and the project workspace from `agent_code_intel`,
+  not from its own implementation, and it rewrites both the registry and the
+  retired list under a lock — two retirements finishing at once would otherwise
+  lose one project from both lists. The verdict about the watcher is its actual
+  state, not the exit code of `grepai watch --background`, which returns 1
+  after a minute of waiting even when the watcher is running.
 
-  JSON dashboardu (`--once`, `/api/status`) má nové klíče: u projektu
-  `paused` a `config_ok`, v kořeni `retired` (vyřazené projekty) a
-  `action_error` (proč akce nejdou, když chybí balík `agent_code_intel`).
-  `--once` rozhoduje podle `config_ok` místo `ok`.
+  The dashboard JSON (`--once`, `/api/status`) has new keys: `paused` and
+  `config_ok` on a project, `retired` (retired projects) and `action_error`
+  (why actions do not work when the `agent_code_intel` package is missing) at
+  the root. `--once` decides by `config_ok` instead of `ok`.
 
-  Verze 1.2.0 a 1.4.0 se v téhle řadě nevydaly — nesly rozpracovanou práci na
-  otevřených issues. Dashboard tak jde z 1.1.0 na 1.3.0 a odtud na 1.5.0;
-  s touhle číselnou řadou se počítá i dál. (#110)
-- `--status --json` má u každého projektu klíč `drift`: seznam kontrol, které
-  selhaly, jménem (`workspace`, `mapping`, `embedder`, `chunking`, `ignores`,
-  `watcher`, `legacy_refresh_script`, `routing_skills`,
-  `session_start_hook`; u zkrácených řádků `code_intel` nebo `exists`).
-  `ok` je přesně „seznam je prázdný". Kdo potřebuje verdikt bez jedné
-  kontroly — dashboard u watcheru, který sám pozastavil — se zeptá seznamu a
-  nemusí zbytek verdiktu odvozovat znovu. Klíč stojí těsně před `ok`; ostatní
-  klíče ani jejich pořadí se nemění. (#110)
+  Versions 1.2.0 and 1.4.0 were not released in this line — they carried
+  work in progress on open issues. The dashboard therefore goes from 1.1.0 to
+  1.3.0 and from there to 1.5.0; this number line is kept from here on. (#110)
+- `--status --json` has a `drift` key on every project: the list of checks that
+  failed, by name (`workspace`, `mapping`, `embedder`, `chunking`, `ignores`,
+  `watcher`, `legacy_refresh_script`, `routing_skills`, `session_start_hook`;
+  `code_intel` or `exists` on shortened lines). `ok` is exactly "the list is
+  empty". Anyone who needs a verdict without one check — the dashboard, for a
+  watcher it paused itself — asks the list and does not have to derive the rest
+  of the verdict again. The key sits right before `ok`; no other key or their
+  order changes. (#110)
 
-### Změněno
+### Changed
 
-- Minimální verze Node.js je **24.11.0** a bere se z toho, co si žádá GitNexus,
-  ne z hádání podle jedné funkce. Preflight dosud testoval přítomnost
-  `module.registerHooks`, která přibyla v řadě 22.15 — gitnexus 1.6.11 ale
-  deklaruje `engines: ^22.18.0 || >=24.11.0`, takže Node mezi 22.15 a 22.18
-  kontrolou prošel, i když ho GitNexus nepodporuje. Z deklarovaného rozsahu
-  bereme horní větev jako jedno minimum; je to o něco přísnější, než co GitNexus
-  připouští, ale je to jedno číslo místo dvou rozsahů. Hláška teď říká
+- The minimum Node.js version is **24.11.0** and it is taken from what GitNexus
+  asks for, not from guessing by a single function. Until now preflight tested
+  for the presence of `module.registerHooks`, which arrived in the 22.15 line —
+  but gitnexus 1.6.11 declares `engines: ^22.18.0 || >=24.11.0`, so a Node
+  between 22.15 and 22.18 passed the check even though GitNexus does not
+  support it. Out of the declared range we take the upper branch as a single
+  minimum; it is somewhat stricter than what GitNexus allows, but it is one
+  number instead of two ranges. The message now says
   `node vX is below the 24.11.0 that gitnexus requires`.
-- `--status --json` má u `tool.node` dva nové klíče: `version_ok` (proti čemu se
-  rozhoduje) a `version_min`. `register_hooks` zůstává, protože pojmenovává
-  přesný projev indexu postaveného pod starým Nodem. `code-intel-dash` svůj
-  verdikt bere z `version_ok`.
-- README má v kapitole 10 referenční tabulku všech režimů, přepínačů
-  a návratových kódů, ověřenou proti `--help`. Včetně toho, že
-  `--status --json` vrací nulu i při rozpadu, protože stav se čte z klíče `ok`.
-- README uvádí minimum 24.11.0 v přehledu součástí, v seznamu požadavků, v tabulce
-  tří úrovní závislostí, v kapitole 7 a v popisu dashboardu.
-- `code-intel-dash` ukazuje sekci Stack jako pět řádků pod sebou místo mřížky
-  karet. Karty se lámaly podle šířky okna, takže MCP servery na běžném monitoru
-  padaly samy na další řádek a stejné údaje byly u každé komponenty jinde —
-  kdo hledal, co je špatně, musel číst kartu po kartě. Teď má každá komponenta
-  vlevo stav a název, vpravo hodnoty v pěti sloupcích, které lícují napříč
-  všemi řádky, a varování s opravou přímo pod nimi; řádek, který potřebuje
-  pozornost, má i podbarvené pozadí. Nadpis Stack nese souhrn `all ok`, nebo
-  `N of 5 need attention` — MCP bez běžícího serveru se nepočítá, protože je to
-  běžný stav. Data, verdikty ani texty varování se nemění. (#108)
-- `code-intel-dash` má verzi **1.3.0**. `--install` přepisuje dashboard jen
-  tehdy, když se jeho verze liší od nainstalované, takže bez zvednutí by stroj
-  s 1.1.0 nový vzhled Stacku z #108 nikdy nedostal — instalace by hlásila
-  `code-intel-dash 1.1.0 already installed` a nechala starou kopii. Verze 1.2.0
-  se přeskakuje: nese ji build z forku (pozastavení a odebrání projektu), který
-  v tomto repozitáři není, a dva různé dashboardy se stejným číslem by
-  instalátor nerozlišil. (#109)
+- `--status --json` has two new keys under `tool.node`: `version_ok` (what the
+  decision is made against) and `version_min`. `register_hooks` stays, because
+  it names the exact symptom of an index built under an old Node.
+  `code-intel-dash` takes its verdict from `version_ok`.
+- README has a reference table of all modes, flags and exit codes in chapter
+  10, verified against `--help`. Including the fact that `--status --json`
+  returns zero even on breakage, because the state is read from the `ok` key.
+- README states the 24.11.0 minimum in the component overview, in the
+  requirements list, in the table of the three dependency levels, in chapter 7
+  and in the dashboard description.
+- `code-intel-dash` shows the Stack section as five rows under each other
+  instead of a grid of cards. The cards wrapped by window width, so the MCP
+  servers dropped onto another row by themselves on a normal monitor and the
+  same values sat in a different place for every component — anyone looking for
+  what was wrong had to read card by card. Now every component has the state
+  and the name on the left, the values in five columns that line up across all
+  rows on the right, and the warning with its fix right below them; a row that
+  needs attention also has a tinted background. The Stack heading carries an
+  `all ok` summary, or `N of 5 need attention` — MCP without a running server
+  does not count, because that is an ordinary state. The data, the verdicts and
+  the warning texts do not change. (#108)
+- `code-intel-dash` is at version **1.3.0**. `--install` overwrites the
+  dashboard only when its version differs from the installed one, so without a
+  bump a machine with 1.1.0 would never get the new Stack layout from #108 —
+  the installation would report `code-intel-dash 1.1.0 already installed` and
+  leave the old copy. Version 1.2.0 is skipped: it is carried by a build from a
+  fork (pausing and removing a project) which is not in this repository, and
+  the installer could not tell two different dashboards with the same number
+  apart. (#109)
 
-### Opraveno
+### Fixed
 
-- Oprava konfigurace v přehledu projektu v `code-intel-dash` radila vždy
-  `agent-code-intel --path … --agent claude --apply`. Od 6.0.0 `--agent`
-  přebíjí a přepisuje agenty zaznamenané v `.code-intel`, takže u projektu
-  zapojeného pro `both` by rada potichu přepnula projekt jen na Clauda. Rada
-  teď uvádí přesně ty agenty, proti kterým `--status` řádek posuzoval (klíč
-  `agents`). (#110)
-- Čtecí endpointy `code-intel-dash` byly otevřené stránce s DNS rebindingem:
-  cizí web přesměrovaný na 127.0.0.1 je pro prohlížeč stejný původ, takže
-  mohl číst report, spouštět hledání a číst vrácené úryvky kódu. Kontrola
-  hlavičky `Host`, dosud jen u zápisů, teď platí pro každý požadavek. Dál:
-  `/api/files` čte index z qdrantu, jak ho nahlásil `agent-code-intel`, a
-  parametr `url` z požadavku ignoruje (dřív šlo jeho přes něj poslat POST na
-  libovolnou adresu); `ws` u čtecích endpointů musí být platné jméno
-  workspace; a dotaz pro `grepai search` jde za `--`, takže text začínající
-  pomlčkou není přepínač. (#110)
+- The configuration fix in the project overview in `code-intel-dash` always
+  advised `agent-code-intel --path … --agent claude --apply`. Since 6.0.0,
+  `--agent` overrides and rewrites the agents recorded in `.code-intel`, so for
+  a project wired up for `both` the advice would silently switch the project to
+  Claude only. The advice now names exactly the agents the `--status` line was
+  judged against (the `agents` key). (#110)
+- The read endpoints of `code-intel-dash` were open to a page using DNS
+  rebinding: a foreign site redirected to 127.0.0.1 is the same origin for the
+  browser, so it could read the report, run searches and read the returned code
+  snippets. The `Host` header check, so far only on writes, now applies to
+  every request. Further: `/api/files` reads the index from qdrant as
+  `agent-code-intel` reported it and ignores the `url` parameter from the
+  request (previously a POST to an arbitrary address could be sent through it);
+  `ws` on the read endpoints has to be a valid workspace name; and the query
+  for `grepai search` goes after `--`, so text starting with a dash is not a
+  flag. (#110)
 
-### Testy
+### Tests
 
-- `test/unit/test_dash.py` je první sada pro samotný dashboard: pozastavení
-  a jeho poznámka (včetně dvou pozastavení naráz a watcheru, který po restartu
-  spadne), vyřazení a návrat nad skutečným registrem v dočasném stromu včetně
-  dvanácti vyřazení dokončených naráz, verdikt `--once`, a brány před zápisy
-  i čtením proti skutečnému serveru na loopbacku. GrepAI je v nich falešný
-  watcher v paměti a konfigurace míří do dočasného stromu; na skutečný
-  registr ani watcher testy nedosáhnou. `DriftContractTest` ověřuje
-  `config_ok` proti skutečnému `--status --json`. (#110)
+- `test/unit/test_dash.py` is the first suite for the dashboard itself: pausing
+  and its note (including two pauses at once and a watcher that crashes after a
+  restart), retiring and bringing back over a real registry in a temporary
+  tree including twelve retirements finishing at once, the `--once` verdict,
+  and the gates in front of writes and reads against a real server on the
+  loopback. GrepAI is a fake in-memory watcher in them and the configuration
+  points into a temporary tree; the tests reach neither the real registry nor
+  the real watcher. `DriftContractTest` verifies `config_ok` against a real
+  `--status --json`. (#110)
 
 ## [6.0.0] - 2026-09-10
 
-`.code-intel` si pamatuje, pro které agenty byl projekt zapojený. Hlavní verze
-se zvedá kvůli schématu toho souboru, ne kvůli rozsahu změn.
+`.code-intel` remembers which agents the project was wired up for. The major
+version goes up because of that file's schema, not because of the size of the
+changes.
 
 ### Breaking
 
-- `--apply` zapisuje `.code-intel` ve **schématu 2** s klíčem `AGENTS`. Starší
-  verze nástroje takový soubor odmítnou s hláškou `unsupported SCHEMA=2`, takže
-  po downgradu je potřeba `--apply` z té starší verze. Opačný směr je v pořádku:
-  soubory se `SCHEMA=1` se čtou dál a fungují beze změny, `--status` u nich jen
-  přidá řádek `.code-intel predates AGENTS`, který **není drift** — spuštění
-  `--apply` tedy není povinné.
+- `--apply` writes `.code-intel` in **schema 2** with an `AGENTS` key. Older
+  versions of the tool refuse such a file with `unsupported SCHEMA=2`, so after
+  a downgrade an `--apply` from that older version is needed. The other
+  direction is fine: files with `SCHEMA=1` are still read and work unchanged,
+  `--status` only adds a `.code-intel predates AGENTS` line for them, which is
+  **not drift** — running `--apply` is therefore not mandatory.
 
-### Přidáno
+### Added
 
-- `.code-intel` si pamatuje, pro které agenty byl projekt zapojený. `--apply`
-  zapisuje `AGENTS=claude|codex|both` a zvedá `SCHEMA` na `2`; `--status`,
-  `--refresh` a `--remove` pak pracují právě s těmi agenty, aniž by se jim to
-  muselo pokaždé znovu říkat. Dřív byla odpověď jen v příkazové řádce, takže
-  projekt zapojený pro samotného Clauda hlásil při každém běhu bez
-  `--agent claude` drift na chybějícím Codex routing skillu a chybějícím Codex
-  hooku — červená, kterou nešlo uklidit ničím jiným než instalací agenta, který
-  uživatele nezajímá. Obcházelo se to wrapperem na `PATH` nebo tím, že se
-  přepínač psal ke každému příkazu; obojí je nadbytečné.
-- `--status --all` řeší agenty pro každý projekt zvlášť, takže jeden stroj může
-  mít vedle sebe projekt pro Clauda i projekt pro oba a každý řádek se porovnává
-  s tím, co ten projekt skutečně má.
-- JSON ze `--status --all --json` má u každého projektu dva nové klíče: `agents`
-  (proti čemu se řádek posuzoval) a `agents_recorded` (co říká jeho vlastní
-  soubor, `null` u schématu 1). Ostatní klíče ani jejich pořadí se nemění.
+- `.code-intel` remembers which agents the project was wired up for. `--apply`
+  writes `AGENTS=claude|codex|both` and raises `SCHEMA` to `2`; `--status`,
+  `--refresh` and `--remove` then work with exactly those agents without having
+  to be told again every time. Previously the answer lived only on the command
+  line, so a project wired up for Claude alone reported drift on a missing
+  Codex routing skill and a missing Codex hook on every run without
+  `--agent claude` — a red state that could not be cleared by anything except
+  installing an agent the user does not care about. It was worked around with a
+  wrapper on `PATH` or by typing the flag on every command; both are
+  superfluous.
+- `--status --all` resolves the agents for each project separately, so one
+  machine can hold a Claude project and a both-agent project side by side and
+  every line is compared against what that project actually has.
+- The JSON from `--status --all --json` has two new keys on every project:
+  `agents` (what the line was judged against) and `agents_recorded` (what its
+  own file says, `null` on schema 1). No other key or their order changes.
 
-### Změněno
+### Changed
 
-- `--apply` `.code-intel` nejen zakládá, ale i přepisuje, pokud se zaznamenaní
-  agenti liší od těch, se kterými se právě spouští — `--agent` je tedy dál
-  nadřazený a je to způsob, jak volbu projektu změnit. Identický soubor zůstává
-  beze změny bajt po bajtu.
-- Hlavička `Agents:` u `--apply`, `--refresh`, `--status` a `--remove` říká i
-  odkud hodnota pochází: `(--agent)`, `(from .code-intel)`, nebo `(default)`.
+- `--apply` not only creates `.code-intel` but also rewrites it when the
+  recorded agents differ from the ones it is being run with — `--agent` is
+  therefore still the authority and it is the way to change the project's
+  choice. An identical file stays unchanged byte for byte.
+- The `Agents:` header in `--apply`, `--refresh`, `--status` and `--remove`
+  also says where the value comes from: `(--agent)`, `(from .code-intel)`, or
+  `(default)`.
 
 ## [5.1.0] - 2026-09-10
 
-Drobné vydání: `--apply` ignoruje `.DS_Store` a preflight pozná BSD `ctags` od
-Universal Ctags.
+A small release: `--apply` ignores `.DS_Store` and preflight tells BSD `ctags`
+from Universal Ctags.
 
-### Opraveno
+### Fixed
 
-- Preflight, `--status` a `--install-deps` rozlišují BSD `ctags` od Universal
-  Ctags (#99). macOS má `/usr/bin/ctags` vždycky, takže samotná přítomnost nic
-  neříkala: stroj bez `universal-ctags` z Homebrew dostával zelené
-  `ok ctags on PATH` a `--install-deps` hlásil, že nic nechybí, zatímco příkaz
-  předepsaný skillem `code-context` nefungoval vůbec. Nově je to `warn` s
-  vlastní příčinou, odlišený od chybějícího `ctags`, a `--install-deps`
-  `universal-ctags` skutečně nabídne. `ctags` zůstává doporučený nástroj
-  s fallbackem na `ast-grep`, ne povinná závislost.
+- Preflight, `--status` and `--install-deps` distinguish BSD `ctags` from
+  Universal Ctags (#99). macOS always has `/usr/bin/ctags`, so presence alone
+  said nothing: a machine without `universal-ctags` from Homebrew got a green
+  `ok ctags on PATH` and `--install-deps` reported that nothing was missing,
+  while the command prescribed by the `code-context` skill did not work at all.
+  It is now a `warn` with its own cause, distinct from a missing `ctags`, and
+  `--install-deps` really does offer `universal-ctags`. `ctags` stays a
+  recommended tool with a fallback to `ast-grep`, not a required dependency.
 
-### Změněno
+### Changed
 
-- `--apply` přidává do `.gitignore` vedle `.grepai/` a `.gitnexus/` i
-  `.DS_Store`. Projekty zapojené starší verzí to do prvního `--apply` hlásí
-  jako drift `.gitignore += …`; `_ensure_gitignore` přidává jen chybějící
-  řádky, takže ručně udržovaný `.gitignore` si zachová své pořadí i obsah.
-  Lze to vypnout přes `gitignore_entries` v `defaults.toml`.
+- `--apply` adds `.DS_Store` to `.gitignore` next to `.grepai/` and
+  `.gitnexus/`. Projects wired up by an older version report it as
+  `.gitignore += …` drift until the first `--apply`; `_ensure_gitignore` adds
+  only the missing lines, so a hand-maintained `.gitignore` keeps its order and
+  content. It can be turned off through `gitignore_entries` in `defaults.toml`.
 
-### Odstraněno
+### Removed
 
-- `docs/.DS_Store`, commitnutý omylem v `e87a298`.
+- `docs/.DS_Store`, committed by mistake in `e87a298`.
 
 ## [5.0.0] - 2026-09-10
 
-Vydání vlastního code-context řetězce pro Claude a Codex: spravované skilly,
-repo-lokální `SessionStart` hooky a kontrola doporučených nástrojů.
+The release of our own code-context chain for Claude and Codex: managed skills,
+repo-local `SessionStart` hooks and a check of the recommended tools.
 
 ### Breaking
 
-- `--apply` nově zapisuje nástrojem vlastněné repo-lokální `SessionStart` hooky
-  a druhý skill `code-context`; pro projekty, které si hooky spravují samy,
-  je k dispozici `--no-hook`.
+- `--apply` now writes tool-owned repo-local `SessionStart` hooks and a second
+  `code-context` skill; `--no-hook` is available for projects that manage their
+  hooks themselves.
 
-### Přidáno
+### Added
 
-- Samostatný režim `--install-deps`, který kontroluje devět nástrojů a na
-  macOS po potvrzení nabídne instalaci dostupných Homebrew balíčků.
-- `SessionStart` hook pro Claude i Codex a tři podmínky aktivace Codex hooku
-  zdokumentované v README.
-- `code-context` jako druhý byte-identický, spravovaný skill pro oba agenty;
-  status, refresh a remove rozlišují jeho stav a vlastnictví.
+- A standalone `--install-deps` mode that checks nine tools and, on macOS,
+  offers to install the available Homebrew packages after confirmation.
+- A `SessionStart` hook for both Claude and Codex, and the three conditions for
+  activating the Codex hook documented in README.
+- `code-context` as a second byte-identical managed skill for both agents;
+  status, refresh and remove distinguish its state and ownership.
 
-### Změněno
+### Changed
 
-- `ctags` a `rg` jsou v preflightu doporučené nástroje s fallbackem; chybějící
-  `ast-grep`, `fd`, `rga`, `tokei` a `scc` se hlásí jako doporučení.
-- README uvádí ověřené jazyky, postup pro neověřené jazyky a rozšířené volby
-  `--no-hook` a `--no-install-deps`.
+- `ctags` and `rg` are recommended tools with a fallback in preflight; missing
+  `ast-grep`, `fd`, `rga`, `tokei` and `scc` are reported as recommendations.
+- README states the verified languages, the procedure for unverified languages
+  and the extended `--no-hook` and `--no-install-deps` options.
 
-### Testy
+### Tests
 
-- 292 unit testů a 53 hermetických black-box scénářů.
-- Behaviorální měření code-context řetězce splnilo práh 80 %: tři ze tří
-  čtecích operací ve fresh relaci použily odvozený rozsah nebo celý malý
-  soubor po ověření jeho velikosti.
-- [Acceptance report](docs/acceptance/5.0.0.md) zachycuje živé ověření všech
-  projektových režimů pro `claude`, `codex` i `both` na čistých projektech a
-  samostatnou kontrolu `--install-deps`.
+- 292 unit tests and 53 hermetic black-box scenarios.
+- The behavioural measurement of the code-context chain met the 80 % threshold:
+  three out of three read operations in a fresh session used a derived range or
+  the whole small file after verifying its size.
+- The [acceptance report](docs/acceptance/5.0.0.md) captures the live
+  verification of all project modes for `claude`, `codex` and `both` on clean
+  projects, and a separate check of `--install-deps`.
 
-- README přepsán na kratší podobu: zkrácený titul, sjednocené číslování obsahu
-  a nový hero obrázek (`hero.jpg`).
+- README rewritten into a shorter form: a shortened title, unified numbering of
+  the contents and a new hero image (`hero.jpg`).
 
-### Odstraněno
+### Removed
 
-- Zmrazený Bash reference harness, diferenční scénáře a jeho shellové helpery.
-  Aktivní Pythonová testovací sada zůstává; fixture pro podporovanou migraci
-  existujících `refresh-intel.sh` projektů je nyní malý Pythonový pomocník.
-- Sdílený `test/lib/isolated_path.sh` resolver interpretu; `test/unit.sh` teď
-  bere Python 3.11 přímo a `ACI_PYTHON` volí doplňkový interpret explicitně.
+- The frozen Bash reference harness, the differential scenarios and its shell
+  helpers. The active Python test suite stays; the fixture for the supported
+  migration of existing `refresh-intel.sh` projects is now a small Python
+  helper.
+- The shared `test/lib/isolated_path.sh` interpreter resolver; `test/unit.sh`
+  now takes Python 3.11 directly and `ACI_PYTHON` selects a supplementary
+  interpreter explicitly.
 
-### Opraveno
+### Fixed
 
-- `.code-intel` s mezerou v hodnotě je nyní čitelný zpět. `--apply` zapisuje
-  `PROJECT` jako holý basename adresáře bez uvozovek, ale `_LINE_RE` vyžadovalo
-  `\S+`, takže projekt v adresáři jako `CS Imager (test)` skončil při každém
-  dalším `--status` a `--refresh` chybou `malformed line`. Hodnota se rozšířila
-  na `.+`; validace klíčů (malé písmeno, řádek bez `=`, prázdná hodnota) se
-  nemění.
+- A `.code-intel` with a space in a value can now be read back. `--apply`
+  writes `PROJECT` as the bare directory basename without quotes, but
+  `_LINE_RE` required `\S+`, so a project in a directory such as
+  `CS Imager (test)` ended with a `malformed line` error on every further
+  `--status` and `--refresh`. The value was widened to `.+`; key validation (a
+  lowercase letter, a line without `=`, an empty value) does not change.
 
 ## [4.1.0] - 2026-09-09
 
-Vydání spravovaného routing skillu pro GrepAI, GitNexus a volitelný ripgrep,
-včetně bezpečné distribuce pro Claude a Codex.
+The release of the managed routing skill for GrepAI, GitNexus and the optional
+ripgrep, including safe distribution for Claude and Codex.
 
-### Přidáno
+### Added
 
-- `agent-code-intel-routing`: byte-identický spravovaný skill v
-  `.claude/skills/` pro Claude a `.agents/skills/` pro Codex; `--agent
-  claude|codex|both` určuje, které kopie se při `--apply` vytvoří.
-- Kontrola skillu ve `--status`, `--status --json` a `--refresh`; `--remove`
-  odstraňuje pouze nástrojem vlastněné kopie a `.agents` se neindexuje GrepAI.
-- README s rychlým startem od závislostí po `--apply`, návodem na aktualizaci a
-  volitelným `ripgrep` (`rg`) pro přesné hledání a ověření.
+- `agent-code-intel-routing`: a byte-identical managed skill in
+  `.claude/skills/` for Claude and `.agents/skills/` for Codex; `--agent
+  claude|codex|both` determines which copies are created by `--apply`.
+- A check of the skill in `--status`, `--status --json` and `--refresh`;
+  `--remove` removes only the tool-owned copies and `.agents` is not indexed by
+  GrepAI.
+- A README with a quick start from the dependencies to `--apply`, an update
+  guide and the optional `ripgrep` (`rg`) for exact search and verification.
 
-### Změněno
+### Changed
 
-- `--install` nově instaluje i `code-intel-dash`; jeho vlastní `VERSION` řídí
-  aktualizaci dashboardu nezávisle na verzi `agent-code-intel`.
-- Běžný `--apply` je pro spravovaný skill idempotentní: byte-identický soubor
-  nemění a drift nástrojem vlastněného souboru opraví atomicky.
+- `--install` now installs `code-intel-dash` as well; its own `VERSION` drives
+  the dashboard update independently of the `agent-code-intel` version.
+- An ordinary `--apply` is idempotent for the managed skill: it does not change
+  a byte-identical file and repairs drift of a tool-owned file atomically.
 
-### Odstraněno
+### Removed
 
-- Serena z instrukcí nového routing skillu; rozhodování nyní používá GrepAI
-  pro význam, GitNexus pro vztahy a `rg` pro přesné dotazy a ověření.
+- Serena from the instructions of the new routing skill; the decision now uses
+  GrepAI for meaning, GitNexus for relationships and `rg` for exact queries and
+  verification.
 
-### Testy
+### Tests
 
-- 260 unit testů a 53 hermetických black-box scénářů pokrývá lifecycle skillu,
-  volbu agenta, idempotenci, drift, instalaci, status, refresh a remove.
+- 260 unit tests and 53 hermetic black-box scenarios cover the skill lifecycle,
+  the agent choice, idempotence, drift, installation, status, refresh and
+  remove.
 
 ## [4.0.0] - 2026-09-09
 
-Vydání Pythonového přepisu po přepnutí aktivního vstupu, ověření kandidátního
-SHA a třech zaznamenaných live relacích.
+The release of the Python rewrite after switching the active entry point,
+verifying the candidate SHA and three recorded live sessions.
 
 ### Breaking
 
-- CLI v4 vyžaduje Python 3.11 nebo novější a při starším interpretu vrací
-  schválenou runtime diagnostiku bez tracebacku.
-- Produktová verze má jediný zdroj v `agent_code_intel.__version__`; aktivní
-  vstup `agent-code-intel` je Pythonový launcher se stejnou runtime bránou jako
-  instalační kopie.
+- The v4 CLI requires Python 3.11 or newer and returns approved runtime
+  diagnostics without a traceback on an older interpreter.
+- The product version has a single source in `agent_code_intel.__version__`;
+  the active `agent-code-intel` entry point is a Python launcher with the same
+  runtime gate as the installed copy.
 
-### Přidáno
+### Added
 
-- Pythonový balík a samostatný launcher pro preview/apply, status, JSON status,
-  refresh, remove a instalaci/upgrade.
-- Typovaný `defaults.toml` vedle zachované kompatibility s vykonávaným
-  `defaults.env`; instalace vytváří TOML šablonu jen při chybějící konfiguraci.
-- Bezpečný `--remove` s dry-run plánem, vlastnickými kontrolami a volitelným
+- A Python package and a standalone launcher for preview/apply, status, JSON
+  status, refresh, remove and install/upgrade.
+- A typed `defaults.toml` alongside the preserved compatibility with the
+  executed `defaults.env`; the installation creates a TOML template only when
+  no configuration exists.
+- A safe `--remove` with a dry-run plan, ownership checks and an optional
   `--purge-collection`.
-- Akceptační report s diferenciálními ENV/TOML lanes a versionovaný historický
-  audit v `docs/acceptance/`.
+- An acceptance report with differential ENV/TOML lanes and a versioned
+  historical audit in `docs/acceptance/`.
 
-### Změněno
+### Changed
 
-- Instalace kopíruje celý vlastní Pythonový balík, zachovává existující
-  konfiguraci a podporuje upgrade z v2, v3 i předchozí v4 instalace.
-- `--status --json` zachovává smluvené schema; `--refresh` a `--remove`
-  zachovávají exit kódy, pořadí účinků a tolerované vzdálené chyby reference.
-- README popisuje oba konfigurační formáty, Python 3.11+, ruční přechod a
-  oddělené odstranění CLI, konfigurace, projektů a stacku.
+- The installation copies the whole owned Python package, preserves the
+  existing configuration and supports an upgrade from a v2, v3 and previous v4
+  installation.
+- `--status --json` keeps the agreed schema; `--refresh` and `--remove` keep the
+  exit codes, the order of effects and the tolerated remote reference errors.
+- README describes both configuration formats, Python 3.11+, the manual
+  transition and the separate removal of the CLI, the configuration, the
+  projects and the stack.
 
-### Odstraněno
+### Removed
 
-- Nic nového se neodstraňuje automaticky mimo vlastněné instalační artefakty,
-  pristine legacy skript a spravované bloky, které explicitně patří nástroji.
+- Nothing new is removed automatically beyond the owned installation artifacts,
+  a pristine legacy script and managed blocks that explicitly belong to the
+  tool.
 
-### Testy
+### Tests
 
-- Acceptance report v `docs/acceptance/4.0.0.md` zachycuje referenci, kandidátní
-  a finální SHA, hermetické ENV/TOML lanes a tři živé relace na třech repozitářích.
-- Report uvádí pouze skutečně provedené důkazy; tři různé pracovní dny ani
-  user-session/machine restart nejsou součástí opraveného release scope.
+- The acceptance report in `docs/acceptance/4.0.0.md` captures the reference,
+  candidate and final SHA, the hermetic ENV/TOML lanes and three live sessions
+  on three repositories.
+- The report states only the evidence actually produced; three different
+  working days and a user-session/machine restart are not part of the corrected
+  release scope.
 
 ## [3.0.0] - 2026-09-08
 
-Sloučení `refresh-intel.sh` do `agent-code-intel --refresh` — celá wayfinder
-mapa [#2](https://github.com/eduardtomasek/agent-code-intel/issues/2), řezy
+Merging `refresh-intel.sh` into `agent-code-intel --refresh` — the whole
+wayfinder map
+[#2](https://github.com/eduardtomasek/agent-code-intel/issues/2), slices
 #11–#20.
 
 ### Breaking
 
-- Nástroj přejmenován z `code-intel-init` na `agent-code-intel`. `--install`
-  starou binárku v `~/.local/bin/` smaže; žádný compat symlink na staré jméno
-  (#11).
-- `refresh-intel.sh` se už negeneruje ani nepoužívá. Existující repozitáře se
-  zmigrují automaticky při prvním `--apply` po aktualizaci — nedotčená
-  vygenerovaná kopie se smaže, ručně upravená se nikdy nesmaže, jen nahlásí a
-  ponechá (#16).
-- `--force-script` odstraněn (#17).
-- `--status --all --json` už nevrací klíč `project.N.script_state` (#17).
-- Pravidlo v `~/.claude/settings.json` se změnilo z projektově-relativního
-  `Bash(./refresh-intel.sh)` na globální `Bash(agent-code-intel --refresh)`;
-  `--install` staré pravidlo automaticky odstraní (#15).
+- The tool was renamed from `code-intel-init` to `agent-code-intel`.
+  `--install` deletes the old binary in `~/.local/bin/`; no compat symlink to
+  the old name (#11).
+- `refresh-intel.sh` is no longer generated or used. Existing repositories are
+  migrated automatically on the first `--apply` after the update — an untouched
+  generated copy is deleted, a hand-modified one is never deleted, only
+  reported and left in place (#16).
+- `--force-script` removed (#17).
+- `--status --all --json` no longer returns the `project.N.script_state` key
+  (#17).
+- The rule in `~/.claude/settings.json` changed from the project-relative
+  `Bash(./refresh-intel.sh)` to the global `Bash(agent-code-intel --refresh)`;
+  `--install` removes the old rule automatically (#15).
 
-### Přidáno
+### Added
 
-- Nový režim `--refresh`: přeindexuje GitNexus, nastartuje GrepAI hlídač,
-  pokud neběží, a zaudituje oba. Návratové kódy sjednoceny: `0` ok, `1` nešlo
-  spustit, `2` drift (#14).
-- Soubor `.code-intel` nese identitu repozitáře (`WORKSPACE`, `PROJECT`)
-  přímo ve verzovaném repu. `--apply` ho zakládá (#13); nástroj ho čte a
-  upřednostňuje před odvozením z `basename` i před registrem (#12).
-- Automatická migrace nezmigrovaných repozitářů zabudovaná přímo do `--apply`
-  — žádný samostatný přepínač (#16).
+- A new `--refresh` mode: it reindexes GitNexus, starts the GrepAI watcher if
+  it is not running, and audits both. The exit codes were unified: `0` ok, `1`
+  could not run, `2` drift (#14).
+- The `.code-intel` file carries the identity of the repository (`WORKSPACE`,
+  `PROJECT`) directly in the versioned repo. `--apply` creates it (#13); the
+  tool reads it and prefers it over deriving from `basename` and over the
+  registry (#12).
+- Automatic migration of unmigrated repositories built straight into `--apply`
+  — no separate flag (#16).
 
-### Změněno
+### Changed
 
-- Blok pro AI agenty v `CLAUDE.md`/`AGENTS.md` mluví o chybějícím příkazu
-  `agent-code-intel`, ne o selhaném skriptu; plné vysvětlení "proč selhání
-  nevadí" se přestěhovalo do `--help` (#18).
-- `README.md` kompletně sladěn s novou realitou — nové jméno binárky všude,
-  `refresh-intel.sh` nahrazeno `--refresh`, doplněna poznámka o nutném
-  přeinstalování `code-intel-dash` (#19).
-- `code-intel-dash` (→ 1.1.0): opraven, aby uměl najít přejmenovanou binárku
-  — od #11 ji vůbec nedokázal najít, dokud to tenhle řez nespravil — a
-  přestal číst zrušený klíč `script_state` (#17).
+- The block for AI agents in `CLAUDE.md`/`AGENTS.md` talks about a missing
+  `agent-code-intel` command, not about a failed script; the full explanation
+  of "why a failure does not matter" moved into `--help` (#18).
+- `README.md` fully aligned with the new reality — the new binary name
+  everywhere, `refresh-intel.sh` replaced by `--refresh`, a note added about
+  the required reinstallation of `code-intel-dash` (#19).
+- `code-intel-dash` (→ 1.1.0): fixed so that it can find the renamed binary —
+  since #11 it could not find it at all until this slice repaired it — and it
+  stopped reading the dropped `script_state` key (#17).
 
-### Odstraněno
+### Removed
 
-- Generátor `refresh-intel.sh` (`render_refresh()`, ~310řádková šablona)
+- The `refresh-intel.sh` generator (`render_refresh()`, a ~310-line template)
   (#17).
 
-### Testy
+### Tests
 
-- Sada testů rozšířena z 13 na 53, hermeticky, bez závislosti na skutečném
-  stacku. Formálně zdokumentováno, že happy path `--apply` zůstává ověřován
-  ručně na živém stacku, ne stuby — přehledně na jednom místě v
+- The test suite was extended from 13 to 53, hermetically, without depending on
+  the real stack. It is formally documented that the `--apply` happy path stays
+  verified manually on a live stack, not by stubs — laid out in one place in
   `test/run.sh` (#20).
 
-## [2.4.1] a starší
+## [2.4.1] and earlier
 
-Historie před tímhle CHANGELOGem nejde z commitů v tomhle repozitáři
-dopočítat: nástroj sem přišel v téhle verzi z externího zdroje (viz `git
-log`, merge `Hessevalentino/audit-fixes-dashboard-v2.4.1`), ne z vlastního
-vývoje v tomhle repu.
+The history before this CHANGELOG cannot be derived from the commits in this
+repository: the tool arrived here in this version from an external source (see
+`git log`, the `Hessevalentino/audit-fixes-dashboard-v2.4.1` merge), not from
+development in this repo.
 
 [Unreleased]: https://github.com/eduardtomasek/agent-code-intel/compare/v6.1.0...HEAD
 [6.1.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v6.0.0...v6.1.0

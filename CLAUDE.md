@@ -86,7 +86,7 @@ changes, a bug is fixed, a flag/message/exit code/JSON key comes or goes, a
 requirement is raised — do two documentation steps **before** the commit and
 before reporting the work as done:
 
-- **MUST add an entry under `## [Unreleased]` in `CHANGELOG.md`** — Czech, Keep
+- **MUST add an entry under `## [Unreleased]` in `CHANGELOG.md`** — English, Keep
   a Changelog categories, explaining what changed and why, with `(#NN)` when
   there is an issue or PR.
 - **MUST check `README.md` is still in sync** with the new behaviour (flag and
