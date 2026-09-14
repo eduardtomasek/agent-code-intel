@@ -751,11 +751,9 @@ def _preview_init(
             plan("BLOCKED", "refresh-intel.sh is hand-modified or unstamped — --apply will refuse to touch it")
 
     if write_docs:
-        for name, enabled in (
-            ("CLAUDE.md", agent_target in ("claude", "both")),
-            ("AGENTS.md", agent_target in ("codex", "both")),
-        ):
-            if not enabled:
+        for name, alias_of in _doc_targets(context.root, agent_target):
+            if alias_of:
+                plan("keep", "%s is the same file as %s — one code-intel block" % (name, alias_of))
                 continue
             path = os.path.join(context.root, name)
             state = project.doc_state(path)
@@ -1021,10 +1019,11 @@ def _apply_init(
 
     reporter.hr("7. Agent instructions")
     if write_docs:
-        if agent_target in ("claude", "both"):
-            _write_doc(reporter, os.path.join(context.root, "CLAUDE.md"), force_docs)
-        if agent_target in ("codex", "both"):
-            _write_doc(reporter, os.path.join(context.root, "AGENTS.md"), force_docs)
+        for name, alias_of in _doc_targets(context.root, agent_target):
+            if alias_of:
+                reporter.say("%s: same file as %s — block written once" % (name, alias_of))
+            else:
+                _write_doc(reporter, os.path.join(context.root, name), force_docs)
         for skill_name, agent, outcome in agent_skills.install_targets(
             context.root, agent_target, force_docs
         ):
@@ -1118,6 +1117,29 @@ def _claude_grepai_ok(path: str, workspace: str) -> bool:
     server = (config.get("mcpServers") or {}).get("grepai") or {}
     args = server.get("args") or []
     return bool(server) and "--workspace" in args and workspace in args
+
+
+def _doc_targets(root: str, agent_target: str) -> list[tuple[str, str | None]]:
+    """Managed documents for ``agent_target``, each with the name it aliases.
+
+    A repository may make ``CLAUDE.md`` a symlink to ``AGENTS.md`` (or the
+    reverse) so every agent reads one text. Writing both names would replace
+    the block twice in one file, and preview would report a rewrite on every
+    run. The file then keeps the ``AGENTS.md`` block, which serves any agent.
+    """
+    names = [
+        name
+        for name, enabled in (
+            ("CLAUDE.md", agent_target in ("claude", "both")),
+            ("AGENTS.md", agent_target in ("codex", "both")),
+        )
+        if enabled
+    ]
+    if len(names) == 2 and os.path.realpath(
+        os.path.join(root, "CLAUDE.md")
+    ) == os.path.realpath(os.path.join(root, "AGENTS.md")):
+        return [("CLAUDE.md", "AGENTS.md"), ("AGENTS.md", None)]
+    return [(name, None) for name in names]
 
 
 def _write_doc(reporter, path: str, force: bool) -> None:

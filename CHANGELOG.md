@@ -21,6 +21,14 @@ versioning on [Semantic Versioning](https://semver.org/).
   Only the language changes, no record was added, removed or reworded in
   substance.
 
+### Fixed
+
+- `--apply` and its preview handle a `CLAUDE.md` that is a symlink to
+  `AGENTS.md` (or the reverse). The shared file now gets the code-intel block
+  once, the `AGENTS.md` variant, and preview reports `keep` instead of a
+  rewrite on every run. Before, the block was replaced twice in the same file
+  and the plan always showed `REWRITE CLAUDE.md code-intel block`.
+
 ## [6.1.0] - 2026-09-11
 
 ### Added

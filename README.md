@@ -818,6 +818,10 @@ in the folder:
 | `AGENTS.md`, `CLAUDE.md`                   | Its own separate block with graph rules               | gitnexus                              |
 | `.claude/skills/gitnexus/`                 | Skills for Claude Code to work with the graph         | gitnexus                              |
 
+A `CLAUDE.md` that is a symlink to `AGENTS.md` (or the reverse) is one file:
+it gets the code-intel block once, the `AGENTS.md` variant, and the preview
+shows `keep` for both names.
+
 `--agent claude`, `--agent codex` and the default `--agent both` drive the MCP
 registration, the instruction document and the location of the routing skill at
 the same time. During `analyze`, GitNexus may additionally create its own

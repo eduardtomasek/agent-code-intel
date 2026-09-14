@@ -488,6 +488,66 @@ class Init(unittest.TestCase):
         with self.assertRaises(commands.CliError):
             commands._write_doc(commands.Reporter(io.StringIO(), io.StringIO()), path, False)
 
+    def test_apply_writes_one_block_when_claude_md_links_to_agents_md(self):
+        root = tempfile.mkdtemp(prefix="aci-init-doc-symlink-")
+        with open(os.path.join(root, "AGENTS.md"), "w", encoding="utf-8") as handle:
+            handle.write("# Rules\n")
+        os.symlink("AGENTS.md", os.path.join(root, "CLAUDE.md"))
+        out = io.StringIO()
+        code = commands.run_init(
+            apply=True,
+            bootstrap=False,
+            do_git=False,
+            start_watch=False,
+            run_analyze=False,
+            write_docs=True,
+            force_docs=False,
+            agent_target="both",
+            context=make_context(root),
+            loaded=loaded(),
+            conf_dir=os.path.join(root, "config"),
+            stdout=out,
+            stderr=io.StringIO(),
+            stack=FakeStack(),
+        )
+
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.islink(os.path.join(root, "CLAUDE.md")))
+        with open(os.path.join(root, "AGENTS.md"), encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertEqual(text.count("<!-- code-intel:start -->"), 1)
+        self.assertIn(commands._DOC_BLOCKS["AGENTS.md"], text)
+        self.assertIn("CLAUDE.md: same file as AGENTS.md", out.getvalue())
+        self.assertNotIn("CLAUDE.md: code-intel block", out.getvalue())
+
+    def test_preview_keeps_one_current_block_when_claude_md_links_to_agents_md(self):
+        root = tempfile.mkdtemp(prefix="aci-init-doc-symlink-preview-")
+        with open(os.path.join(root, "AGENTS.md"), "w", encoding="utf-8") as handle:
+            handle.write("# Rules\n\n" + commands._DOC_BLOCKS["AGENTS.md"] + "\n")
+        os.symlink("AGENTS.md", os.path.join(root, "CLAUDE.md"))
+        out = io.StringIO()
+        commands.run_init(
+            apply=False,
+            bootstrap=False,
+            do_git=False,
+            start_watch=False,
+            run_analyze=False,
+            write_docs=True,
+            force_docs=False,
+            agent_target="both",
+            context=make_context(root),
+            loaded=loaded(),
+            conf_dir=os.path.join(root, "config"),
+            stdout=out,
+            stderr=io.StringIO(),
+            stack=FakeStack(),
+        )
+
+        text = out.getvalue()
+        self.assertIn("AGENTS.md has the current code-intel block", text)
+        self.assertIn("CLAUDE.md is the same file as AGENTS.md", text)
+        self.assertNotIn("CLAUDE.md code-intel block", text)
+
     def test_missing_owned_yaml_block_is_not_reported_as_fixed(self):
         root = tempfile.mkdtemp(prefix="aci-init-yaml-")
         path = os.path.join(root, "config.yaml")
