@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/release-6.1.0-success.svg" alt="Release 6.1.0">
+  <img src="https://img.shields.io/badge/release-6.2.0-success.svg" alt="Release 6.2.0">
   <img src="https://img.shields.io/badge/platform-macOS-lightgrey.svg" alt="Platform: macOS">
   <img src="https://img.shields.io/badge/python-3.11%2B-3776AB.svg" alt="Python 3.11+">
   <img src="https://img.shields.io/badge/node-24.11%2B-5FA04E.svg" alt="Node.js 24.11+">
@@ -17,7 +17,7 @@
 This documentation describes installing the whole stack on a Mac. It assumes
 only basic familiarity with applications; every required step is explained.
 
-The text matches release 6.1.0.
+The text matches release 6.2.0.
 
 Once you are done, new projects are set up like this:
 
@@ -99,7 +99,7 @@ agent-code-intel --agent both --apply
 Use `--agent claude` instead of the last command if only Claude should serve
 the project, or `--agent codex` if only Codex. `both` sets up both.
 
-## Updating to 6.1.0
+## Updating to 6.2.0
 
 An update always starts from the checkout you installed the tool from. Pull the
 new source, reinstall the **local file**, and then refresh the managed
@@ -149,7 +149,7 @@ older installation.
 ## Contents
 
 0. [Quick start](#quick-start)
-1. [Updating to 6.1.0](#updating-to-610)
+1. [Updating to 6.2.0](#updating-to-620)
 2. [What it actually does](#1-what-it-actually-does)
 3. [What you will need](#2-what-you-will-need)
 4. [The terminal — the basics](#3-the-terminal--the-basics)

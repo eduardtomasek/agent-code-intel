@@ -5,6 +5,8 @@ versioning on [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [6.2.0] - 2026-09-14
+
 ### Added
 
 - `LICENSE` — the project is now released under the MIT License. Free private
@@ -443,7 +445,8 @@ repository: the tool arrived here in this version from an external source (see
 `git log`, the `Hessevalentino/audit-fixes-dashboard-v2.4.1` merge), not from
 development in this repo.
 
-[Unreleased]: https://github.com/eduardtomasek/agent-code-intel/compare/v6.1.0...HEAD
+[Unreleased]: https://github.com/eduardtomasek/agent-code-intel/compare/v6.2.0...HEAD
+[6.2.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v6.1.0...v6.2.0
 [6.1.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v6.0.0...v6.1.0
 [6.0.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v5.1.0...v6.0.0
 [5.1.0]: https://github.com/eduardtomasek/agent-code-intel/compare/v5.0.0...v5.1.0
